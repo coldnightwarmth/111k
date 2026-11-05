@@ -304,8 +304,8 @@ def ceiling_with_holes(holes, mat=ceiling, plenum=True):
             while c1 < cols and (c1, r) not in holes:
                 c1 += 1
             x0, x1 = X0 + c * 0.6, min(X1, X0 + c1 * 0.6)
-            W.face([(x0, CEIL, z0), (x0, CEIL, z1), (x1, CEIL, z1), (x1, CEIL, z0)], mat,
-                   uv=[(x0 / 1.2, -z0 / 1.2), (x0 / 1.2, -z1 / 1.2), (x1 / 1.2, -z1 / 1.2), (x1 / 1.2, -z0 / 1.2)])
+            W.face([(x1, CEIL, z0), (x1, CEIL, z1), (x0, CEIL, z1), (x0, CEIL, z0)], mat,  # faces down
+                   uv=[(x1 / 1.2, -z0 / 1.2), (x1 / 1.2, -z1 / 1.2), (x0 / 1.2, -z1 / 1.2), (x0 / 1.2, -z0 / 1.2)])
             c = c1
     if plenum:
         for (c, r) in holes:
@@ -344,9 +344,10 @@ def door(door_x, opened, leaf_mat):
                    ((door_x, DOOR_H + 0.04, fz), (DOOR_W + 0.16, 0.08, T_W + 0.04))]:
         W.box(c, s, metal)
     # jamb reveal inside the opening
-    W.face([(dl, 0, Z0 - T_W), (dl, 0, Z0), (dl, DOOR_H, Z0), (dl, DOOR_H, Z0 - T_W)], metal)
-    W.face([(dr, 0, Z0), (dr, 0, Z0 - T_W), (dr, DOOR_H, Z0 - T_W), (dr, DOOR_H, Z0)], metal)
-    W.face([(dl, DOOR_H, Z0 - T_W), (dl, DOOR_H, Z0), (dr, DOOR_H, Z0), (dr, DOOR_H, Z0 - T_W)], metal)
+    mid = (door_x, DOOR_H / 2, Z0 - T_W / 2)
+    W.face(orient([(dl, 0, Z0 - T_W), (dl, 0, Z0), (dl, DOOR_H, Z0), (dl, DOOR_H, Z0 - T_W)], mid), metal)
+    W.face(orient([(dr, 0, Z0), (dr, 0, Z0 - T_W), (dr, DOOR_H, Z0 - T_W), (dr, DOOR_H, Z0)], mid), metal)
+    W.face(orient([(dl, DOOR_H, Z0 - T_W), (dl, DOOR_H, Z0), (dr, DOOR_H, Z0), (dr, DOOR_H, Z0 - T_W)], mid), metal)
     hinge = np.array([dl + 0.02, 0, Z0 + 0.03])
     lw = DOOR_W - 0.04
     yaw = -opened  # swing so the free edge moves into the room (+z)
