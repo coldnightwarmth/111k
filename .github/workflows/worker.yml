@@ -1,0 +1,24 @@
+name: Deploy multiplayer server (Cloudflare)
+
+on:
+  push:
+    branches: [main]
+    paths: ['server/**', 'src/protocol.js', '.github/workflows/worker.yml']
+  workflow_dispatch:
+
+jobs:
+  test-and-deploy:
+    runs-on: ubuntu-latest
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Test room logic
+        run: node --test server/test/*.test.mjs
+      - name: Deploy Worker
+        if: ${{ env.CLOUDFLARE_API_TOKEN != '' }}
+        run: npx --yes wrangler@4 deploy --config server/wrangler.jsonc

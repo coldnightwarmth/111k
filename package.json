@@ -1,0 +1,13 @@
+{
+  "name": "111k",
+  "private": true,
+  "type": "module",
+  "description": "A realtime multiplayer hangout in an abandoned collider tunnel.",
+  "scripts": {
+    "dev": "node server/dev.mjs",
+    "test": "node --test server/test/*.test.mjs",
+    "build:room": "python3 tools/build_room.py",
+    "deploy:server": "npx --yes wrangler@4 deploy --config server/wrangler.jsonc"
+  },
+  "engines": {"node": ">=20"}
+}
