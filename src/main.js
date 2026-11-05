@@ -149,7 +149,7 @@ async function start() {
   }
 
   // ------------------------------------------------------------- loop
-  const tmp = new THREE.Vector3(), bubbleAnchor = new THREE.Vector3();
+  const tmp = new THREE.Vector3(), pivot = new THREE.Vector3(), bubbleAnchor = new THREE.Vector3();
   const ray = new THREE.Raycaster();
   const levelMeshes = []; level.scene.traverse(o => { if (o.isMesh && !o.material.transparent) levelMeshes.push(o); });
   let last = performance.now(), lastSent = '', sentAt = 0, settle = 0;
@@ -184,18 +184,21 @@ async function start() {
     // local avatar
     me.root.position.set(player.x, 0, player.z); me.root.rotation.y = input.yaw;
     me.update(dt, velocity, motion);
-    me.setVisible(thirdPerson);
 
     // camera
     if (thirdPerson) {
-      const dist = 2.6, height = player.y + .35;
+      // over-the-shoulder: pivot above and right of the head, pulled in when a wall is behind
+      const dist = 2.4, sx = Math.cos(input.yaw) * .42, sz = -Math.sin(input.yaw) * .42;
+      pivot.set(player.x + sx, Math.min(2.7, player.y + .5), player.z + sz);
       tmp.set(Math.sin(input.yaw) * Math.cos(input.pitch), -Math.sin(input.pitch), Math.cos(input.yaw) * Math.cos(input.pitch));
-      ray.set(new THREE.Vector3(player.x, height, player.z), tmp); ray.far = dist;
+      ray.set(pivot, tmp); ray.far = dist;
       const hit = ray.intersectObjects(levelMeshes, false)[0];
-      const d = hit ? Math.max(.3, hit.distance - .2) : dist;
-      camera.position.set(player.x + tmp.x * d, height + tmp.y * d, player.z + tmp.z * d);
+      const d = hit ? Math.max(.25, hit.distance - .2) : dist;
+      camera.position.copy(pivot).addScaledVector(tmp, d);
+      me.setVisible(d > .9);  // too close to a wall: hide yourself rather than fill the screen
     } else {
       camera.position.set(player.x, player.y, player.z);
+      me.setVisible(false);
     }
     camera.rotation.set(input.pitch, input.yaw, 0);
 
