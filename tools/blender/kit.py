@@ -287,7 +287,7 @@ class World:
             objs.setdefault(part, []).append(ob)
         return objs
 
-    def _pack(self, objs, lm_size, min_texels=3, margin_px=4):
+    def _pack(self, objs, lm_size, min_texels=2, margin_px=None):
         """Scale every lightmap island to the same texels-per-metre (times its part's density),
         stretch islands too small to hold a few texels, then shelf-pack them into the unit square."""
         from bpy_extras import bmesh_utils
@@ -308,6 +308,7 @@ class World:
                 uv = np.array([l[uvl].uv[:] for l in loops]) * s
                 islands.append({'loops': loops, 'uvl': uvl, 'uv': uv, 'area': max(a3, 1e-6) * dens * dens})
             meshes.append((o, bm))
+        margin_px = margin_px or (2 if lm_size <= 1024 else 3)
         margin = margin_px / lm_size
         total = sum(i['area'] for i in islands)
         S0 = math.sqrt(0.6 / total)
@@ -480,6 +481,7 @@ class World:
         for o in decals:  # decals never block light, and borrow the lightmap of the wall they sit on
             o.visible_diffuse = o.visible_shadow = o.visible_glossy = o.visible_transmission = False
             o.visible_camera = False
+            o.data.uv_layers.new(name='lm')
         print(f'  {len(lm_objs)} lightmapped objects, {sum(len(o.data.polygons) for o in lm_objs)} faces '
               f'({time.time() - t0:.1f}s)')
 
