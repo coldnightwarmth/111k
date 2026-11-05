@@ -130,12 +130,12 @@ for name, col in [('navy', (0.12, 0.17, 0.4)), ('green', (0.15, 0.35, 0.18)), ('
     mat('cloth_' + name, T.fabric(col, seed=60 + len(M)), tile=0.5, double=True)
 mat('tile_wall', T.bathroom_tile(), tile=0.6)
 mat('mosaic', T.mosaic_floor(), tile=0.6)
-mat('mirror', T.painted_metal((0.16, 0.19, 0.2), seed=45), tile=1.0)
+mat('mirror', T.mirror(), tile=1.0)
 mat('console', T.console_panel())
 mat('rack', T.rack_front())
 mat('mimic', T.mimic_board())
 for k in ('term', 'amber', 'blue'):
-    mat('screen_' + k, T.screen(k), emit=2.5)
+    mat('screen_' + k, T.screen(k), emit=2.5, lightmap=False)
 WALLS = [mat('wall_green', T.cinderblock((0.6, 0.67, 0.56), seed=12), tile=0.8),
          mat('wall_beige', T.cinderblock((0.72, 0.67, 0.56), seed=13), tile=0.8),
          mat('wall_blue', T.cinderblock((0.56, 0.62, 0.68), seed=14), tile=0.8)]

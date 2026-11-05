@@ -79,6 +79,7 @@ export function createItems({scene, camera}) {
         let origin = null, dir = null;
         if (!s.holder) {
           if (m.parent !== scene) scene.add(m);
+          m.visible = true;
           // lying on its side, head toward its yaw
           m.position.set(s.x, s.y + .034, s.z);
           m.rotation.set(0, s.yaw, Math.PI / 2, 'YXZ');
@@ -87,6 +88,7 @@ export function createItems({scene, camera}) {
           dir = new THREE.Vector3(0, 0, -1).applyQuaternion(m.getWorldQuaternion(tmpQ));
         } else if (s.holder === myId && !thirdPerson) {
           if (m.parent !== view) view.add(m);
+          m.visible = true;
           it.sway += dt;
           m.position.set(0, Math.sin(it.sway * 1.7) * .004, 0);
           m.rotation.set(.04, -.06, 0);
@@ -96,18 +98,25 @@ export function createItems({scene, camera}) {
         } else {
           const avatar = s.holder === myId ? me : avatarOf(s.holder);
           const socket = avatar?.socket;
-          if (socket) {
-            if (m.parent !== socket) { socket.add(m); m.position.set(0, .02, .04); m.rotation.set(-Math.PI / 2, 0, 0); m.scale.setScalar(1 / avatar.scale); }
-            m.visible = avatar.root.visible && avatar.model.visible !== false;
-          } else if (m.parent !== scene) scene.add(m);
+          if (m.parent !== scene) scene.add(m);
           const pose = s.holder === myId ? null : poseOf(s.holder);
           const yaw = pose ? pose.yaw : me.root.rotation.y, pitch = pose ? pose.pitch || 0 : me.pitch || 0;
-          const px = pose ? pose.x : me.root.position.x, pz = pose ? pose.z : me.root.position.z;
-          const py = pose ? (pose.y ?? EYE_HEIGHT) : me.eye;
           dir = new THREE.Vector3(-Math.sin(yaw) * Math.cos(pitch), Math.sin(pitch), -Math.cos(yaw) * Math.cos(pitch));
-          origin = new THREE.Vector3(px + Math.cos(yaw) * .22, py - .35, pz - Math.sin(yaw) * .22).addScaledVector(dir, .35);
+          // gripped in the right hand, aimed where its holder is looking
+          m.rotation.set(pitch, yaw, 0, 'YXZ');
+          if (socket) {
+            socket.getWorldPosition(m.position);
+            m.position.addScaledVector(dir, .03);
+            m.visible = avatar.root.visible && avatar.model.visible !== false;
+          } else {
+            const px = pose ? pose.x : me.root.position.x, pz = pose ? pose.z : me.root.position.z;
+            const py = pose ? (pose.y ?? EYE_HEIGHT) : me.eye;
+            m.position.set(px + Math.cos(yaw) * .22, py - .55, pz - Math.sin(yaw) * .22).addScaledVector(dir, .3);
+            m.visible = !!avatar;
+          }
+          m.updateMatrixWorld();
+          origin = m.localToWorld(new THREE.Vector3(0, 0, -.14));
         }
-        if (m.parent !== view && m.scale.x !== 1 && m.parent === scene) m.scale.setScalar(1);
         m.userData.lens.color.setScalar(s.on ? 4 : .2);
         if (s.on && n < MAX_FLASHLIGHTS) {
           lighting.flPos.value[n].copy(origin);

@@ -69,7 +69,7 @@ export async function createAvatar() {
     if (name.startsWith('Jump') || name.startsWith('Pose_')) action.paused = true;
   }
   const look = createLookPose(model);
-  const socket = model.getObjectByName('CardSocket.R');
+  const socket = model.getObjectByName('CardSocketR') || model.getObjectByName('CardSocket.R');  // the loader strips the dot
   const punch = actions.get('Pose_powerpunch');
   let moving = false, speed = 0, walkBlend = 0, holdBlend = 0;
 

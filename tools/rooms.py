@@ -255,10 +255,10 @@ def squatter_room(C, door_x, r):
         y0 = 0.6 if x == -1.25 else 0.0
         P.cyl((x, y0, z), 0.025, h, 'offwhite', sides=6)
         P.cyl((x, y0 + h, z), 0.008, 0.025, 'warm', mat=M['glow'], sides=4)
-        W.light((x, y0 + h + 0.05, z), (1.0, 0.6, 0.3), 0.05, 1.5, radius=0.02, runtime=False)
+        W.light((x, y0 + h + 0.05, z), (1.0, 0.6, 0.3), 0.1, 2.0, radius=0.02, runtime=False)
     P.rbox((-1.7, 0.12, 1.15), (0.14, 0.24, 0.14), 'navy', ch=0.02)
     P.cyl((-1.7, 0.24, 1.15), 0.05, 0.08, 'warm', mat=M['glow'], sides=8)
-    W.light((-1.7, 0.4, 1.15), (1.0, 0.72, 0.42), 0.38, 4.5, radius=0.06, name='squat_lantern', flicker='candle')
+    W.light((-1.7, 0.4, 1.15), (1.0, 0.72, 0.42), 0.85, 6.0, radius=0.06, name='squat_lantern', flicker='candle')
     P.rbox((-0.3, 0.1, 0.9), (0.32, 0.2, 0.1), 'charcoal', ch=0.02, yaw=0.5)
     P.tube((-0.4, 0.2, 0.9), (-0.55, 0.55, 0.85), 0.004, 'steel', sides=4)
     # clothesline across the room

@@ -147,6 +147,27 @@ def painted_metal(paint=(0.42, 0.47, 0.44), seed=40):
     return to_img(col)
 
 
+def mirror(seed=45):
+    """Old silvered washroom mirror, 1 m tile repeating across: a cool grey wash with
+    soft blurry reflections, smears, and black desilvering creeping in from the edges."""
+    y, x = np.mgrid[0:S, 0:S] / S
+    n = periodic_noise(S, 3, seed)
+    base = 0.5 + 0.18 * (1 - y) + 0.12 * (n - 0.5)
+    # soft vertical reflections of the tiled wall opposite
+    refl = 0.5 + 0.5 * np.cos(2 * math.pi * x * 4 + 3 * (n - 0.5))
+    base += 0.06 * blur_wrap(refl, 6)
+    smear = np.clip(periodic_noise(S, 6, seed + 1, 3) - 0.55, 0, 1) * 1.6
+    base = base * (1 - 0.25 * smear) + 0.25 * smear * 0.75
+    col = colorize(base, (0.78, 0.85, 0.88))
+    edge = np.minimum(y, 1 - y)
+    rot = periodic_noise(S, 12, seed + 2, 4)
+    desilver = np.clip((0.1 - edge) * 14 + (rot - 0.55) * 2.5, 0, 1)
+    spots = np.clip(blur_wrap(speckle(S, 0.00006, seed + 3), 5) * 90 - 0.5, 0, 1)
+    dark = np.clip(desilver + spots, 0, 1)
+    col = col * (1 - dark[..., None] * 0.85) + dark[..., None] * np.array([0.08, 0.07, 0.06])
+    return to_img(col)
+
+
 def fabric(color=(0.40, 0.27, 0.18), seed=50):
     """Worn corduroy-ish upholstery, texture spans 0.5 m."""
     y, x = np.mgrid[0:S, 0:S]
