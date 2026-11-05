@@ -1,6 +1,7 @@
 {
   // Multiplayer server for 111k. Deployed by .github/workflows/worker.yml,
   // or by hand from this folder:  npx wrangler deploy
+  // Lives at https://111k-room.meinong.workers.dev (client: src/config.js).
   "$schema": "https://unpkg.com/wrangler/config-schema.json",
   "name": "111k-room",
   "main": "worker.js",

@@ -1,6 +1,6 @@
 // Where the multiplayer server lives. On localhost the dev server handles it on
 // the same port; everywhere else the Cloudflare Worker does. `?server=` overrides.
-const PRODUCTION = 'wss://111k-room.kururuga-online-leaderboard.workers.dev/connect';
+const PRODUCTION = 'wss://111k-room.meinong.workers.dev/connect';
 
 export function serverUrl() {
   const override = new URLSearchParams(location.search).get('server');
