@@ -2,7 +2,7 @@
 // the same animation blending as the showroom (walk/crouch/jump/emotes).
 import * as THREE from 'three';
 import {GLTFLoader} from '../vendor/three/GLTFLoader.js';
-import {EMOTES, normalizeEmote, normalizeEmoteTime} from './protocol.js';
+import {EMOTES, normalizeEmote, normalizeEmoteTime, PUNCH_DURATION} from './protocol.js';
 import {jumpHeight} from './motion.js';
 
 const AVATAR_URL = new URL('../assets/avatars/drifella-default.glb', import.meta.url).href;
@@ -59,16 +59,22 @@ export async function createAvatar() {
   model.scale.setScalar(AVATAR_SCALE); model.rotation.y = Math.PI;
   const root = new THREE.Group(); root.name = 'avatar'; root.add(model);
   const mixer = new THREE.AnimationMixer(model);
-  const actions = new Map(gltf.animations.filter(c => !c.name.includes('Hold_Right')).map(clip => [clip.name, mixer.clipAction(clip)]));
+  const actions = new Map(gltf.animations.map(clip => [clip.name, mixer.clipAction(clip)]));
+  // holding something swaps each locomotion clip for its right-hand-holding twin
+  const HOLD = {Neutral: 'Hold_Right', Walk: 'Walk_Hold_Right', Crouch: 'Crouch_Hold_Right', Crouch_Walk: 'Crouch_Walk_Hold_Right',
+    Jump: 'Jump_Hold_Right'};
+  const holdNames = new Set(Object.values(HOLD));
   for (const [name, action] of actions) {
     action.play().setEffectiveWeight(0);
     if (name.startsWith('Jump') || name.startsWith('Pose_')) action.paused = true;
   }
   const look = createLookPose(model);
-  let moving = false, speed = 0, walkBlend = 0;
+  const socket = model.getObjectByName('CardSocket.R');
+  const punch = actions.get('Pose_powerpunch');
+  let moving = false, speed = 0, walkBlend = 0, holdBlend = 0;
 
   return {
-    root, model,
+    root, model, socket, scale: AVATAR_SCALE, eye: 1.65, pitch: 0,
     setVisible(v) { model.visible = v; },
     // velocity: horizontal speed (m/s); motion: {crouch, jumpTime, emote, emoteTime, pitch}
     update(dt, velocity, motion = {}) {
@@ -84,17 +90,27 @@ export async function createAvatar() {
           return;
         }
       }
+      holdBlend += ((motion.holding ? 1 : 0) - holdBlend) * (1 - Math.exp(-dt * 12));
       speed += (Math.min(velocity, 5) - speed) * (1 - Math.exp(-dt * 14));
       moving = speed > (moving ? .045 : .10);
       walkBlend += ((moving ? 1 : 0) - walkBlend) * (1 - Math.exp(-dt * 16));
       const crouch = THREE.MathUtils.clamp(motion.crouch || 0, 0, 1), time = motion.jumpTime ?? -1;
       const airborne = time >= 0 && time <= 1.1;
       const jumpWeight = airborne ? Math.min(1, time / .06, (1.1 - time) / .1) : 0;
+      // a punch is a quick in-and-out blend toward the power-punch pose
+      const pt = motion.punchTime ?? -1;
+      const punchWeight = pt >= 0 && pt <= PUNCH_DURATION ? Math.sin(Math.PI * Math.min(1, pt / PUNCH_DURATION)) ** .7 : 0;
       for (const [name, action] of actions) {
-        if (name.startsWith('Pose_')) { action.setEffectiveWeight(0); continue; }
-        if (name.startsWith('Jump')) { action.time = THREE.MathUtils.clamp(time, 0, 1.1); action.setEffectiveWeight(jumpWeight); continue; }
-        const duck = name.startsWith('Crouch'), walk = name.includes('Walk');
-        action.setEffectiveWeight((1 - jumpWeight) * (duck ? crouch : 1 - crouch) * (walk ? walkBlend : 1 - walkBlend));
+        if (name.startsWith('Pose_')) {
+          action.setEffectiveWeight(action === punch ? punchWeight : 0);
+          if (action === punch) action.time = Math.min(.2, action.getClip().duration);
+          continue;
+        }
+        const base = holdNames.has(name) ? Object.keys(HOLD).find(k => HOLD[k] === name) : name;
+        const hw = holdNames.has(name) ? holdBlend : HOLD[name] && actions.has(HOLD[name]) ? 1 - holdBlend : 1;
+        if (base.startsWith('Jump')) { action.time = THREE.MathUtils.clamp(time, 0, 1.1); action.setEffectiveWeight(jumpWeight * hw * (1 - punchWeight)); continue; }
+        const duck = base.startsWith('Crouch'), walk = base.includes('Walk');
+        action.setEffectiveWeight((1 - punchWeight) * hw * (1 - jumpWeight) * (duck ? crouch : 1 - crouch) * (walk ? walkBlend : 1 - walkBlend));
         action.setEffectiveTimeScale(walk ? THREE.MathUtils.clamp(speed / (duck ? .65 : .85), .55, 1.8) : 1);
       }
       mixer.update(dt);

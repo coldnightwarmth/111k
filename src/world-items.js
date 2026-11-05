@@ -1,0 +1,2 @@
+// Written by tools/build_world.py: where held items start. Shared by the client and the server.
+export const ITEM_SPAWNS = Object.freeze([{"id": "fl1", "type": "flashlight", "x": 45.375, "y": 0.68, "z": 3.57, "yaw": 2.171}, {"id": "fl2", "type": "flashlight", "x": 46.425, "y": 0.77, "z": -1.38, "yaw": 0.371}, {"id": "fl3", "type": "flashlight", "x": -33.51, "y": 0.03, "z": -14.965, "yaw": 1.1}]);

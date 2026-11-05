@@ -8,7 +8,7 @@ import {readFile, stat} from 'node:fs/promises';
 import {extname, join, normalize, resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {INACTIVE_MS, MAX_PLAYERS} from '../src/protocol.js';
-import {handleMessage, newPlayer, snapshot} from './room.js';
+import {handleMessage, newPlayer, snapshot, freshItems, releaseItems} from './room.js';
 
 const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const PORT = Number(process.env.PORT || 8000);
@@ -42,6 +42,7 @@ function frame(text) {
 function send(c, msg) { if (!c.closed) c.socket.write(frame(typeof msg === 'string' ? msg : JSON.stringify(msg))); }
 function broadcast(msg) { const data = JSON.stringify(msg); for (const c of clients) send(c, data); }
 const players = () => [...clients].map(c => c.player);
+let items = freshItems();
 
 server.on('upgrade', (req, socket) => {
   const url = new URL(req.url, 'http://x');
@@ -58,7 +59,7 @@ server.on('upgrade', (req, socket) => {
   const c = {socket, player: newPlayer(id, now), buffer: Buffer.alloc(0), fragments: [], closed: false};
   clients.add(c);
   send(c, {type: 'welcome', id, now});
-  send(c, snapshot(players(), now));
+  send(c, snapshot(players(), now, items));
   socket.on('data', chunk => { c.buffer = Buffer.concat([c.buffer, chunk]); parse(c); });
   socket.on('close', () => close(c));
   socket.on('error', () => close(c));
@@ -95,17 +96,21 @@ function parse(c) {
 function onText(c, text) {
   if (text === 'ping') { send(c, 'pong'); return; }
   const now = Date.now();
-  const result = handleMessage(c.player, text, now);
+  const result = handleMessage(c.player, text, now, {items, players});
   if (result.close) { close(c); return; }
   for (const {to, msg} of result.out) to === 'all' ? broadcast(msg) : send(c, msg);
-  if (result.returning) broadcast(snapshot(players(), now));
+  if (result.returning) broadcast(snapshot(players(), now, items));
 }
 
 function close(c) {
   if (c.closed) return;
   c.closed = true; clients.delete(c);
   try { c.socket.end(Buffer.from([0x88, 0])); } catch {}
-  if (![...clients].some(o => o.player.id === c.player.id)) broadcast({type: 'leave', id: c.player.id});
+  if (![...clients].some(o => o.player.id === c.player.id)) {
+    broadcast({type: 'leave', id: c.player.id});
+    if (!clients.size) items = freshItems();
+    else for (const {msg} of releaseItems(items, c.player)) broadcast(msg);
+  }
 }
 
 setInterval(() => {
@@ -113,6 +118,7 @@ setInterval(() => {
   for (const c of clients) {
     if (c.player.inactive || now - c.player.lastActive < INACTIVE_MS) continue;
     c.player.inactive = true; broadcast({type: 'leave', id: c.player.id});
+    for (const {msg} of releaseItems(items, c.player)) broadcast(msg);
   }
 }, 5000);
 

@@ -1,5 +1,5 @@
 // Keyboard + mouse (pointer lock) and touch (joystick + drag to look) input.
-export function createControls({canvas, isTouch, onToggleView, onJump, onChat, onEmotes, onCrouchToggle, onLockChange}) {
+export function createControls({canvas, isTouch, onToggleView, onJump, onChat, onEmotes, onCrouchToggle, onLockChange, onPrimary, onSecondary, onUse}) {
   const keys = new Set();
   const state = {yaw: 0, pitch: 0, moveX: 0, moveZ: 0, run: false, crouch: false, locked: false, touch: isTouch};
   const PITCH = 1.35;
@@ -11,6 +11,7 @@ export function createControls({canvas, isTouch, onToggleView, onJump, onChat, o
     if (e.code === 'Enter') { e.preventDefault(); onChat(); return; }
     if (e.code === 'KeyV' && !e.repeat) onToggleView();
     if (e.code === 'KeyE' && !e.repeat) onEmotes();
+    if (e.code === 'KeyF' && !e.repeat) onUse?.();
     if (e.code === 'Space') { e.preventDefault(); if (!e.repeat) onJump(); }
     keys.add(e.code);
   });
@@ -19,6 +20,13 @@ export function createControls({canvas, isTouch, onToggleView, onJump, onChat, o
 
   // ------------------------------------------------------- mouse look
   canvas.addEventListener('click', () => { if (!state.touch && !state.locked) canvas.requestPointerLock?.()?.catch?.(() => {}); });
+  // while the mouse is captured: left click acts (punch / grab / torch on-off), right click drops
+  document.addEventListener('mousedown', e => {
+    if (!state.locked) return;
+    if (e.button === 0) onPrimary?.();
+    else if (e.button === 2) onSecondary?.();
+  });
+  document.addEventListener('contextmenu', e => { if (state.locked || e.target === canvas) e.preventDefault(); });
   document.addEventListener('pointerlockchange', () => {
     state.locked = document.pointerLockElement === canvas;
     if (!state.locked) keys.clear();
@@ -70,6 +78,8 @@ export function createControls({canvas, isTouch, onToggleView, onJump, onChat, o
   tap('btnChat', onChat);
   tap('btnEmote', onEmotes);
   tap('btnView', onToggleView);
+  tap('btnAct', () => onPrimary?.());
+  tap('btnDrop', () => onSecondary?.());
 
   return {
     state,

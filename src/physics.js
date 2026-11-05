@@ -59,5 +59,46 @@ export function createCollider(meta, radius = .38) {
     }
     return [x, z];
   }
-  return {resolve};
+  // Distance along a horizontal ray to the first collider at height y (for the
+  // third-person camera). Colliders are inflated by `pad` so the camera keeps clear.
+  function raycast(x, z, dx, dz, maxT, y, pad = .2) {
+    const len = Math.hypot(dx, dz);
+    if (len < 1e-6) return maxT;
+    dx /= len; dz /= len;
+    const seen = new Set();
+    let best = maxT;
+    for (let t = 0; t <= maxT + CELL; t += CELL / 2) {
+      const cell = grid.get(cellKey(Math.floor((x + dx * t) / CELL), Math.floor((z + dz * t) / CELL)));
+      if (!cell) continue;
+      for (const o of cell) {
+        if (seen.has(o)) continue;
+        seen.add(o);
+        if (o.y1 !== undefined && (y > o.y1 + .05 || y < (o.y0 ?? 0) - .05)) continue;
+        if (o.circle) {
+          const ox = x - o.x, oz = z - o.z, r = o.r + pad;
+          const b = ox * dx + oz * dz, c = ox * ox + oz * oz - r * r;
+          const disc = b * b - c;
+          if (disc < 0) continue;
+          const t0 = -b - Math.sqrt(disc);
+          if (t0 > 0 && t0 < best) best = t0;
+          continue;
+        }
+        const ox = x - o.x, oz = z - o.z;
+        const lx = ox * o.cos - oz * o.sin, lz = ox * o.sin + oz * o.cos;
+        const ldx = dx * o.cos - dz * o.sin, ldz = dx * o.sin + dz * o.cos;
+        const hx = o.hx + pad, hz = o.hz + pad;
+        if (Math.abs(lx) < hx && Math.abs(lz) < hz) continue;  // starting inside: ignore (the pivot is checked separately)
+        let t0 = -Infinity, t1 = Infinity;
+        for (const [p, d, h] of [[lx, ldx, hx], [lz, ldz, hz]]) {
+          if (Math.abs(d) < 1e-9) { if (Math.abs(p) > h) { t0 = Infinity; break; } continue; }
+          let a = (-h - p) / d, b = (h - p) / d;
+          if (a > b) [a, b] = [b, a];
+          t0 = Math.max(t0, a); t1 = Math.min(t1, b);
+        }
+        if (t0 <= t1 && t0 > 0 && t0 < best) best = t0;
+      }
+    }
+    return best;
+  }
+  return {resolve, raycast};
 }

@@ -22,8 +22,11 @@ Open two browser windows to see each other. The dev server runs the same room
 logic as production, on the same port.
 
 Controls: click to look · WASD move · shift run · space jump · C crouch ·
-enter chat · E emotes · V first/third person. On phones: left stick moves,
-drag to look, buttons for the rest.
+enter chat · E emotes · V first/third person. Left click punches, or picks up
+a flashlight you're looking at; holding one, left click switches it on and
+off and right click (or F) drops it. Punching someone knocks them back and
+makes them drop what they hold. On phones: left stick moves, drag to look,
+buttons for the rest.
 
 Debug URL params: `?view=3p`, `?cam=x,z,yaw,pitch`, `?exposure=1.2`,
 `?server=wss://…`.
@@ -56,23 +59,26 @@ npm run build:world              # full bake, about 10 minutes
 python3 tools/build_world.py --fast --preview   # quick bake + preview renders in tools/previews/
 ```
 
-1. `tools/build_world.py` lays out the loop, the door passages and the plain
-   offices; `tools/office.py` builds the party room. Textures are tileable and
-   procedural (`tools/textures.py`).
-2. Graffiti is simulated rather than typeset (`tools/graffiti.py`): letters
-   come from a hand-drawn alphabet run through a handstyle, and each stroke is
-   sprayed like a can, with paint building up where the hand slows, overspray,
-   and drips where it pools. Throw-ups get fill passes, fades, 3D blocks and
-   outlines letter by letter.
+1. `tools/build_world.py` lays out the loop and the door passages;
+   `tools/rooms.py` builds the rooms (abandoned offices, a control room, a
+   restroom, a squat), `tools/office.py` the party room, and `tools/props.py`
+   the furniture, chairs and junk. Textures are procedural (`tools/textures.py`).
+2. Graffiti is simulated rather than typeset (`tools/graffiti.py`): letters come
+   from hand-drawn alphabets reshaped per style (wildstyle, straight letters,
+   bubbles, runic and stretched handstyles, blackletter chisel, rollers,
+   extinguisher drips, scratchiti, stencils), and every stroke is sprayed like a
+   can, with paint building up where the hand slows, overspray and drips.
 3. Blender packs lightmap UVs, bakes direct and bounced light with Cycles and
-   denoises the result (`tools/blender/kit.py`). Graffiti borrows the
-   lightmap of the wall it is painted on.
-4. In the browser every surface is an unlit material times the lightmap.
-   Avatars are lit by the six baked lights nearest the camera.
+   denoises the result (`tools/blender/kit.py`). Lamps that flicker are baked a
+   second time into `world-flicker.webp`, one lamp group per channel, so the
+   game can dim them individually. Graffiti and small junk borrow the lightmap
+   of the surface they sit on.
+4. In the browser every surface is an unlit material times the lightmap, minus
+   any dimmed lamp groups, plus flashlight beams (`src/level.js`). Avatars are
+   lit by the six baked lights nearest the camera.
 
-The output is `assets/env/world.{glb,json}` and `world-lightmap.png`. The level
-is split into 16 sectors around the loop so the renderer can skip what is off
-screen.
+The build also writes `src/world-items.js` (where the flashlights start), which
+the client and the multiplayer server share.
 
 The avatar (`assets/avatars/drifella-default.glb`) is the cards.art default
 Drifella. `tools/glbslim.py` prunes the wardrobe options and quantizes the
@@ -85,7 +91,8 @@ index.html, styles.css    page + HUD
 src/                      client (ES modules, no bundler)
   main.js                 game loop, camera, peers
   avatar.js  motion.js    character animation, movement, interpolation
-  level.js   physics.js   baked level loading, avatar light pool, walking collision
+  level.js   physics.js   baked level + shader hook, flicker, avatar lights, collision + camera rays
+  items.js                 flashlights: on the ground, in hands, beams
   net.js     chat.js      websocket client, chat log + bubbles
   controls.js             keyboard/mouse and touch input
   protocol.js             message validation shared with the server

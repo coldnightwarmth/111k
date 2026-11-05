@@ -57,7 +57,8 @@ def write_glb(path, materials, webp_quality=86):
             key = id(m['image'])
             if key not in img_index:
                 buf = io.BytesIO()
-                m['image'].convert('RGBA' if m.get('alpha') else 'RGB').save(buf, 'WEBP', quality=webp_quality, method=6)
+                m['image'].convert('RGBA' if m.get('alpha') else 'RGB').save(buf, 'WEBP', quality=m.get('quality', webp_quality),
+                                                                            alpha_quality=70, method=6)
                 images.append({'mimeType': 'image/webp', 'bufferView': add_view(buf.getvalue()), 'name': m['name']})
                 textures.append({'sampler': 0, 'extensions': {'EXT_texture_webp': {'source': len(images) - 1}}})
                 img_index[key] = len(textures) - 1
@@ -65,7 +66,9 @@ def write_glb(path, materials, webp_quality=86):
         mats.append(mat)
         for ci, c in enumerate(chunks_):
             attrs = {'POSITION': add_acc(c['pos'].astype(np.float32), 5126, 'VEC3', minmax=True),
-                     'TEXCOORD_0': add_acc(c['uv0'].astype(np.float32), 5126, 'VEC2')}
+                     'TEXCOORD_0': (add_acc(np.round(c['uv0'] * 65535).astype(np.uint16), 5123, 'VEC2', normalized=True)
+                                    if c['uv0'].min() >= 0 and c['uv0'].max() <= 1 else
+                                    add_acc(c['uv0'].astype(np.float32), 5126, 'VEC2'))}
             if c.get('nor') is not None:  # unlit level geometry doesn't need them
                 attrs['NORMAL'] = add_acc(c['nor'].astype(np.float32), 5126, 'VEC3')
             if m['lightmap'] and c.get('uv1') is not None:

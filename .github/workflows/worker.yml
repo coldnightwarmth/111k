@@ -3,7 +3,7 @@ name: Deploy multiplayer server (Cloudflare)
 on:
   push:
     branches: [main]
-    paths: ['server/**', 'src/protocol.js', '.github/workflows/worker.yml']
+    paths: ['server/**', 'src/protocol.js', 'src/world-items.js', '.github/workflows/worker.yml']
   workflow_dispatch:
 
 jobs:

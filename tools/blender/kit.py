@@ -55,11 +55,11 @@ def aces(x):
 
 class Mat:
     def __init__(self, name, image=None, tile=1.0, alpha=None, emit=0.0, lightmap=True, double=False,
-                 color=(1, 1, 1), flicker=None):
+                 color=(1, 1, 1), flicker=None, group=None):
         self.name, self.image, self.tile, self.alpha, self.emit = name, image, tile, alpha, emit
         self.lightmap = lightmap and not emit
         self.emissive = emit > 0
-        self.double, self.color, self.flicker = double, color, flicker
+        self.double, self.color, self.flicker, self.group = double, color, flicker, group
         self.bmat = None
 
 
@@ -88,9 +88,9 @@ class World:
 
     # ---------------------------------------------------------------- frames
     @contextlib.contextmanager
-    def frame(self, origin=(0, 0, 0), yaw=0.0):
+    def frame(self, origin=(0, 0, 0), yaw=0.0, pitch=0.0, roll=0.0):
         R0, o0, y0 = self.frames[-1]
-        R = R0 @ rot(yaw)
+        R = R0 @ rot(yaw, pitch, roll)
         self.frames.append((R, o0 + R0 @ np.asarray(origin, float), y0 + yaw))
         try:
             yield
@@ -176,22 +176,25 @@ class World:
             self.face(pts, m, uv=uv)
 
     def cylinder(self, base, radius, height, mat, sides=8, caps=True, collide=False, yaw=0.0, axis='y', cap_mat=None,
-                 pitch=0.0, uv_const=None):
+                 pitch=0.0, uv_const=None, top=None):
         b = np.asarray(base, float)
         R = rot(yaw, pitch) if axis == 'y' else rot(yaw, 0, -math.pi / 2) if axis == 'x' else rot(yaw, math.pi / 2, 0)
         ring = [np.array([math.cos(2 * math.pi * i / sides + math.pi / sides) * radius, 0,
                           -math.sin(2 * math.pi * i / sides + math.pi / sides) * radius]) for i in range(sides)]
         up = np.array([0, height, 0])
         circ = 2 * math.pi * radius
+        k = 1.0 if top is None else top / radius   # top radius for cones / tapered shapes
+        ring_t = [r * k for r in ring]
         for i in range(sides):
             a, bb = ring[i], ring[(i + 1) % sides]
-            pts = [b + R @ a, b + R @ bb, b + R @ (bb + up), b + R @ (a + up)]
+            at, bt = ring_t[i], ring_t[(i + 1) % sides]
+            pts = [b + R @ a, b + R @ bb, b + R @ (bt + up), b + R @ (at + up)]
             u0, u1 = i / sides * circ / mat.tile, (i + 1) / sides * circ / mat.tile
             uv = [(u0, 0), (u1, 0), (u1, -height / mat.tile), (u0, -height / mat.tile)]
             self.face(pts, mat, uv=np.tile(uv_const, (4, 1)) if uv_const is not None else uv)
         if caps:
             cm = cap_mat or mat
-            for poly in ([b + R @ (r + up) for r in ring], [b + R @ r for r in reversed(ring)]):
+            for poly in ([b + R @ (r + up) for r in ring_t], [b + R @ r for r in reversed(ring)]):
                 uv = np.array([[p[0], p[2]] for p in poly]) / cm.tile
                 if uv_const is not None:
                     uv = np.tile(uv_const, (len(poly), 1))
@@ -214,18 +217,18 @@ class World:
 
     # --------------------------------------------------------------- lights
     def light(self, pos, color, intensity, range_, radius=0.05, area=None, runtime=True, flicker=None, name=None,
-              bake=True, runtime_intensity=None):
+              bake=True, runtime_intensity=None, group=None):
         """Point light (radius = soft shadow size) or rectangular area light
         area=(w, l, yaw) facing down. intensity is in game units."""
         p = self.T(pos)
         if bake:
-            self.bake_lights.append({'pos': p, 'color': color, 'intensity': intensity, 'radius': radius,
+            self.bake_lights.append({'pos': p, 'color': color, 'intensity': intensity, 'radius': radius, 'group': group,
                                      'area': None if area is None else (area[0], area[1], area[2] + self.yaw)})
         if runtime:
             self.runtime_lights.append({'name': name, 'pos': [round(float(x), 3) for x in p],
                                         'color': [float(c) for c in color],
                                         'intensity': float(runtime_intensity or intensity), 'range': float(range_),
-                                        'flicker': flicker})
+                                        'flicker': flicker, 'group': group})
 
     # ---------------------------------------------------------------- build
     def _materials(self):
@@ -309,7 +312,7 @@ class World:
         print(f'  stretched {stretched} tiny lightmap islands')
 
     @staticmethod
-    def _project_decals(decals, surfaces):
+    def _project_decals(decals, surfaces, down=False):
         """Give each decal face the lightmap coordinates of the wall behind it, so
         paint is lit exactly like the surface it is painted on."""
         from mathutils import Vector
@@ -325,9 +328,11 @@ class World:
             lm = me.uv_layers['lm']
             for poly in me.polygons:
                 c, n = poly.center, poly.normal
+                if down:   # a whole piece of junk shares the light at the point under its middle
+                    c = Vector(np.mean([me.vertices[v].co[:] for v in poly.vertices], 0)); n = Vector((0, 0, 1))
                 best = None
                 for tree, sm in trees:
-                    hit = tree.ray_cast(c + n * 0.05, -n, 0.2)
+                    hit = tree.ray_cast(c + n * (0.4 if down else 0.05), -n, 1.5 if down else 0.2)
                     if hit[0] is not None and (best is None or hit[3] < best[3]):
                         best = (*hit, sm)
                 if best is None:
@@ -346,7 +351,7 @@ class World:
                         break
                 ua = Vector((*slm.data[idx[0]].uv, 0)); ub = Vector((*slm.data[idx[j]].uv, 0)); uc = Vector((*slm.data[idx[j + 1]].uv, 0))
                 for li in poly.loop_indices:
-                    p = me.vertices[me.loops[li].vertex_index].co
+                    p = best[0] if down else me.vertices[me.loops[li].vertex_index].co
                     uv = barycentric_transform(p, A, B, C, ua, ub, uc)
                     lm.data[li].uv = (uv[0], uv[1])
         print(f'  decals mapped onto their walls ({missed} unplaced)')
@@ -364,13 +369,14 @@ class World:
                 ld.energy = L['intensity'] * WATTS
             ld.color = L['color']
             ob = bpy.data.objects.new(f'L{i}', ld)
+            ob['group'] = -1 if L.get('group') is None else L['group']
             ob.location = g2b(L['pos'])
             if L['area']:
                 ob.rotation_euler = (0, 0, L['area'][2])  # area lights face -z (down) by default
             sc.collection.objects.link(ob)
 
     def build(self, out_base, lm_size=2048, samples=128, ambient=(0.0, 0.0, 0.0), grime=None, previews=(),
-              preview_dir=None, denoise=True, fill=(0.0, 0.0, 0.0), chunk=None):
+              preview_dir=None, denoise=True, fill=(0.0, 0.0, 0.0), chunk=None, group_samples=48):
         t0 = time.time()
         sc = bpy.context.scene
         sc.render.engine = 'CYCLES'
@@ -385,7 +391,10 @@ class World:
         self._lights()
         all_lm = [o for part, os_ in objs.items() for o in os_ if self.mats[o.data.materials[0].name].lightmap]
         decals = [o for o in all_lm if self.mats[o.data.materials[0].name].alpha]
-        lm_objs = [o for o in all_lm if o not in decals]
+        tiny = [o for o in all_lm if o.name.split(':')[0] == 'tiny' and o not in decals]
+        lm_objs = [o for o in all_lm if o not in decals and o not in tiny]
+        for o in tiny:   # small junk takes the light of whatever it is lying on
+            o.data.uv_layers.new(name='lm')
         for o in decals:  # decals never block light, and borrow the lightmap of the wall they sit on
             o.visible_diffuse = o.visible_shadow = o.visible_glossy = o.visible_transmission = False
             o.visible_camera = False
@@ -421,6 +430,18 @@ class World:
         margin = 5 / lm_size
         bpy.ops.uv.pack_islands(margin=margin, rotate=True, shape_method='AABB', margin_method='FRACTION')
         bpy.ops.object.mode_set(mode='OBJECT')
+        # never trust the packer blindly: everything must land inside the texture
+        lo, hi = np.array([np.inf, np.inf]), np.array([-np.inf, -np.inf])
+        for o in lm_objs:
+            a = np.zeros(len(o.data.uv_layers['lm'].data) * 2); o.data.uv_layers['lm'].data.foreach_get('uv', a)
+            a = a.reshape(-1, 2); lo = np.minimum(lo, a.min(0)); hi = np.maximum(hi, a.max(0))
+        if (lo < -1e-4).any() or (hi > 1 + 1e-4).any():
+            span = (hi - lo).max() * 1.002
+            print(f'  packer overflowed ({lo.round(3)} .. {hi.round(3)}), refitting')
+            for o in lm_objs:
+                lm = o.data.uv_layers['lm']
+                a = np.zeros(len(lm.data) * 2); lm.data.foreach_get('uv', a)
+                lm.data.foreach_set('uv', ((a.reshape(-1, 2) - lo) / span).ravel())
         print(f'  uv packed ({time.time() - t0:.1f}s)')
 
         # --- bake
@@ -435,6 +456,7 @@ class World:
                 tex.name = 'bake'; tex.image = image; nt.nodes.active = tex
 
         self._project_decals(decals, lm_objs)
+        self._project_decals(tiny, lm_objs, down=True)
         bpy.ops.object.select_all(action='DESELECT')
         for o in lm_objs:
             o.select_set(True)
@@ -444,13 +466,47 @@ class World:
         set_target(img)
         bpy.ops.object.bake(type='DIFFUSE', uv_layer='lm')
         print(f'  baked light ({time.time() - t0:.1f}s)')
+        groups = sorted({L['group'] for L in self.bake_lights if L.get('group') is not None})
+        group_imgs = {}
+        if groups:
+            # light from each flicker group on its own, so the game can dim lamps one group at a time
+            gsize = lm_size // 2
+            lamps = [o for o in sc.objects if o.type == 'LIGHT']
+            emitters = []
+            for m in self.mats.values():
+                for n in m.bmat.node_tree.nodes:
+                    if n.type == 'EMISSION':
+                        emitters.append((n, n.inputs['Strength'].default_value))
+                        n.inputs['Strength'].default_value = 0.0
+            sc.cycles.samples = group_samples
+            for g in groups:
+                for o in lamps:
+                    o.hide_render = o.get('group', -1) != g
+                gi = bpy.data.images.new(f'group{g}', gsize, gsize, float_buffer=True)
+                set_target(gi)
+                bpy.ops.object.bake(type='DIFFUSE', uv_layer='lm')
+                group_imgs[g] = gi
+                print(f'  baked flicker group {g} ({time.time() - t0:.1f}s)')
+            for o in lamps:
+                o.hide_render = False
+            for n, v in emitters:
+                n.inputs['Strength'].default_value = v
         sc.cycles.samples = 1
         set_target(pos_img); bpy.ops.object.bake(type='POSITION', uv_layer='lm')
         set_target(nor_img); bk.normal_space = 'OBJECT'; bpy.ops.object.bake(type='NORMAL', uv_layer='lm')
 
         def pixels(image):
-            a = np.empty(lm_size * lm_size * 4, np.float32); image.pixels.foreach_get(a)
-            return a.reshape(lm_size, lm_size, 4)
+            w, h = image.size
+            a = np.empty(w * h * 4, np.float32); image.pixels.foreach_get(a)
+            return a.reshape(h, w, 4)
+
+        def denoised(image, tag):
+            raw, dn = f'{out_base}-{tag}-raw.exr', f'{out_base}-{tag}-dn.exr'
+            image.filepath_raw = raw; image.file_format = 'OPEN_EXR'; image.save()
+            subprocess.run([sys.executable, os.path.join(HERE, 'denoise.py'), raw, dn], check=True, capture_output=True)
+            out = pixels(bpy.data.images.load(dn))[..., :3].astype(float)
+            os.remove(raw); os.remove(dn)
+            return out
 
         raw_path = out_base + '-raw.exr'
         img.filepath_raw = raw_path; img.file_format = 'OPEN_EXR'; img.save()
@@ -477,6 +533,22 @@ class World:
         lm_png = Image.fromarray(enc, 'RGB')
         lm_png.save(out_base + '-lightmap.webp', quality=92, method=6)
         print(f'  lightmap written ({time.time() - t0:.1f}s)')
+        if group_imgs:
+            # RGBA: one flicker group per channel, brightness only (lamps in a group share a colour)
+            gsize = lm_size // 2
+            Pg = P[::2, ::2].reshape(-1, 3); Ng = Nn[::2, ::2].reshape(-1, 3)
+            gm = np.clip(grime(Pg, Ng), 0, 2).reshape(gsize, gsize) if grime is not None else 1.0
+            chans = []
+            for g in range(4):
+                if g in group_imgs:
+                    v = denoised(group_imgs[g], f'g{g}').mean(-1) * gm
+                    chans.append(np.clip(v / LM_SCALE, 0, 1) ** (1 / 2.2))
+                else:
+                    chans.append(np.zeros((gsize, gsize)))
+            fl = (np.stack(chans, -1) * 255 + 0.5).astype(np.uint8)[::-1]
+            Image.fromarray(fl, 'RGBA').save(out_base + '-flicker.webp', lossless=True, method=6)
+            self.meta['flickerMap'] = True
+            print(f'  flicker map written ({time.time() - t0:.1f}s)')
 
         # --- export
         mats_out, tris = [], 0
@@ -519,8 +591,9 @@ class World:
                 chunks.append({'chunk': int(ck), 'pos': cc[0], 'uv0': cc[1], 'uv1': cc[2] if uv1 else None,
                                'idx': inverse.ravel()})
             mats_out.append({'name': m.name, 'image': m.image, 'color': m.color, 'alpha': m.alpha, 'double': m.double,
+                             'quality': 74 if m.alpha else 86,
                              'lightmap': m.lightmap, 'emissive': m.emissive, 'chunks': chunks,
-                             'extras': {'flicker': m.flicker} if m.flicker else {}})
+                             'extras': {k: v for k, v in (('flicker', m.flicker), ('group', m.group)) if v is not None}})
         glb_bytes = write_glb(out_base + '.glb', mats_out)
         data = {'lightmapScale': LM_SCALE, 'colliders': self.colliders, 'lights': self.runtime_lights,
                 'spawns': self.spawns, **self.meta}

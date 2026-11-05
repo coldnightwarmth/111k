@@ -4,10 +4,14 @@
 export const MAX_PLAYERS = 32;
 export const CHAT_MAX = 180;
 export const CHAT_INTERVAL_MS = 900;
-export const CHAT_TTL_MS = 15000;
+export const CHAT_TTL_MS = 8000;
 export const POSE_INTERVAL_MS = 45;
 export const INACTIVE_MS = 5 * 60 * 1000;
 export const ROOMS = ['office'];
+export const PICKUP_RANGE = 2.6;     // metres from a player's feet to an item they can grab
+export const PUNCH_RANGE = 2.0;      // server-side check (clients aim at 1.6)
+export const PUNCH_COOLDOWN_MS = 420;
+export const PUNCH_DURATION = .45;
 
 // Emotes map to Pose_<id> clips in the avatar model.
 export const EMOTES = Object.freeze([
@@ -42,12 +46,13 @@ export function sanitizePose(p) {
     jumpTime: Number.isFinite(p.jumpTime) ? round(Math.max(-1, Math.min(1.1, p.jumpTime))) : -1,
     emote, emoteTime: emote ? round(normalizeEmoteTime(p.emoteTime)) : 0,
     typing: p.typing === true,
+    punchTime: Number.isFinite(p.punchTime) ? round(Math.max(-1, Math.min(PUNCH_DURATION, p.punchTime))) : -1,
   };
 }
 
 export function samePose(a, b) {
   if (!a || !b) return false;
-  for (const k of ['x', 'y', 'z', 'yaw', 'pitch', 'room', 'crouch', 'jumpTime', 'emote', 'emoteTime', 'typing'])
+  for (const k of ['x', 'y', 'z', 'yaw', 'pitch', 'room', 'crouch', 'jumpTime', 'emote', 'emoteTime', 'typing', 'punchTime'])
     if (a[k] !== b[k]) return false;
   return true;
 }
@@ -55,4 +60,10 @@ export function samePose(a, b) {
 export function sanitizeChat(text) {
   if (typeof text !== 'string') return '';
   return text.replace(/[\u0000-\u001f\u007f\u2028\u2029]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, CHAT_MAX);
+}
+
+// Held items (flashlights): shared room state. Positions are where they lie when nobody holds them.
+export function cleanItem(it) {
+  return {id: it.id, type: it.type, x: round(it.x), y: round(it.y), z: round(it.z), yaw: round(it.yaw),
+    holder: it.holder || null, on: it.on === true};
 }

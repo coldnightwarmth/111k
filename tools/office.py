@@ -8,29 +8,24 @@ import numpy as np
 
 
 def build(ctx, door_x):
-    W, pbox, pcyl = ctx['W'], ctx['pbox'], ctx['pcyl']
+    W, P = ctx['W'], ctx['P']
+    pbox, pcyl = P.box, P.cyl
     Mat, T, glow, wood, card, metal = ctx['Mat'], ctx['T'], ctx['glow'], ctx['wood'], ctx['card'], ctx['metal']
     X0, X1, Z0, Z1, CEIL = ctx['X0'], ctx['X1'], ctx['Z0'], ctx['Z1'], ctx['CEIL']
     decal = ctx['room_wall_decal']
     r = np.random.default_rng(4)
 
-    # this room's big surfaces get their own materials so the flicker of its
-    # fluorescent can dim them (and only them) in the game
-    wall = Mat('office_wall', T.cinderblock(), tile=0.8, flicker='office')
-    floor = Mat('office_floor', T.vct_floor(), tile=1.2, flicker='office')
-    ceil = Mat('office_ceiling', T.ceiling_tile(), tile=1.2, flicker='office')
+    wall = Mat('office_wall', T.cinderblock(), tile=0.8)
+    floor = Mat('office_floor', T.vct_floor(), tile=1.2)
+    ceil = Mat('office_ceiling', T.ceiling_tile(), tile=1.2)
     fab = Mat('fabric_couch', T.fabric(), tile=0.5)
     blanket = Mat('fabric_blanket', T.fabric((0.22, 0.3, 0.45), seed=52), tile=0.6)
-    mattress_m = Mat('fabric_mattress', T.fabric((0.62, 0.6, 0.55), seed=53), tile=0.8)
+    mattress_m = ctx['M']['fabric_mattress']
 
-    hole = (5, 7)  # one ceiling tile missing above the couch end of the room
-    ctx['room_shell'](wall, door_x, 1.75, r, holes=[hole], exit_live=True, floor_mat=floor, ceil_mat=ceil)
-    cx, cz = X0 + hole[0] * 0.6 + 0.3, Z0 + hole[1] * 0.6 + 0.3
-    pbox((cx + 0.12, CEIL - 0.25, cz - 0.05), (0.02, 0.8, 0.02), 'black', roll=0.12)  # dangling cable
-
-    # fluorescent troffers: one working (it flickers), one dead
-    ctx['troffer'](-1.2, 0.3, True, name='fluorescent', lens_mat=ctx['tube'])
-    ctx['troffer'](1.5, -1.2, False)
+    P.shell(wall, door_x, 1.75, holes=(), exit_live=True, floor_mat=floor, ceil_mat=ceil)
+    # the working tube sits over the hangout; its flicker group dims its light in the game
+    P.troffer(-1.4, 0.0, True, name='fluorescent', lens=ctx['tube'], group=0, flicker='fluorescent', intensity=1.15)
+    P.troffer(1.6, 0.0, False)
 
     # ----------------------------------------------------------- couch
     cx_, cz_, cyaw = -3.05, 0.25, 0.04
@@ -144,15 +139,7 @@ def build(ctx, door_x):
     c, s = math.cos(-0.2), math.sin(-0.2)
     pbox((dx0 + 0.05 - 0.212 * c, 0.97, dz0 - 0.2 + 0.212 * s), (0.01, 0.27, 0.32), 'glass', yaw=-0.2)
     pbox((dx0 - 0.15, 0.785, dz0 + 0.2), (0.18, 0.03, 0.45), 'charcoal', yaw=0.1)
-    chx, chz, chy = 2.15, 1.15, 0.9
-    for k in range(5):
-        a = k * 2 * math.pi / 5 + 0.3
-        pbox((chx + math.cos(a) * 0.17, 0.06, chz + math.sin(a) * 0.17), (0.34, 0.04, 0.05), 'charcoal', yaw=-a)
-    pcyl((chx, 0.08, chz), 0.03, 0.36, 'steel', sides=6)
-    pbox((chx, 0.47, chz), (0.5, 0.09, 0.48), 'charcoal', yaw=chy)
-    c, s = math.cos(chy), math.sin(chy)
-    pbox((chx + 0.24 * c, 0.82, chz - 0.24 * s), (0.06, 0.5, 0.44), 'charcoal', yaw=chy, roll=0.15)
-    W.collider_circle((chx, 0, chz), 0.3, 0, 1.0)
+    P.office_chair(2.15, 1.15, 0.9 + math.pi / 2)
 
     # filing cabinet with an open drawer, and a purple clamp light on top of it
     fx0, fz0 = 3.2, -2.6
@@ -222,6 +209,12 @@ def build(ctx, door_x):
     decal('mk_names', 'E', 1.7, 1.55)
     decal('mk_93', 'E', -0.3, 2.45)
     decal('dd_tally', 'E', 2.4, 1.2, 0.8)
+
+    # flashlights: one on the spool table, one on the desk (world space, picked up in the game)
+    for (x, y, z, yaw) in [(sx - 0.22, 0.68, sz + 0.05, 0.6), (dx0 - 0.12, 0.77, dz0 + 0.5, -1.2)]:
+        p = W.T((x, y, z))
+        ctx['ITEMS'].append({'type': 'flashlight', 'x': round(float(p[0]), 3), 'y': round(float(p[1]), 3),
+                             'z': round(float(p[2]), 3), 'yaw': round(float(yaw + W.yaw), 3)})
 
     # spawn points (world space), facing the door
     for x, z in [(0.0, 1.5), (0.6, 1.3), (-0.4, 1.8), (0.9, 1.9), (0.2, 0.9)]:

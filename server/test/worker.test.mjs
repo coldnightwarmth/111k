@@ -85,3 +85,63 @@ test('worker checks origin and session', async () => {
   const ok = await worker.fetch(new Request('https://w/connect?session=' + S1, {headers: {Origin: 'https://coldnightwarmth.github.io', Upgrade: 'websocket'}}), env);
   assert.equal(await ok.text(), 'ok');
 });
+
+test('flashlights: pick up, toggle, drop, punched out of your hand', async () => {
+  const {ITEM_SPAWNS} = await import('../../src/world-items.js');
+  const {room, sockets, ctx} = makeRoom();
+  const store = new Map();
+  ctx.storage.get = async k => store.get(k);
+  ctx.storage.put = async (k, v) => { store.set(k, structuredClone(v)); };
+  await join(room, S1); await join(room, S2);
+  const [a, b] = sockets;
+  const spawn = ITEM_SPAWNS[0];
+  const state = a.messages().find(m => m.type === 'state');
+  assert.equal(state.items.length, ITEM_SPAWNS.length);
+  const idA = a.messages()[0].id, idB = b.messages()[0].id;
+  // too far away: refused
+  await room.webSocketMessage(a, JSON.stringify({type: 'pose', pose: {...pose, x: spawn.x + 10, z: spawn.z}}));
+  await room.webSocketMessage(a, JSON.stringify({type: 'pickup', id: spawn.id}));
+  assert.equal(b.messages().filter(m => m.type === 'item').length, 0);
+  // close enough: picked up, and saved
+  await new Promise(r => setTimeout(r, 50));
+  await room.webSocketMessage(a, JSON.stringify({type: 'pose', pose: {...pose, x: spawn.x + 0.5, z: spawn.z}}));
+  await room.webSocketMessage(a, JSON.stringify({type: 'pickup', id: spawn.id}));
+  let item = b.messages().filter(m => m.type === 'item').at(-1).item;
+  assert.equal(item.holder, idA);
+  assert.equal(store.get('items')[spawn.id].holder, idA);
+  // only the holder can switch it on
+  await room.webSocketMessage(b, JSON.stringify({type: 'toggle', id: spawn.id, on: true}));
+  assert.equal(b.messages().filter(m => m.type === 'item').at(-1).item.on, false);
+  await room.webSocketMessage(a, JSON.stringify({type: 'toggle', id: spawn.id, on: true}));
+  assert.equal(b.messages().filter(m => m.type === 'item').at(-1).item.on, true);
+  // b walks up and punches a: knock-back and the torch drops at a's feet
+  await new Promise(r => setTimeout(r, 50));
+  await room.webSocketMessage(b, JSON.stringify({type: 'pose', pose: {...pose, x: spawn.x + 1.5, z: spawn.z}}));
+  await room.webSocketMessage(b, JSON.stringify({type: 'punch', target: idA}));
+  const punch = a.messages().find(m => m.type === 'punch');
+  assert.equal(punch.target, idA); assert.equal(punch.from, idB);
+  assert.ok(punch.dir[0] < 0, 'pushed away from the puncher');
+  item = a.messages().filter(m => m.type === 'item').at(-1).item;
+  assert.equal(item.holder, null); assert.equal(item.on, true);
+  // punches are rate limited
+  await room.webSocketMessage(b, JSON.stringify({type: 'punch', target: idA}));
+  assert.equal(a.messages().filter(m => m.type === 'punch').length, 1);
+});
+
+test('items go home when the last player leaves', async () => {
+  const {ITEM_SPAWNS} = await import('../../src/world-items.js');
+  const {room, sockets, ctx} = makeRoom();
+  const store = new Map();
+  ctx.storage.get = async k => store.get(k);
+  ctx.storage.put = async (k, v) => { store.set(k, structuredClone(v)); };
+  await join(room, S1);
+  const [a] = sockets;
+  const spawn = ITEM_SPAWNS[0];
+  await room.webSocketMessage(a, JSON.stringify({type: 'pose', pose: {...pose, x: spawn.x, z: spawn.z}}));
+  await room.webSocketMessage(a, JSON.stringify({type: 'pickup', id: spawn.id}));
+  assert.equal(store.get('items')[spawn.id].holder !== null, true);
+  a.closed = {code: 1000};
+  await room.webSocketClose(a);
+  assert.equal(store.get('items')[spawn.id].holder, null);
+  assert.equal(store.get('items')[spawn.id].x, spawn.x);
+});

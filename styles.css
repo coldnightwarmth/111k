@@ -28,6 +28,14 @@ kbd { font: inherit; color: var(--ink); border: 1px solid var(--line); border-ra
 #hint { position: fixed; left: 50%; bottom: max(16px, env(safe-area-inset-bottom)); transform: translateX(-50%); margin: 0;
   color: var(--dim); white-space: nowrap; text-shadow: 0 1px 2px #000; pointer-events: none; transition: opacity .4s; }
 body.locked #hint { opacity: 0; }
+#prompt, #emoteLabel { position: fixed; left: 50%; transform: translateX(-50%); margin: 0; pointer-events: none;
+  white-space: nowrap; text-shadow: 0 1px 2px #000; font-size: 12px; letter-spacing: .08em; }
+#prompt { bottom: max(44px, calc(env(safe-area-inset-bottom) + 36px)); color: var(--ink, #e9e6dc); opacity: .85; }
+#emoteLabel { bottom: max(70px, calc(env(safe-area-inset-bottom) + 62px)); color: var(--dim); text-transform: lowercase; }
+body:not(.locked):not(.touch) #prompt { opacity: 0; }
+/* a little crosshair dot so punches and grabs have an aim */
+body.locked::after { content: ''; position: fixed; left: 50%; top: 50%; width: 4px; height: 4px; margin: -2px 0 0 -2px;
+  border-radius: 50%; background: rgba(233, 230, 220, .55); pointer-events: none; }
 
 /* ---- chat ---- */
 #chat { position: fixed; left: max(14px, env(safe-area-inset-left)); bottom: max(48px, calc(env(safe-area-inset-bottom) + 40px));
@@ -81,6 +89,9 @@ body.touch #hint { display: none; }
   touch-action: none; font-size: 12px; letter-spacing: .06em; }
 #buttons button:active, #buttons button.on { background: rgba(233, 230, 220, .25); }
 #btnJump { grid-column: span 2; height: 64px !important; border-radius: 32px !important; }
+#btnDrop { display: none; }
+body.holding #btnDrop { display: block; }
+body.can-grab #btnAct::after { content: ''; }
 body.touch #chat { bottom: calc(max(26px, env(safe-area-inset-bottom)) + 150px); width: min(300px, calc(100vw - 28px)); }
 body.touch #chat.open { bottom: calc(max(26px, env(safe-area-inset-bottom)) + 150px); }
 

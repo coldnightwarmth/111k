@@ -5,7 +5,7 @@ const POSE_RETRY_MS = 100;
 const HEARTBEAT_MS = 25000;
 const PONG_TIMEOUT_MS = 15000;
 
-export function connectRoom({url, onState, onPose, onLeave, onChat, onStatus}) {
+export function connectRoom({url, onState, onPose, onLeave, onChat, onStatus, onItem, onPunch}) {
   const session = crypto.randomUUID();
   let id = null, socket, closed = false, delay = 1000, offset = 0, synchronized = false;
   let reconnectTimer, poseTimer, pongTimer, queuedPose = null, lastActivity = 0;
@@ -71,6 +71,8 @@ export function connectRoom({url, onState, onPose, onLeave, onChat, onStatus}) {
       else if (m.type === 'pose') onPose(m);
       else if (m.type === 'leave') onLeave(m.id);
       else if (m.type === 'chat') onChat(m);
+      else if (m.type === 'item') onItem?.(m.item);
+      else if (m.type === 'punch') onPunch?.(m);
     };
     current.onclose = () => disconnect(current);
     current.onerror = () => disconnect(current);
@@ -97,6 +99,10 @@ export function connectRoom({url, onState, onPose, onLeave, onChat, onStatus}) {
     sendChat(text) {
       if (closed || socket?.readyState !== 1) return false;
       flushPose(true); return transmit(JSON.stringify({type: 'chat', text}));
+    },
+    send(msg) {
+      if (closed || socket?.readyState !== 1) return false;
+      flushPose(true); return transmit(JSON.stringify(msg));
     },
     close() {
       if (closed) return;

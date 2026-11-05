@@ -250,10 +250,18 @@ def palette(seed=90):
         (0.85, 0.7, 0.15), (0.9, 0.45, 0.1), (0.45, 0.15, 0.45),  # 8-15 colours
         (0.75, 0.76, 0.78), (0.82, 0.12, 0.12), (0.9, 0.9, 0.95), (0.1, 0.55, 0.25), (0.98, 0.85, 0.55),
         (0.3, 0.32, 0.3), (0.2, 0.13, 0.08), (0.05, 0.06, 0.07),  # 16-23 metal, red can, white, green can, warm, ...
+        (0.9, 0.9, 0.87), (0.55, 0.54, 0.5), (0.9, 0.45, 0.6), (0.2, 0.5, 0.5), (0.5, 0.8, 0.2),
+        (0.04, 0.09, 0.05), (0.2, 1.0, 0.35), (1.0, 0.15, 0.1),     # 24-31 porcelain, concrete, pink, teal, lime, screen, leds
+        (1.0, 0.65, 0.1), (0.3, 0.55, 1.0), (0.55, 0.5, 0.35), (0.25, 0.32, 0.5), (0.45, 0.22, 0.1),
+        (0.6, 0.8, 0.7), (0.75, 0.6, 0.42), (0.35, 0.18, 0.06),    # 32-39
+        (0.1, 0.3, 0.12), (0.35, 0.38, 0.2), (0.62, 0.55, 0.45), (0.4, 0.4, 0.43),                     # 40-43
     ]
     names = ['black', 'charcoal', 'grey', 'lightgrey', 'offwhite', 'white', 'beige', 'brown',
              'darkred', 'red', 'navy', 'blue', 'green', 'yellow', 'orange', 'purple',
-             'steel', 'canred', 'paper', 'cangreen', 'warm', 'rubber', 'darkwood', 'glass']
+             'steel', 'canred', 'paper', 'cangreen', 'warm', 'rubber', 'darkwood', 'glass',
+             'porcelain', 'concrete', 'pink', 'teal', 'lime', 'screen', 'ledgreen', 'ledred',
+             'ledamber', 'ledblue', 'khaki', 'denim', 'rust', 'mint', 'tan', 'bottlebrown',
+             'bottlegreen', 'olive', 'dirty', 'slate']
     n = 8
     t = S // n
     img = np.zeros((S, S, 3))
@@ -277,103 +285,156 @@ def _font(size, bold=True):
     return ImageFont.load_default()
 
 
-def spray_layer(w, h, draw_fn, color, seed, blur=2.0, drips=True):
-    """Render strokes to a mask, then make them look sprayed: soft edges,
-    overspray speckle and a few drips."""
+def bathroom_tile(color=(0.86, 0.9, 0.86), seed=140):
+    """15 cm glazed wall tile with grime in the grout (texture spans 0.6 m)."""
+    y, x = np.mgrid[0:S, 0:S]
+    t = S // 4
+    grout = ((x % t) < 4) | ((y % t) < 4)
+    n = periodic_noise(S, 6, seed) * 0.5 + periodic_noise(S, 30, seed + 1, 2) * 0.5
+    base = 0.9 + 0.08 * (n - 0.5)
+    # each tile slightly different, a few cracked or stained
     r = rng(seed)
-    mask = Image.new('L', (w, h), 0)
-    draw_fn(ImageDraw.Draw(mask))
-    m = np.asarray(mask, float) / 255
-    soft = np.asarray(mask.filter(ImageFilter.GaussianBlur(blur)), float) / 255
-    halo = np.asarray(mask.filter(ImageFilter.GaussianBlur(blur * 4)), float) / 255
-    spray = (r.random((h, w)) < halo * 0.35).astype(float) * 0.8
-    a = np.clip(np.maximum(soft * 1.3, spray), 0, 1)
-    if drips:
-        ys, xs = np.nonzero(m[:-1] > 0.5)
-        if len(xs):
-            for _ in range(max(2, len(xs) // 4000)):
-                k = r.integers(0, len(xs)); x0, y0 = xs[k], ys[k]
-                ln = int(r.integers(12, 60)); wd = int(r.integers(1, 3))
-                a[y0:min(h, y0 + ln), max(0, x0 - wd):x0 + wd] = np.maximum(
-                    a[y0:min(h, y0 + ln), max(0, x0 - wd):x0 + wd], 0.85)
-    rgba = np.zeros((h, w, 4))
-    rgba[..., :3] = np.asarray(color)
-    rgba[..., 3] = a
-    return rgba
+    tint = r.uniform(0.94, 1.04, (4, 4))
+    base = base * tint[(y // t) % 4, (x // t) % 4]
+    stain = blur_wrap((periodic_noise(S, 3, seed + 2) > 0.7).astype(float), 10) * 0.09
+    col = colorize(base - stain, color)
+    col[grout] = colorize(0.55 + 0.1 * n, (0.55, 0.53, 0.48))[grout]
+    crack = np.zeros((S, S), bool)
+    cx, cy = int(r.integers(0, S)), int(r.integers(0, S))
+    for i in range(160):
+        cx = (cx + int(r.integers(-1, 3))) % S; cy = (cy + int(r.integers(-2, 3))) % S
+        crack[cy, cx] = True
+    col[blur_wrap(crack.astype(float), 0.7) > 0.12] *= 0.45
+    return to_img(col)
 
 
-def composite(layers):
-    out = np.zeros_like(layers[0])
-    for l in layers:
-        a = l[..., 3:4]
-        out[..., :3] = out[..., :3] * (1 - a) + l[..., :3] * a
-        out[..., 3:4] = out[..., 3:4] + a * (1 - out[..., 3:4])
-    return out
+def mosaic_floor(seed=150):
+    """Small square mosaic, mostly white with a pattern border, dirty (spans 0.6 m)."""
+    y, x = np.mgrid[0:S, 0:S]
+    t = S // 24
+    grout = ((x % t) < 2) | ((y % t) < 2)
+    r = rng(seed)
+    cell = r.uniform(0.86, 1.0, (24, 24))
+    dark = r.random((24, 24)) < 0.06
+    base = cell[(y // t) % 24, (x // t) % 24]
+    col = colorize(base, (0.88, 0.88, 0.84))
+    col[dark[(y // t) % 24, (x // t) % 24]] = np.array([0.18, 0.3, 0.32])
+    dirt = periodic_noise(S, 4, seed + 1)
+    col *= (0.8 + 0.25 * dirt)[..., None]
+    col[grout] = colorize(0.45 + 0.1 * dirt, (0.5, 0.48, 0.42))[grout]
+    return to_img(col)
 
 
-def graffiti_atlas(seed=100):
-    """1024 x 1024 RGBA atlas of original tags. Returns (image, rects) where
-    rects maps a tag name to its (u0, v0, u1, v1) in glTF uv space."""
-    W = H = 1024
-    atlas = np.zeros((H, W, 4))
-    rects = {}
+def console_panel(seed=160):
+    """Grey control-console panel: rows of switches, knobs, meters, labels (not tileable)."""
+    from PIL import Image, ImageDraw
+    r = rng(seed)
+    im = Image.new('RGB', (S, S), (70, 74, 76))
+    d = ImageDraw.Draw(im)
+    for k in range(6):  # panel sections
+        y0 = k * S // 6
+        d.rectangle((6, y0 + 4, S - 6, y0 + S // 6 - 4), outline=(40, 42, 44), width=2)
+        style = r.integers(3)
+        for i in range(10):
+            x = 22 + i * (S - 44) // 10
+            if style == 0:   # toggle switches with labels
+                d.rectangle((x, y0 + 26, x + 12, y0 + 46), fill=(30, 30, 32))
+                up = r.random() < .5
+                d.rectangle((x + 3, y0 + (18 if up else 40), x + 9, y0 + (30 if up else 52)), fill=(190, 190, 185))
+                d.rectangle((x - 2, y0 + 58, x + 16, y0 + 64), fill=(220, 220, 210))
+            elif style == 1:  # knobs
+                d.ellipse((x - 2, y0 + 20, x + 22, y0 + 44), fill=(28, 28, 30), outline=(120, 120, 120))
+                a = r.uniform(0, 6.28)
+                d.line((x + 10, y0 + 32, x + 10 + 10 * np.cos(a), y0 + 32 + 10 * np.sin(a)), fill=(230, 230, 230), width=2)
+                d.rectangle((x, y0 + 52, x + 20, y0 + 58), fill=(210, 210, 200))
+            else:             # analog meters
+                if i % 2:
+                    continue
+                d.rectangle((x, y0 + 14, x + 40, y0 + 64), fill=(225, 220, 200), outline=(20, 20, 20))
+                a = r.uniform(-1.0, 1.0)
+                d.line((x + 20, y0 + 60, x + 20 + 22 * np.sin(a), y0 + 60 - 22 * np.cos(a)), fill=(150, 20, 20), width=2)
+    arr = np.asarray(im, float) / 255
+    arr *= (0.85 + 0.25 * periodic_noise(S, 8, seed + 1))[..., None]
+    return to_img(arr)
 
-    def place(name, x, y, w, h, layers):
-        atlas[y:y + h, x:x + w] = composite(layers)
-        rects[name] = (x / W, (y + h) / H, (x + w) / W, y / H)  # (u0, v_bottom, u1, v_top) in glTF uv
 
-    # 1. "111k" bubble-ish tag, outline + fill
-    w, h = 512, 256
-    def t111(d, grow=0):
-        f = _font(170)
-        d.text((40, 20), '111k', font=f, fill=255, stroke_width=grow, stroke_fill=255)
-    outline = spray_layer(w, h, lambda d: t111(d, 12), (0.08, 0.08, 0.1), seed, blur=2.5)
-    fill = spray_layer(w, h, lambda d: t111(d, 0), (0.95, 0.35, 0.65), seed + 1, blur=1.5, drips=False)
-    place('111k', 0, 0, w, h, [outline, fill])
+def screen(kind, seed=170):
+    """Glowing CRT screen content: 'term' (green text), 'amber' (graphs), 'blue' (ring status)."""
+    from PIL import Image, ImageDraw
+    r = rng(seed)
+    W_, H_ = 256, 192
+    bg = {'term': (4, 18, 8), 'amber': (24, 12, 2), 'blue': (4, 10, 30)}[kind]
+    fg = {'term': (90, 255, 120), 'amber': (255, 170, 40), 'blue': (110, 190, 255)}[kind]
+    im = Image.new('RGB', (W_, H_), bg)
+    d = ImageDraw.Draw(im)
+    f = _font(13, bold=False)
+    if kind == 'term':
+        lines = ['SSC RING CTRL  V2.3', '> STATUS SECTOR N15', 'MAG STRING ....... OFF', 'CRYO LOOP ........ OFF',
+                 'VAC PUMP 7 ....... ERR', 'LAST SYNC 10/21/93', '> HELLO?', '> WHO IS IN THE LOOP', '_']
+        for i, t in enumerate(lines):
+            d.text((10, 8 + i * 19), t, font=f, fill=fg)
+    elif kind == 'amber':
+        for k in range(3):
+            pts = [(10 + i * 4, 40 + k * 55 + 18 * np.sin(i * 0.2 + k) * r.uniform(0.5, 1)) for i in range(60)]
+            d.line(pts, fill=fg, width=2)
+            d.text((12, 8 + k * 55), f'CH{k + 1}  {r.integers(100, 999)} mV', font=f, fill=fg)
+    else:
+        cx, cy, rad = W_ // 2, H_ // 2 + 6, 70
+        d.ellipse((cx - rad, cy - rad, cx + rad, cy + rad), outline=fg, width=3)
+        for i in range(20):
+            a = 2 * np.pi * i / 20
+            px, py = cx + rad * np.cos(a), cy - rad * np.sin(a)
+            c = (255, 80, 60) if i in (10, 11) else fg
+            d.rectangle((px - 3, py - 3, px + 3, py + 3), fill=c)
+        d.text((8, 6), 'RING  N15  20 BAYS', font=f, fill=fg)
+    arr = np.asarray(im, float) / 255
+    y = np.arange(H_)[:, None, None]
+    arr *= 0.75 + 0.25 * (y % 3 != 0)   # scanlines
+    return to_img(arr)
 
-    # 2. smiley with x eyes
-    w, h = 256, 256
-    def smile(d):
-        d.ellipse((28, 28, 228, 228), outline=255, width=14)
-        for cx in (95, 160):
-            d.line((cx - 18, 85, cx + 18, 121), fill=255, width=12); d.line((cx + 18, 85, cx - 18, 121), fill=255, width=12)
-        d.arc((70, 110, 186, 196), 15, 165, fill=255, width=14)
-    place('smiley', 512, 0, w, h, [spray_layer(w, h, smile, (0.95, 0.85, 0.15), seed + 2)])
 
-    # 3. "SSC 93" stencil-ish
-    w, h = 512, 192
-    def ssc(d):
-        d.text((20, 10), 'SSC 93', font=_font(130), fill=255)
-    place('ssc', 0, 256, w, h, [spray_layer(w, h, ssc, (0.85, 0.12, 0.1), seed + 3, blur=1.2)])
+def rack_front(seed=180):
+    """Equipment rack: units with vents, handles and screws (spans the rack face)."""
+    from PIL import Image, ImageDraw
+    r = rng(seed)
+    im = Image.new('RGB', (S, S), (38, 40, 44))
+    d = ImageDraw.Draw(im)
+    y = 8
+    while y < S - 30:
+        h = int(r.choice([24, 48, 72]))
+        d.rectangle((10, y, S - 10, y + h - 3), fill=(58, 60, 64), outline=(20, 20, 22))
+        for vx in range(60, S - 60, 10):
+            d.line((vx, y + 6, vx, y + h - 9), fill=(28, 28, 30), width=3)
+        d.rectangle((16, y + 6, 26, y + h - 9), fill=(150, 150, 150))
+        d.rectangle((S - 26, y + 6, S - 16, y + h - 9), fill=(150, 150, 150))
+        y += h
+    arr = np.asarray(im, float) / 255
+    arr *= (0.85 + 0.25 * periodic_noise(S, 10, seed + 1))[..., None]
+    return to_img(arr)
 
-    # 4. arrow
-    w, h = 256, 128
-    def arrow(d):
-        d.line((20, 64, 190, 64), fill=255, width=18)
-        d.polygon([(180, 20), (240, 64), (180, 108)], fill=255)
-    place('arrow', 768, 0, w, h, [spray_layer(w, h, arrow, (0.2, 0.85, 0.9), seed + 4)])
 
-    # 5. scrawled words in marker
-    w, h = 512, 192
-    def words(d):
-        d.text((10, 10), 'who was here', font=_font(56), fill=255)
-        d.text((60, 90), 'ok :)', font=_font(70), fill=255)
-    place('scrawl', 512, 256, w, h, [spray_layer(w, h, words, (0.05, 0.05, 0.06), seed + 5, blur=0.8, drips=False)])
+def mimic_board(seed=190):
+    """Wall-sized ring schematic: the loop, its 20 bays, service lines (not tileable)."""
+    from PIL import Image, ImageDraw
+    W_, H_ = 1024, 512
+    im = Image.new('RGB', (W_, H_), (34, 46, 44))
+    d = ImageDraw.Draw(im)
+    f, fb = _font(18), _font(28)
+    d.text((24, 16), 'SUPERCONDUCTING SUPER COLLIDER  -  N15 SERVICE RING', font=fb, fill=(220, 225, 210))
+    cx, cy, rad = W_ // 2, H_ // 2 + 22, 150
+    d.ellipse((cx - rad, cy - rad, cx + rad, cy + rad), outline=(230, 230, 220), width=10)
+    d.ellipse((cx - rad + 26, cy - rad + 26, cx + rad - 26, cy + rad - 26), outline=(120, 140, 130), width=3)
+    for i in range(20):
+        a = 2 * np.pi * i / 20
+        px, py = cx + (rad + 30) * np.cos(a), cy - (rad + 30) * np.sin(a)
+        d.rectangle((px - 14, py - 9, px + 14, py + 9), outline=(230, 230, 220), width=2)
+        tx, ty = cx + (rad + 64) * np.cos(a), cy - (rad + 64) * np.sin(a)
+        d.text((tx - 20, ty - 9), f'B-{i + 1:02d}', font=f, fill=(200, 205, 190))
+    for k, (label, col) in enumerate([('POWER', (220, 60, 50)), ('CRYO', (80, 170, 220)), ('VACUUM', (220, 190, 70))]):
+        d.rectangle((40, 420 + k * 28, 70, 438 + k * 28), fill=col)
+        d.text((80, 418 + k * 28), label, font=f, fill=(210, 210, 200))
+    arr = np.asarray(im, float) / 255
+    arr *= (0.85 + 0.2 * np.asarray(Image.fromarray((periodic_noise(S, 6, seed) * 255).astype(np.uint8)).resize((W_, H_)), float)[..., None] / 255)
+    return to_img(arr)
 
-    # 6. crown doodle
-    w, h = 256, 256
-    def crown(d):
-        d.line([(40, 190), (40, 80), (88, 140), (128, 60), (168, 140), (216, 80), (216, 190), (40, 190)], fill=255, width=12, joint='curve')
-        for cx, cy in ((40, 80), (128, 60), (216, 80)):
-            d.ellipse((cx - 12, cy - 12, cx + 12, cy + 12), fill=255)
-    place('star', 768, 448, w, h, [spray_layer(w, h, crown, (0.6, 0.35, 0.95), seed + 6)])
 
-    # 7. big throwie letters
-    w, h = 768, 320
-    def throw(d, grow=0):
-        d.text((20, 0), 'LOOP', font=_font(250), fill=255, stroke_width=grow, stroke_fill=255)
-    place('loop', 0, 448, w, h, [spray_layer(w, h, lambda d: throw(d, 14), (0.95, 0.95, 0.92), seed + 7, blur=2.5),
-                                 spray_layer(w, h, lambda d: throw(d, 0), (0.15, 0.55, 0.95), seed + 8, blur=1.5, drips=False)])
-
-    img = Image.fromarray((np.clip(atlas, 0, 1) * 255 + 0.5).astype(np.uint8), 'RGBA')
-    return img, rects

@@ -2,7 +2,7 @@
 // One Durable Object instance ("public-v1") holds every socket. Hibernating
 // WebSockets plus automatic ping/pong mean an idle room costs nothing.
 import {INACTIVE_MS, MAX_PLAYERS} from '../src/protocol.js';
-import {handleMessage, newPlayer, snapshot} from './room.js';
+import {handleMessage, newPlayer, snapshot, freshItems, validItems, releaseItems} from './room.js';
 
 function allowedOrigins(env) {
   const list = (env.ALLOWED_ORIGINS || '').split(',').map(s => s.trim()).filter(Boolean);
@@ -26,8 +26,15 @@ export default {
 export class Room {
   constructor(ctx) {
     this.ctx = ctx;
+    this.items = null;
     ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair('ping', 'pong'));
   }
+  // held items are the room's only shared state; they survive hibernation in storage
+  async loadItems() {
+    if (!this.items) this.items = validItems(await this.ctx.storage.get?.('items'));
+    return this.items;
+  }
+  async saveItems() { await this.ctx.storage.put?.('items', this.items); }
   sockets() { return this.ctx.getWebSockets(); }
   players() { return this.sockets().map(ws => ws.deserializeAttachment()).filter(Boolean); }
   send(ws, msg) { try { ws.send(typeof msg === 'string' ? msg : JSON.stringify(msg)); } catch {} }
@@ -50,7 +57,7 @@ export class Room {
     const now = Date.now();
     server.serializeAttachment(newPlayer(id, now));
     this.send(server, {type: 'welcome', id, now});
-    this.send(server, snapshot(this.players(), now));
+    this.send(server, snapshot(this.players(), now, await this.loadItems()));
     await this.scheduleAlarm();
     return new Response(null, {status: 101, webSocket: client});
   }
@@ -59,11 +66,13 @@ export class Room {
     const player = ws.deserializeAttachment();
     if (!player) return;
     const now = Date.now();
-    const result = handleMessage(player, data, now);
+    const items = await this.loadItems();
+    const result = handleMessage(player, data, now, {items, players: () => this.players()});
     if (result.close) { ws.close(1009, result.close); return; }
     if (result.changed) ws.serializeAttachment(player);
     for (const {to, msg} of result.out) to === 'all' ? this.broadcast(msg) : this.send(ws, msg);
-    if (result.returning) { this.broadcast(snapshot(this.players(), now)); await this.scheduleAlarm(); }
+    if (result.itemsChanged) await this.saveItems();
+    if (result.returning) { this.broadcast(snapshot(this.players(), now, items)); await this.scheduleAlarm(); }
   }
 
   async alarm() {
@@ -73,15 +82,26 @@ export class Room {
       if (!p || p.inactive || now - p.lastActive < INACTIVE_MS) continue;
       p.inactive = true; ws.serializeAttachment(p);
       this.broadcast({type: 'leave', id: p.id});
+      const dropped = releaseItems(await this.loadItems(), p);
+      for (const {msg} of dropped) this.broadcast(msg);
+      if (dropped.length) await this.saveItems();
     }
     await this.scheduleAlarm();
   }
 
-  async webSocketClose(ws) { this.depart(ws); }
-  async webSocketError(ws) { try { ws.close(1011, 'Connection interrupted'); } catch {} this.depart(ws); }
-  depart(ws) {
-    const id = ws.deserializeAttachment()?.id;
-    if (!id || this.sockets().some(o => o !== ws && o.deserializeAttachment()?.id === id)) return;
-    this.broadcast({type: 'leave', id});
+  async webSocketClose(ws) { await this.depart(ws); }
+  async webSocketError(ws) { try { ws.close(1011, 'Connection interrupted'); } catch {} await this.depart(ws); }
+  async depart(ws) {
+    const p = ws.deserializeAttachment();
+    if (!p?.id || this.sockets().some(o => o !== ws && o.deserializeAttachment()?.id === p.id)) return;
+    this.broadcast({type: 'leave', id: p.id});
+    const items = await this.loadItems();
+    if (!this.sockets().some(o => o !== ws)) {
+      // last one out: everything goes back where it started
+      this.items = freshItems(); await this.saveItems(); return;
+    }
+    const dropped = releaseItems(items, p);
+    for (const {msg} of dropped) this.broadcast(msg);
+    if (dropped.length) await this.saveItems();
   }
 }

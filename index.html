@@ -23,7 +23,9 @@
     <span id="online">…</span>
   </header>
 
-  <p id="hint">click to look around · <kbd>WASD</kbd> move · <kbd>shift</kbd> run · <kbd>space</kbd> jump · <kbd>C</kbd> crouch · <kbd>enter</kbd> chat · <kbd>E</kbd> emotes · <kbd>V</kbd> view</p>
+  <p id="hint">click to look around · <kbd>WASD</kbd> move · <kbd>shift</kbd> run · <kbd>space</kbd> jump · <kbd>C</kbd> crouch · <kbd>enter</kbd> chat · <kbd>E</kbd> emotes · <kbd>V</kbd> view · <kbd>click</kbd> punch</p>
+  <p id="prompt" aria-live="polite"></p>
+  <p id="emoteLabel" hidden></p>
 
   <section id="chat">
     <div class="log" role="log" aria-live="polite" aria-label="chat"></div>
@@ -40,6 +42,8 @@
       <button id="btnChat" type="button" aria-label="chat">chat</button>
       <button id="btnCrouch" type="button" aria-label="crouch">duck</button>
       <button id="btnJump" type="button" aria-label="jump">jump</button>
+      <button id="btnAct" type="button" aria-label="use">punch</button>
+      <button id="btnDrop" type="button" aria-label="drop">drop</button>
     </div>
   </div>
 
