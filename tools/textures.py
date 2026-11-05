@@ -189,6 +189,54 @@ def concrete(color=(0.50, 0.50, 0.48), seed=80):
     return to_img(colorize(base, color))
 
 
+def tunnel_lining(seed=110):
+    """Cast concrete tunnel lining. Texture spans 1.5 m around x 1.5 m along:
+    a pour joint every 1.5 m along the tunnel, form-tie holes, lime streaks."""
+    y, x = np.mgrid[0:S, 0:S]
+    n = periodic_noise(S, 3, seed) * 0.5 + periodic_noise(S, 24, seed + 1, 3) * 0.5
+    fine = periodic_noise(S, 120, seed + 2, 1)
+    base = 0.78 + 0.22 * (n - 0.5) * 2 + 0.05 * (fine - 0.5)
+    joint = blur_wrap(((x < 3) | (x > S - 3)).astype(float), 1.0)          # cold joint between pours
+    base -= 0.28 * joint
+    form = blur_wrap((np.abs(y % (S // 3) - 2) < 1).astype(float), 1.5)   # faint formwork board lines
+    base -= 0.05 * form
+    for cx, cy in [(S // 4, S // 6), (3 * S // 4, S // 6 + S // 3), (S // 4, S // 6 + 2 * S // 3)]:
+        tie = ((x - cx) ** 2 + (y - cy) ** 2) < 36
+        base[tie] -= 0.25
+    pits = blur_wrap(speckle(S, 0.006, seed + 3), 0.6) * 2
+    base -= np.clip(pits, 0, 0.25)
+    col = colorize(base, (0.56, 0.55, 0.52))
+    # efflorescence: chalky streaks running down from the joint
+    lime = blur_wrap((x < 10).astype(float) * (periodic_noise(S, 6, seed + 4) > 0.55), 3.0)
+    col = col * (1 - 0.35 * lime[..., None]) + 0.35 * lime[..., None] * np.array([0.82, 0.82, 0.78])
+    return to_img(col)
+
+
+def tunnel_floor(seed=120):
+    """Concrete invert slab, texture spans 2 m: saw-cut joints, tyre wear, oil."""
+    y, x = np.mgrid[0:S, 0:S]
+    n = periodic_noise(S, 4, seed) * 0.6 + periodic_noise(S, 40, seed + 1, 2) * 0.4
+    base = 0.74 + 0.25 * (n - 0.5) * 2
+    cut = blur_wrap(((y % (S // 2)) < 2).astype(float), 0.8)
+    base -= 0.3 * cut
+    pits = blur_wrap(speckle(S, 0.012, seed + 2), 0.7) * 2
+    base -= np.clip(pits, 0, 0.2)
+    oil = np.clip(periodic_noise(S, 3, seed + 3) - 0.62, 0, 1) * 2.5
+    base *= 1 - 0.45 * oil
+    col = colorize(base, (0.5, 0.49, 0.46))
+    return to_img(col)
+
+
+def safety_paint(seed=130):
+    """Worn yellow floor-edge paint (texture spans 1 m)."""
+    n = periodic_noise(S, 8, seed)
+    wear = periodic_noise(S, 30, seed + 1, 2)
+    col = colorize(0.8 + 0.2 * n, (0.85, 0.68, 0.12))
+    gone = wear < 0.42
+    col[gone] = colorize(0.75 + 0.2 * n, (0.5, 0.49, 0.46))[gone]
+    return to_img(col)
+
+
 # ------------------------------------------------------------------- palette
 PALETTE = {}
 

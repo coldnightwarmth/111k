@@ -1,29 +1,42 @@
 // 2D (top-down) collision for walking: the player is a circle, the level is
 // a set of oriented boxes and circles from the level JSON. Obstacles shorter
-// than the step height are ignored so you can walk over litter.
+// than the step height are ignored so you can walk over litter. Colliders are
+// bucketed into a grid so only the ones nearby are tested.
 const STEP = .12;
+const CELL = 4;
 
 export function createCollider(meta, radius = .38) {
-  const boxes = [], circles = [];
+  const grid = new Map();
+  const cellKey = (ix, iz) => `${ix},${iz}`;
   for (const c of meta.colliders) {
     if (c.y1 !== undefined && c.y1 < STEP) continue;
     if (c.y0 !== undefined && c.y0 > 2.2) continue;
-    if (c.r !== undefined) circles.push(c);
-    else boxes.push({...c, cos: Math.cos(c.yaw || 0), sin: Math.sin(c.yaw || 0)});
+    const o = c.r !== undefined ? {...c, circle: true}
+      : {...c, cos: Math.cos(c.yaw || 0), sin: Math.sin(c.yaw || 0)};
+    const reach = (o.circle ? o.r : Math.hypot(o.hx, o.hz)) + radius + .5;
+    for (let ix = Math.floor((o.x - reach) / CELL); ix <= Math.floor((o.x + reach) / CELL); ix++)
+      for (let iz = Math.floor((o.z - reach) / CELL); iz <= Math.floor((o.z + reach) / CELL); iz++) {
+        const k = cellKey(ix, iz);
+        if (!grid.has(k)) grid.set(k, []);
+        grid.get(k).push(o);
+      }
   }
+  const empty = [];
   const b = meta.bounds;
 
   function resolve(x, z) {
+    const near = grid.get(cellKey(Math.floor(x / CELL), Math.floor(z / CELL))) || empty;
     for (let iter = 0; iter < 4; iter++) {
       let moved = false;
-      for (const c of circles) {
-        const dx = x - c.x, dz = z - c.z, d = Math.hypot(dx, dz), min = c.r + radius;
-        if (d < min) {
-          const k = d > 1e-6 ? (min - d) / d : 0;
-          x += dx * k + (d > 1e-6 ? 0 : min); z += dz * k; moved = true;
+      for (const o of near) {
+        if (o.circle) {
+          const dx = x - o.x, dz = z - o.z, d = Math.hypot(dx, dz), min = o.r + radius;
+          if (d < min) {
+            const k = d > 1e-6 ? (min - d) / d : 0;
+            x += dx * k + (d > 1e-6 ? 0 : min); z += dz * k; moved = true;
+          }
+          continue;
         }
-      }
-      for (const o of boxes) {
         // into box space (yaw rotates local x toward -z, matching the baker)
         const dx = x - o.x, dz = z - o.z;
         const lx = dx * o.cos - dz * o.sin, lz = dx * o.sin + dz * o.cos;

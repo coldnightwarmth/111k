@@ -6,3 +6,4 @@ _site/
 __pycache__/
 *.pyc
 *.blend1
+tools/previews/

@@ -21,7 +21,7 @@ renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = Number(params.get('exposure')) || 1.0;
 const scene = new THREE.Scene();
 scene.background = new THREE.Color('#050506');
-const camera = new THREE.PerspectiveCamera(72, 1, .05, 120);
+const camera = new THREE.PerspectiveCamera(72, 1, .05, 90);
 camera.rotation.order = 'YXZ';
 function resize() {
   renderer.setSize(innerWidth, innerHeight, false);
@@ -37,11 +37,18 @@ addEventListener('resize', resize); resize();
 const hueOf = id => { let h = 0; for (const c of id || '') h = (h * 31 + c.charCodeAt(0)) >>> 0; return h % 360; };
 
 async function start() {
-  const [level] = await Promise.all([loadLevel('office', renderer), loadAvatarAsset()]);
+  const [level] = await Promise.all([loadLevel('world', renderer), loadAvatarAsset()]);
   scene.add(level.scene);
+  const fog = level.meta.fog;
+  if (fog) {
+    scene.fog = new THREE.Fog(fog.color, fog.near, fog.far);
+    scene.background = new THREE.Color(fog.color);
+    camera.far = fog.far + 5; camera.updateProjectionMatrix();
+  }
   const avatarLights = createAvatarLights(level.meta, scene);
   const collider = createCollider(level.meta);
-  const lightmapped = [...level.materials.values()].filter(m => m.lightMap);
+  // only the party room's surfaces dim with its flickering tube
+  const flickering = [...level.materials.values()].filter(m => m.lightMap && m.userData.flicker === 'office');
   const tube = level.materials.get('tube');
 
   // ------------------------------------------------------------ player
@@ -143,15 +150,15 @@ async function start() {
     flick = target;
     const lantern = .92 + .08 * Math.sin(now * .011) * Math.sin(now * .0037);
     for (const l of avatarLights) l.light.intensity = l.base * (l.flicker === 'fluorescent' ? flick : l.flicker === 'candle' ? lantern : 1);
-    // the fluorescent dominates the bake, so dip the whole lightmap a little with it
+    // the tube dominates the party room's bake, so dip that room's lightmap a little with it
     const k = .55 + .45 * flick;
-    for (const m of lightmapped) m.lightMapIntensity = level.baseIntensity * k;
+    for (const m of flickering) m.lightMapIntensity = level.baseIntensity * k;
   }
 
   // ------------------------------------------------------------- loop
   const tmp = new THREE.Vector3(), pivot = new THREE.Vector3(), bubbleAnchor = new THREE.Vector3();
   const ray = new THREE.Raycaster();
-  const levelMeshes = []; level.scene.traverse(o => { if (o.isMesh && !o.material.transparent) levelMeshes.push(o); });
+  const levelMeshes = level.meshes.filter(o => !o.material.transparent);
   let last = performance.now(), lastSent = '', sentAt = 0, settle = 0;
   loading.classList.add('done');
   $('hint').hidden = isTouch;
@@ -235,6 +242,7 @@ async function start() {
       else { const at = project(player, 2.25); myBubble.update(at.x, at.y, at.visible && thirdPerson); }
     }
 
+    avatarLights.update(camera.position.x, camera.position.z);
     updateFlicker(now);
     if (tube) tube.color.setScalar(.3 + .7 * flick);
     renderer.render(scene, camera);

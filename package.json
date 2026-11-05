@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "node server/dev.mjs",
     "test": "node --test server/test/*.test.mjs",
-    "build:room": "python3 tools/build_room.py",
+    "build:world": "python3 tools/build_world.py",
     "deploy:server": "npx --yes wrangler@4 deploy --config server/wrangler.jsonc"
   },
   "engines": {"node": ">=20"}

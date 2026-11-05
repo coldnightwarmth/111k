@@ -2,8 +2,9 @@
 
 A realtime multiplayer hangout in an abandoned tunnel loop, inspired by the
 Superconducting Super Collider tunnel dug under Waxahachie, Texas, and
-abandoned in 1993. Right now it is one room: a small office off the loop that
-people have taken over for a party.
+abandoned in 1993. The loop is about 226 m around, with twenty doors on its
+outer side opening onto small offices. One of them has been taken over for a
+party; the rest are in various states of abandonment, some locked.
 
 - **Site:** static files on GitHub Pages, with no build step
 - **Multiplayer:** a Cloudflare Worker + Durable Object (free tier)
@@ -47,21 +48,31 @@ the server at `wss://111k-room.<your-subdomain>.workers.dev/connect`; see
 
 ## How the art is made
 
-Environments are modeled in code with `tools/levelkit.py`, a small modeler
-and lightmap baker that needs only numpy and Pillow.
+The world is modeled in Python and lit in Blender, which runs headless as a
+Python module (`pip install bpy`, plus numpy, Pillow, scipy and scikit-image).
 
-1. Geometry is authored as lowpoly boxes, cylinders and quads, with
-   tileable textures generated procedurally (`tools/textures.py`).
-2. Lighting, ambient occlusion and grime are baked into one lightmap, in the
-   spirit of Half-Life 2.
-3. In the browser, every surface is an unlit material times the lightmap.
-   Avatars get a few real lights matched to the bake.
+```sh
+npm run build:world              # full bake, about 10 minutes
+python3 tools/build_world.py --fast --preview   # quick bake + preview renders in tools/previews/
+```
 
-Rebuild the room with `npm run build:room`. It writes
-`assets/env/office.{glb,json}` and `office-lightmap.png`.
+1. `tools/build_world.py` lays out the loop, the door passages and the plain
+   offices; `tools/office.py` builds the party room. Textures are tileable and
+   procedural (`tools/textures.py`).
+2. Graffiti is simulated rather than typeset (`tools/graffiti.py`): letters
+   come from a hand-drawn alphabet run through a handstyle, and each stroke is
+   sprayed like a can, with paint building up where the hand slows, overspray,
+   and drips where it pools. Throw-ups get fill passes, fades, 3D blocks and
+   outlines letter by letter.
+3. Blender packs lightmap UVs, bakes direct and bounced light with Cycles and
+   denoises the result (`tools/blender/kit.py`). Graffiti borrows the
+   lightmap of the wall it is painted on.
+4. In the browser every surface is an unlit material times the lightmap.
+   Avatars are lit by the six baked lights nearest the camera.
 
-The office is about 3,300 triangles and 13 draw calls, which keeps it fast
-on phones.
+The output is `assets/env/world.{glb,json}` and `world-lightmap.png`. The level
+is split into 16 sectors around the loop so the renderer can skip what is off
+screen.
 
 The avatar (`assets/avatars/drifella-default.glb`) is the cards.art default
 Drifella. `tools/glbslim.py` prunes the wardrobe options and quantizes the
@@ -74,7 +85,7 @@ index.html, styles.css    page + HUD
 src/                      client (ES modules, no bundler)
   main.js                 game loop, camera, peers
   avatar.js  motion.js    character animation, movement, interpolation
-  level.js   physics.js   baked level loading, walking collision
+  level.js   physics.js   baked level loading, avatar light pool, walking collision
   net.js     chat.js      websocket client, chat log + bubbles
   controls.js             keyboard/mouse and touch input
   protocol.js             message validation shared with the server
@@ -82,7 +93,7 @@ server/
   worker.js               Cloudflare Worker + Durable Object
   room.js                 room logic (shared with the dev server)
   dev.mjs                 zero-dependency local server
-tools/                    asset pipeline (python)
+tools/                    asset pipeline (python + blender)
 assets/                   built models, lightmaps, level data
 vendor/three/             three.js r165
 ```
