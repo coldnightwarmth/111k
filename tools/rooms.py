@@ -79,7 +79,7 @@ def control_room(C, door_x, r, group=None):
     led = [M['led_a'], M['led_b']]
     # three console desks along the south wall
     for k, x in enumerate((-2.1, 0.0, 2.1)):
-        with W.frame((x, 0, 2.55), math.pi):  # local -z faces into the room
+        with W.frame((x, 0, 2.55), 0.0):  # local -z faces into the room
             W.box((0, 0.36, 0), (1.95, 0.72, 0.7), M['metal_grey'])
             W.box((0, 0.74, 0.12), (1.95, 0.04, 0.5), M['metal_grey'])
             # sloped instrument panel
