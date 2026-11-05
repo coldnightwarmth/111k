@@ -271,11 +271,93 @@ class World:
             me.materials.append(self.mats[mname].bmat)
             bm = bmesh.new(); bm.from_mesh(me)
             bmesh.ops.remove_doubles(bm, verts=bm.verts, dist=1e-4)
+            if part in ('tunnel', 'services'):
+                # the sweeps run all the way round the loop: cut them into short arcs so each
+                # lightmap island is a gently curved strip rather than a ring
+                def sector(f):
+                    c = f.calc_center_median()
+                    return int((math.atan2(c.y, c.x) + math.pi) / (2 * math.pi) * 48) % 48
+                fs = {f: sector(f) for f in bm.faces}
+                cut = [e for e in bm.edges if len(e.link_faces) == 2
+                       and fs[e.link_faces[0]] != fs[e.link_faces[1]]]
+                bmesh.ops.split_edges(bm, edges=cut)
             bm.to_mesh(me); bm.free()
             ob = bpy.data.objects.new(me.name, me)
             bpy.context.scene.collection.objects.link(ob)
             objs.setdefault(part, []).append(ob)
         return objs
+
+    def _pack(self, objs, lm_size, min_texels=3, margin_px=4):
+        """Scale every lightmap island to the same texels-per-metre (times its part's density),
+        stretch islands too small to hold a few texels, then shelf-pack them into the unit square."""
+        from bpy_extras import bmesh_utils
+        from mathutils import Vector
+        islands, meshes = [], []
+        for o in objs:
+            bm = bmesh.new(); bm.from_mesh(o.data)
+            uvl = bm.loops.layers.uv['lm']
+            dens = self.part_density.get(o.name.split(':')[0], 1.0)
+            for faces in bmesh_utils.bmesh_linked_uv_islands(bm, uvl):
+                loops = [l for f in faces for l in f.loops]
+                a3 = sum(f.calc_area() for f in faces)
+                auv = 0.0
+                for f in faces:
+                    pts = [l[uvl].uv for l in f.loops]
+                    auv += abs(sum(p.x * q.y - q.x * p.y for p, q in zip(pts, pts[1:] + pts[:1]))) / 2
+                s = math.sqrt(a3 / auv) * dens if auv > 1e-14 else 0.0
+                uv = np.array([l[uvl].uv[:] for l in loops]) * s
+                islands.append({'loops': loops, 'uvl': uvl, 'uv': uv, 'area': max(a3, 1e-6) * dens * dens})
+            meshes.append((o, bm))
+        margin = margin_px / lm_size
+        total = sum(i['area'] for i in islands)
+        S0 = math.sqrt(0.6 / total)
+        min_dim = min_texels / lm_size / S0
+        for i in islands:
+            uv = i['uv']
+            lo, hi = uv.min(0), uv.max(0)
+            size = hi - lo
+            k = np.maximum(1.0, min_dim / np.maximum(size, 1e-9))
+            c = (lo + hi) / 2
+            uv = c + (uv - c) * k
+            lo = uv.min(0); uv = uv - lo
+            size = uv.max(0)
+            if size[1] > size[0] * 1.05:    # lay tall islands on their side: shelves pack better
+                uv = uv[:, ::-1].copy(); size = uv.max(0)   # a mirror is fine for a lightmap
+            i['uv'], i['size'] = uv, np.maximum(size, 0.0)
+        order = sorted(islands, key=lambda i: -i['size'][1])
+
+        def place(S):
+            x = y = shelf = 0.0
+            pos = []
+            for i in order:
+                w, h = i['size'] * S + margin
+                if x + w > 1.0:
+                    x, y, shelf = 0.0, y + shelf, 0.0
+                pos.append((x, y)); x += w; shelf = max(shelf, h)
+            return y + shelf <= 1.0, pos
+        lo_s = S0
+        while not place(lo_s)[0]:
+            lo_s *= 0.7
+            if lo_s < S0 * 1e-3:
+                raise RuntimeError(f'{len(islands)} lightmap islands cannot fit with a {margin_px}px margin')
+        hi_s = lo_s * 2
+        for _ in range(24):
+            mid = (lo_s + hi_s) / 2
+            if place(mid)[0]:
+                lo_s = mid
+            else:
+                hi_s = mid
+        S = lo_s
+        _, pos = place(S)
+        for i, (x, y) in zip(order, pos):
+            uv = i['uv'] * S + np.array([x + margin / 2, y + margin / 2])
+            for l, p in zip(i['loops'], uv):
+                l[i['uvl']].uv = Vector((float(p[0]), float(p[1])))
+        for o, bm in meshes:
+            bm.to_mesh(o.data); bm.free()
+        texels_per_m = S * lm_size
+        used = sum(float(np.prod(i['size'])) for i in islands) * S * S
+        print(f'  packed {len(islands)} islands ({used:.0%} of the atlas): {texels_per_m:.1f} texels/m at density 1')
 
     @staticmethod
     def _min_island_size(objs, lm_size, min_texels=4, fill=0.7):
@@ -398,7 +480,6 @@ class World:
         for o in decals:  # decals never block light, and borrow the lightmap of the wall they sit on
             o.visible_diffuse = o.visible_shadow = o.visible_glossy = o.visible_transmission = False
             o.visible_camera = False
-            o.data.uv_layers.new(name='lm')
         print(f'  {len(lm_objs)} lightmapped objects, {sum(len(o.data.polygons) for o in lm_objs)} faces '
               f'({time.time() - t0:.1f}s)')
 
@@ -414,34 +495,10 @@ class World:
         bpy.ops.mesh.select_all(action='SELECT')
         bpy.ops.uv.smart_project(angle_limit=math.radians(40), island_margin=0.0, area_weight=0.0,
                                  scale_to_bounds=False)
-        bpy.ops.uv.average_islands_scale()
         bpy.ops.object.mode_set(mode='OBJECT')
-        for o in lm_objs:
-            part = o.name.split(':')[0]
-            k = self.part_density.get(part, 1.0)
-            if k != 1.0:
-                lm = o.data.uv_layers['lm']
-                a = np.zeros(len(lm.data) * 2); lm.data.foreach_get('uv', a)
-                lm.data.foreach_set('uv', a * k)
-        self._min_island_size(lm_objs, lm_size)
-        bpy.ops.object.mode_set(mode='EDIT')
-        bpy.ops.mesh.select_all(action='SELECT')
-        bpy.ops.uv.select_all(action='SELECT')
-        margin = 5 / lm_size
-        bpy.ops.uv.pack_islands(margin=margin, rotate=True, shape_method='AABB', margin_method='FRACTION')
-        bpy.ops.object.mode_set(mode='OBJECT')
-        # never trust the packer blindly: everything must land inside the texture
-        lo, hi = np.array([np.inf, np.inf]), np.array([-np.inf, -np.inf])
-        for o in lm_objs:
-            a = np.zeros(len(o.data.uv_layers['lm'].data) * 2); o.data.uv_layers['lm'].data.foreach_get('uv', a)
-            a = a.reshape(-1, 2); lo = np.minimum(lo, a.min(0)); hi = np.maximum(hi, a.max(0))
-        if (lo < -1e-4).any() or (hi > 1 + 1e-4).any():
-            span = (hi - lo).max() * 1.002
-            print(f'  packer overflowed ({lo.round(3)} .. {hi.round(3)}), refitting')
-            for o in lm_objs:
-                lm = o.data.uv_layers['lm']
-                a = np.zeros(len(lm.data) * 2); lm.data.foreach_get('uv', a)
-                lm.data.foreach_set('uv', ((a.reshape(-1, 2) - lo) / span).ravel())
+        # Blender's own scale/pack operators depend on editor context and silently skip when run
+        # headless, so islands are scaled to a uniform texel density and packed here instead.
+        self._pack(lm_objs, lm_size)
         print(f'  uv packed ({time.time() - t0:.1f}s)')
 
         # --- bake
@@ -464,7 +521,17 @@ class World:
         bk.target = 'IMAGE_TEXTURES'; bk.margin = 4; bk.margin_type = 'EXTEND'
         bk.use_pass_direct = bk.use_pass_indirect = True; bk.use_pass_color = False
         set_target(img)
-        bpy.ops.object.bake(type='DIFFUSE', uv_layer='lm')
+        res = bpy.ops.object.bake(type='DIFFUSE', uv_layer='lm')
+        if res != {'FINISHED'}:
+            raise RuntimeError(f'light bake did not finish: {res}')
+        if os.environ.get('KIT_DEBUG'):
+            px = np.empty(lm_size * lm_size * 4, np.float32); img.pixels.foreach_get(px)
+            print('  DEBUG baked rgb max', px.reshape(-1, 4)[:, :3].max(), 'alpha>0', (px.reshape(-1, 4)[:, 3] > 0).mean())
+            for o in lm_objs:
+                a_ = np.zeros(len(o.data.uv_layers['lm'].data) * 2); o.data.uv_layers['lm'].data.foreach_get('uv', a_)
+                a_ = a_.reshape(-1, 2)
+                print('  DEBUG', o.name, 'uv', a_.min(0).round(3), a_.max(0).round(3), 'mat', o.data.materials[0].name,
+                      'bake node', o.data.materials[0].node_tree.nodes.active.name, o.data.materials[0].node_tree.nodes.active.image.name)
         print(f'  baked light ({time.time() - t0:.1f}s)')
         groups = sorted({L['group'] for L in self.bake_lights if L.get('group') is not None})
         group_imgs = {}
