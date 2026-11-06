@@ -886,7 +886,31 @@ async function start() {
   const pivot = new THREE.Vector3(), smoothPivot = new THREE.Vector3(), dir = new THREE.Vector3(), bubbleAnchor = new THREE.Vector3();
   let camDist = 1.9, camSide = .6, lastSent = '', sentAt = 0, settle = 0, last = performance.now(), firstFrame = true, savedAt = 0;
   loading.classList.add('done');
-  $('hint').hidden = isTouch;
+  // the controls bar: each control fades once you've used it, and when you've used every one the
+  // bar goes for good (remembered in this browser)
+  {
+    const hintEl = $('hint'), cmds = [...hintEl.querySelectorAll('[data-cmd]')].map(el => el.dataset.cmd);
+    let learned = new Set();
+    try { learned = new Set(JSON.parse(localStorage.getItem('111k:learned') || '[]')); } catch {}
+    const show = () => {
+      for (const el of hintEl.querySelectorAll('[data-cmd]')) el.classList.toggle('used', learned.has(el.dataset.cmd));
+      hintEl.hidden = isTouch || cmds.every(c => learned.has(c));
+    };
+    const learn = c => {
+      if (learned.has(c)) return;
+      learned.add(c); show();
+      try { localStorage.setItem('111k:learned', JSON.stringify([...learned])); } catch {}
+    };
+    const KEYS = {KeyW: 'move', KeyA: 'move', KeyS: 'move', KeyD: 'move', ShiftLeft: 'run', ShiftRight: 'run', Space: 'jump',
+      KeyC: 'crouch', Enter: 'chat', KeyE: 'emotes', KeyV: 'view'};
+    addEventListener('keydown', e => {
+      const typing = e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLSelectElement;
+      if (KEYS[e.code] && (!typing || e.code === 'Enter') && (!chat.open || e.code === 'Enter')) learn(KEYS[e.code]);
+    }, true);
+    document.addEventListener('pointerlockchange', () => { if (document.pointerLockElement) learn('look'); });
+    addEventListener('mousedown', e => { if (!document.pointerLockElement) return; if (e.button === 0) learn('use'); if (e.button === 2) learn('drop'); }, true);
+    show();
+  }
   choosePiece(chosenPiece);
   choosePaint(chosenPaint);
 

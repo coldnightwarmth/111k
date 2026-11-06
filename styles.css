@@ -238,3 +238,7 @@ body.touch #chat .log { max-height: min(30vh, calc(100vh - 260px)); }
   background: rgba(10, 10, 11, .55); pointer-events: none; }
 .speaking[hidden] { display: none; }
 .speaking i { width: 3px; height: 10px; background: #6dff92; border-radius: 2px; transform-origin: bottom; transition: transform 70ms linear; }
+
+/* the controls bar: each control fades once you've used it; the bar goes when you've used them all */
+#hint [data-cmd] { transition: opacity .4s; }
+#hint [data-cmd].used { opacity: .35; }
