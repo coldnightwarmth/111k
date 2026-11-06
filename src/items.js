@@ -63,6 +63,7 @@ function rings(g, mat, r, z0, z1, n, y = 0, tube = .0016) {
 
 // A modern speedball marker, muzzle down its local -z, ~63 cm from muzzle to tank end.
 // The hopper's balls show the loaded paint (setPaint).
+const GUN_SCALE = 1.12;   // the marker is drawn a little bigger than it was built
 function paintballModel() {
   const g = new THREE.Group();
   const X = [Math.PI / 2, 0, 0];
@@ -150,7 +151,10 @@ function paintballModel() {
     shown = color;
     balls.forEach((b, i) => b.material.color.setHex(color < 0 ? palette[(i * 7 + 3) % palette.length] : color));
   };
-  g.userData = {tip: new THREE.Vector3(0, .012, -.428), ground: .052, groundRoll: Math.PI / 2, setPaint};
+  const body = new THREE.Group(); body.scale.setScalar(GUN_SCALE);
+  while (g.children.length) body.add(g.children[0]);
+  g.add(body);
+  g.userData = {tip: new THREE.Vector3(0, .012, -.428).multiplyScalar(GUN_SCALE), ground: .052 * GUN_SCALE, groundRoll: Math.PI / 2, setPaint};
   return g;
 }
 
@@ -431,7 +435,7 @@ export function createItems({scene, camera, hits, shadows = null}) {
           it.sway += dt;
           const bob = Math.sin(it.sway * 1.7) * .004;
           if (s.type === 'paintball') {
-            m.scale.setScalar(.64);
+            m.scale.setScalar(.8 / GUN_SCALE);           // in your own hand: 1.25x what it was (was .64 unscaled)
             m.position.set(.0, -.05 + bob + it.kick * .012, -.02 + it.kick * .05);
             m.rotation.set(.04 + it.kick * .12, -.06, 0);
           } else if (s.type === 'spray') {

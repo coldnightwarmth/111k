@@ -84,22 +84,59 @@ export function createCleaning({level, scene, hits}) {
   const ray = new THREE.Ray(), tri = new THREE.Triangle(), a = new THREE.Vector3(), b = new THREE.Vector3(), cc = new THREE.Vector3(), hit = new THREE.Vector3();
   const sphere = new THREE.Sphere();
   // marks: [{kind, id, verts (in its batch's space), batch}] from the game
+  // How opaque a texture is at (u, v): a small copy of each texture's alpha, made the first time it's
+  // asked about. Only painted pixels count as hitting a piece, so the clear margins of a big tag
+  // don't stand in front of the tag you're actually looking at.
+  const alphas = new Map();
+  function alphaAt(tex, u, v) {
+    if (!tex?.image) return 1;
+    let m = alphas.get(tex);
+    if (m === undefined) {
+      m = null;
+      const img = tex.image, w = img.width, h = img.height;
+      if (w && h) try {
+        const s = Math.min(1, 2048 / Math.max(w, h)), W = Math.max(1, Math.round(w * s)), H = Math.max(1, Math.round(h * s));
+        const c = document.createElement('canvas'); c.width = W; c.height = H;
+        const g = c.getContext('2d', {willReadFrequently: true}); g.drawImage(img, 0, 0, W, H);
+        const d = g.getImageData(0, 0, W, H).data, a = new Uint8Array(W * H);
+        for (let i = 0; i < a.length; i++) a[i] = d[i * 4 + 3];
+        m = {a, W, H};
+      } catch { m = null; }
+      alphas.set(tex, m);
+    }
+    if (!m) return 1;
+    const x = u - Math.floor(u); let y = v - Math.floor(v);
+    if (tex.flipY) y = 1 - y;                                 // glTF textures aren't flipped; canvases are
+    const px = Math.min(m.W - 1, Math.floor(x * m.W)), py = Math.min(m.H - 1, Math.floor(y * m.H));
+    return m.a[py * m.W + px] / 255;
+  }
+  const SOLID = .25;
+  const uvA = new THREE.Vector2(), uvB = new THREE.Vector2(), uvC = new THREE.Vector2(), uvAt = new THREE.Vector2(), local = new THREE.Vector3();
+
+  // the nearest painted pixel of any piece along the ray, in front of the wall you're looking at
   function pick(origin, dir, far, marks) {
     let best = null;
     const wall = hits.raycast(origin, dir, far, true);
     const limit = (wall ? wall.distance : far) + .06;      // nothing behind the surface you're looking at
     for (const p of parts) {
       ray.set(origin, dir).applyMatrix4(p.inv);
+      const g = p.mesh.geometry, idx = g.index, tex = g.attributes.uv, map = p.mesh.material.map;
       for (const h of p.bvh.raycast(ray, THREE.DoubleSide)) {
         const id = compId[p.owner[h.faceIndex]];
         if (erased.has(id)) continue;
+        if (tex && map) {
+          const [i0, i1, i2] = [0, 1, 2].map(k => idx.getX(h.faceIndex * 3 + k));
+          a.fromBufferAttribute(g.attributes.position, i0); b.fromBufferAttribute(g.attributes.position, i1); cc.fromBufferAttribute(g.attributes.position, i2);
+          THREE.Triangle.getInterpolation(local.copy(h.point), a, b, cc, uvA.fromBufferAttribute(tex, i0), uvB.fromBufferAttribute(tex, i1), uvC.fromBufferAttribute(tex, i2), uvAt);
+          if (alphaAt(map, uvAt.x, uvAt.y) < SOLID) continue;   // a clear bit of the piece: look past it
+        }
         const d = h.point.applyMatrix4(p.mesh.matrixWorld).distanceTo(origin);
         if (d < limit && (!best || d < best.distance)) best = {kind: 'baked', id, distance: d};
       }
     }
     for (const mk of marks) {
       if (!mk.verts.length) continue;
-      const mw = mk.batch.mesh.matrixWorld;
+      const mw = mk.batch.mesh.matrixWorld, map = mk.batch.mesh.material.map;
       if (!mk.bound) {                                       // a bounding sphere, once
         const pts = mk.verts.map(q => q.p);
         mk.bound = new THREE.Sphere().setFromPoints(pts);
@@ -107,11 +144,17 @@ export function createCleaning({level, scene, hits}) {
       sphere.copy(mk.bound).applyMatrix4(mw);
       if (!ray.set(origin, dir).intersectsSphere(sphere)) continue;
       for (let i = 0; i + 2 < mk.verts.length; i += 3) {
-        tri.set(a.copy(mk.verts[i].p).applyMatrix4(mw), b.copy(mk.verts[i + 1].p).applyMatrix4(mw), cc.copy(mk.verts[i + 2].p).applyMatrix4(mw));
+        const q0 = mk.verts[i], q1 = mk.verts[i + 1], q2 = mk.verts[i + 2];
+        tri.set(a.copy(q0.p).applyMatrix4(mw), b.copy(q1.p).applyMatrix4(mw), cc.copy(q2.p).applyMatrix4(mw));
         if (!ray.intersectTriangle(tri.a, tri.b, tri.c, false, hit)) continue;
         const d = hit.distanceTo(origin);
-        if (d < limit && (!best || d < best.distance)) best = {kind: mk.kind, id: mk.id, distance: d, mark: mk};
-        break;
+        // pieces on the same wall sit at the same depth: the later one is drawn on top, so it wins a tie
+        if (d >= limit || (best && d >= best.distance + .01)) continue;
+        if (map) {
+          THREE.Triangle.getInterpolation(hit, tri.a, tri.b, tri.c, uvA.set(q0.u, q0.v), uvB.set(q1.u, q1.v), uvC.set(q2.u, q2.v), uvAt);
+          if (alphaAt(map, uvAt.x, uvAt.y) < SOLID) continue;
+        }
+        best = {kind: mk.kind, id: mk.id, distance: d, mark: mk};
       }
     }
     return best;

@@ -275,9 +275,9 @@ async function start() {
     return doorPages.get(key);
   }
   // the patch a tag covers: cut from whatever it lands on (a door's own surface for a door)
-  // how far along the throw a tag carries from what you hit: 1.25 m beyond it, and toward you right up
-  // to the nozzle (1.5 m for tags sprayed before where you stood was sent along)
-  const sprayReach = s => [1.25, s.r !== undefined ? Math.max(.1, s.r - .05) : 1.5];
+  // how far along the throw a tag carries from what you hit: half a metre beyond it, and toward you
+  // right up to the nozzle (1.5 m for tags sprayed before where you stood was sent along)
+  const sprayReach = s => [.5, s.r !== undefined ? Math.max(.1, s.r - .05) : 1.5];
   function sprayVerts(s, piece, onDoor) {
     const point = new THREE.Vector3(...s.p), normal = new THREE.Vector3(...s.n), up = new THREE.Vector3(...s.up);
     const verts = cutDecal(onDoor || hits, {point, normal, up, width: s.size, height: s.size * piece.h / piece.w,
@@ -459,7 +459,7 @@ async function start() {
   }
   // put it down where you're aiming if there's something within reach; otherwise let it go in
   // front of you and it falls (everyone replays the same fall to the spot it settles on)
-  const DROP_REACH = 1.8;
+  const DROP_REACH = 2.8;
   function secondary() {
     const h = held();
     if (!h) return;
@@ -581,7 +581,7 @@ async function start() {
     try { localStorage.setItem('111k:piece', name); } catch {}
     for (const b of galleryList.children) b.classList.toggle('chosen', b.dataset.piece === name);
     const p = pieceByName.get(name);
-    tagLabel.replaceChildren(...(p ? [thumb(p, 72), document.createTextNode(isTouch ? 'tap tags to change' : 'scroll or esc: change tag')] : []));
+    tagLabel.replaceChildren(...(p ? [thumb(p, 72)] : []));      // just the piece: no instructions
   }
   // the scroll wheel steps through your tags whenever the tags menu is shut (open, it scrolls the list).
   // Trackpads send a stream of small deltas, so they're added up and each step takes a fair swipe.
@@ -647,7 +647,7 @@ async function start() {
     items.setMyPaint(c);
     for (const b of paintList.querySelectorAll('button')) b.classList.toggle('chosen', Number(b.dataset.paint) === c);
     const dot = document.createElement('i'); dot.style.setProperty('--paint', c === RANDOM_PAINT ? RAINBOW : hex(c));
-    paintLabel.replaceChildren(dot, document.createTextNode(isTouch ? 'tap paint to change' : 'esc: change paint'));
+    paintLabel.replaceChildren(dot);
   }
   // the next tag's little twist and size are rolled ahead, so the preview shows exactly what you'll get
   let nextTilt = 0, nextScale = 1;
