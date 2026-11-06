@@ -3,7 +3,7 @@
 // in other players' hands and in your own view, and feeds torch beams to the
 // level shader.
 import * as THREE from 'three';
-import {lighting, MAX_FLASHLIGHTS, MAX_SPOTLIGHTS, FAN, FAN_TAN, FAN_RANGE, flashlightReach, beamFrame} from './level.js';
+import {lighting, MAX_FLASHLIGHTS, MAX_SPOTLIGHTS, FAN_RANGE} from './level.js';
 import {EYE_HEIGHT} from './motion.js';
 import {PAINT_COLORS, RANDOM_PAINT} from './decals.js';
 
@@ -302,30 +302,23 @@ export function addOutline(model) {
   return shells;
 }
 
-export function createItems({scene, camera, hits}) {
+export function createItems({scene, camera, hits, shadows = null}) {
   const items = new Map();          // id -> {state, model, kick}
   const spots = [];                 // real spotlights so avatars catch the beams
   const lit = [];                   // switched-on flashlights this frame, nearest first
   let myPaint = RANDOM_PAINT;       // the colour you've loaded into the marker
   let highlighted = null;           // the item under your crosshair that you could pick up
-  // how far each ray of a beam's fan gets before it hits the level (cached while the light holds still)
-  const fanRight = new THREE.Vector3(), fanUp = new THREE.Vector3(), fanDir = new THREE.Vector3();
-  let fanBudget = 0;                // fans re-cast this frame (moving lights beyond this reuse last frame's)
+  // how far a beam's middle gets before it hits the level (cached while the light holds still), so the
+  // real spotlight that lights avatars stops at the wall it's pointed at
+  let reachBudget = 0;
   function reachOf(it, origin, dir) {
     const key = `${origin.x.toFixed(2)},${origin.y.toFixed(2)},${origin.z.toFixed(2)},${dir.x.toFixed(3)},${dir.y.toFixed(3)},${dir.z.toFixed(3)}`;
-    if (it.fanKey === key || (it.fan && fanBudget <= 0)) return it.fan;
-    fanBudget--;
-    it.fanKey = key; it.fan ??= new Uint8Array(FAN * FAN);
-    const fw = fanDir.copy(dir).normalize();
-    beamFrame(fw, fanRight, fanUp);
-    const ray = new THREE.Vector3();
-    for (let gy = 0; gy < FAN; gy++) for (let gx = 0; gx < FAN; gx++) {
-      const tu = (gx / (FAN - 1) * 2 - 1) * FAN_TAN, tv = (gy / (FAN - 1) * 2 - 1) * FAN_TAN;
-      ray.copy(fw).addScaledVector(fanRight, tu).addScaledVector(fanUp, tv).normalize();
-      const h = hits?.raycast(origin, ray, FAN_RANGE, true);
-      it.fan[gy * FAN + gx] = Math.round((h ? h.distance : FAN_RANGE) / FAN_RANGE * 255);
-    }
-    return it.fan;
+    if (it.reachKey === key || (it.reach !== undefined && reachBudget <= 0)) return it.reach;
+    reachBudget--;
+    it.reachKey = key;
+    const h = hits?.raycast(origin, dir.clone().normalize(), FAN_RANGE, true);
+    it.reach = h ? h.distance : FAN_RANGE;
+    return it.reach;
   }
   for (let i = 0; i < MAX_SPOTLIGHTS; i++) {
     const s = new THREE.SpotLight(BEAM_COLOR, 0, 18, .52, .45, 1.6);
@@ -507,24 +500,23 @@ export function createItems({scene, camera, hits}) {
         }
       }
       lit.sort((a, b) => a.rank - b.rank);
-      fanBudget = 2;
+      reachBudget = 4;
       for (const l of lit) {
         if (n >= MAX_FLASHLIGHTS) break;
         lighting.flPos.value[n].copy(l.origin);
         lighting.flDir.value[n].copy(l.dir).normalize();
         lighting.flOn.value[n] = 1;
-        const fan = reachOf(l.it, l.origin, l.dir);
-        flashlightReach.data.set(fan, n * FAN * FAN);
+        shadows?.assign(n, l.it.state.id, l.origin, lighting.flDir.value[n]);
         if (n < MAX_SPOTLIGHTS) {
           // avatars catch the beam too, but not through the wall it's pointed at
           spots[n].position.copy(l.origin); spots[n].target.position.copy(l.origin).add(l.dir); spots[n].intensity = 40;
-          spots[n].distance = Math.min(18, fan[(FAN * FAN - 1) / 2] / 255 * FAN_RANGE + 1);
+          spots[n].distance = Math.min(18, reachOf(l.it, l.origin, l.dir) + 1);
         }
         n++;
       }
-      flashlightReach.texture.needsUpdate = true;
       lit.length = 0;
-      for (let i = n; i < MAX_FLASHLIGHTS; i++) lighting.flOn.value[i] = 0;
+      for (let i = n; i < MAX_FLASHLIGHTS; i++) { lighting.flOn.value[i] = 0; shadows?.clear(i); }
+      shadows?.render(dt);
       for (let i = n; i < MAX_SPOTLIGHTS; i++) spots[i].intensity = 0;
     },
   };

@@ -13,6 +13,7 @@ import {createShelves, SHELF_COLLIDERS} from './shelves.js';
 import {createCleaning} from './cleaning.js';
 import {MACHINE_COLLIDER, BUTTON, BUTTON_RANGE, RACE_LAPS} from './race.js';
 import {createMimic} from './mimic.js';
+import {createBeamShadows, castsBeamShadow} from './beamshadows.js';
 import {createWorldHits, cutDecal, createBatch, markMaterial, splatAtlas, splatCell, PAINT_COLORS, PAINT_ROWS, RANDOM_PAINT, rgbOf} from './decals.js';
 import {createDoors} from './doors.js';
 import {pickAvatar} from './picker.js';
@@ -107,7 +108,12 @@ async function start() {
   const hits = createWorldHits(level, doors.doors);
   const machine = createMachine(scene);
   hits.addSolid(machine.root);
-  hits.addSolid(createShelves(THREE, scene));
+  const shelves = createShelves(THREE, scene);
+  hits.addSolid(shelves);
+  // what blocks flashlight beams: the level (doors included), the lap timer and the shelving
+  for (const m of level.meshes) if (!m.material.transparent) castsBeamShadow(m);
+  castsBeamShadow(machine.root); castsBeamShadow(shelves);
+  const beamShadows = createBeamShadows(renderer, scene);
   const cleaning = createCleaning({level, scene, hits});
   const mimic = createMimic(level, scene);   // the control room's ring board: occupied rooms light up
   let mimicAt = 0;
@@ -361,10 +367,14 @@ async function start() {
   const ballGeo = new THREE.SphereGeometry(.017, 8, 6);
   const GRAVITY = 5.5, SPEED = 34;
   function simulate(o, v, t) { return new THREE.Vector3(o.x + v.x * t, o.y + v.y * t - .5 * GRAVITY * t * t, o.z + v.z * t); }
-  function launch(o, v, color, t, onLand) {
+  // `from`: where the ball should be seen leaving (the barrel tip as this client sees it); it eases
+  // onto the real flight within its first few metres, so it still lands exactly where it lands
+  function launch(o, v, color, t, onLand, from = null) {
     const m = new THREE.Mesh(ballGeo, new THREE.MeshBasicMaterial({color}));
-    m.position.copy(o); scene.add(m);
-    balls.push({m, o: o.clone(), v: v.clone(), t: 0, end: t, onLand});
+    const offset = from ? from.clone().sub(o) : new THREE.Vector3();
+    if (offset.length() > 3) offset.set(0, 0, 0);          // too far off to be the same gun: don't bend it
+    m.position.copy(o).add(offset); scene.add(m);
+    balls.push({m, o: o.clone(), v: v.clone(), t: 0, end: t, onLand, offset, blend: Math.max(1e-3, Math.min(.12, t * .6))});
   }
   // where a ball fired from o at velocity v first lands: the level, or a player
   function trace(o, v, ignore) {
@@ -396,7 +406,7 @@ async function start() {
   }
 
   // ------------------------------------------------------------- items
-  const items = createItems({scene, camera, hits});
+  const items = createItems({scene, camera, hits, shadows: beamShadows});
   const prompt = $('prompt'), btnAct = $('btnAct');
   const held = () => network.id ? items.heldBy(network.id) : null;
   const heldType = () => held()?.state.type || '';
@@ -557,7 +567,7 @@ async function start() {
       const b = document.createElement('button'); b.type = 'button'; b.title = p.name.replace(/_/g, ' ');
       b.dataset.piece = p.name;
       b.append(thumb(p));
-      b.addEventListener('click', () => choosePiece(p.name));
+      b.addEventListener('click', () => { choosePiece(p.name); backToPlay(); });
       galleryList.append(b);
     }
     choosePiece(chosenPiece);
@@ -569,6 +579,12 @@ async function start() {
     const p = pieceByName.get(name);
     tagLabel.replaceChildren(...(p ? [thumb(p, 72), document.createTextNode(isTouch ? 'tap tags to change' : 'esc: change piece')] : []));
   }
+  // picked something: shut the menu and go straight back to playing (the click is the gesture the
+  // browser needs to take the mouse again)
+  function backToPlay() {
+    toggleGallery(false);
+    if (!controls.state.touch && !controls.state.locked) canvas.requestPointerLock?.()?.catch?.(() => {});
+  }
   function toggleGallery(force) {
     const open = force ?? gallery.hidden;
     const paint = heldType() === 'paintball';
@@ -576,8 +592,7 @@ async function start() {
     if (open) {
       gallery.dataset.mode = paint ? 'paint' : 'piece';
       gallery.setAttribute('aria-label', paint ? 'paint to load' : 'pieces to spray');
-      gallery.querySelector('h2').textContent = paint ? 'pick a paint' : 'pick a piece';
-      gallery.querySelector(':scope > p').textContent = paint ? 'click a colour, then click back in to fire' : 'click a piece, then click back in to spray';
+      gallery.querySelector('h2').textContent = paint ? 'paint' : 'tags';
       if (paint) buildPaints(); else buildGallery();
       gallery.querySelector(paint ? '.paints .chosen' : '.list .chosen')?.scrollIntoView({block: 'nearest'});
     }
@@ -595,7 +610,7 @@ async function start() {
     const swatch = (c, label) => {
       const b = document.createElement('button'); b.type = 'button'; b.title = label; b.dataset.paint = c;
       b.style.setProperty('--paint', c === RANDOM_PAINT ? RAINBOW : hex(c));
-      b.addEventListener('click', () => choosePaint(c));
+      b.addEventListener('click', () => { choosePaint(c); backToPlay(); });
       return b;
     };
     const random = swatch(RANDOM_PAINT, 'random'); random.classList.add('random'); random.textContent = 'random';
@@ -771,6 +786,9 @@ async function start() {
       else if (m.type === 'marks') resetMarks(m);
       else if (m.type === 'shot') {
         const o = new THREE.Vector3(...m.o), v = new THREE.Vector3(...m.v);
+        // out of the shooter's barrel as you see it: your view model's, or their avatar's gun
+        const gun = items.heldBy(m.from);
+        const from = gun?.state.type === 'paintball' && gun.model.visible !== false ? items.tip(gun) : null;
         launch(o, v, m.c, m.t, () => {
           if (m.hit) { const s = cleanSplat(m.hit); if (s) addSplat({...s, c: m.c, s: m.s}, true); }
           if (m.target && m.local) {
@@ -788,7 +806,7 @@ async function start() {
             }
             burst(end, new THREE.Vector3(0, 1, 0), m.c);
           }
-        });
+        }, from);
       } else if (m.type === 'race') {
         machine.setRace(m.race);
         if (m.by && m.by !== network.id) machine.press();
@@ -1051,7 +1069,8 @@ async function start() {
     for (let i = balls.length - 1; i >= 0; i--) {
       const b = balls[i];
       b.t = Math.min(b.end, b.t + dt);
-      b.m.position.copy(simulate(b.o, b.v, b.t));
+      const ease = Math.max(0, 1 - b.t / b.blend);
+      b.m.position.copy(simulate(b.o, b.v, b.t)).addScaledVector(b.offset, ease * ease * (3 - 2 * ease));
       if (b.t >= b.end) { b.m.removeFromParent(); b.m.material.dispose(); balls.splice(i, 1); b.onLand(); }
     }
     for (let i = puffs.length - 1; i >= 0; i--) {

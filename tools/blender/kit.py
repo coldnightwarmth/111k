@@ -74,6 +74,32 @@ def orient(pts, toward):
     return pts if np.dot(n, np.asarray(toward) - pts.mean(0)) >= 0 else pts[::-1]
 
 
+def geo_filter(chans, P, N, valid, radius=4, sigma_texels=2.2, sigma_world=0.12, normal_power=8):
+    """Smooth lightmap-atlas images without crossing charts: each texel averages its atlas
+    neighbours weighted by how close they are in the world and how alike their normals are."""
+    H, W_ = valid.shape
+    r = radius
+    pad = lambda a: np.pad(a, [(r, r), (r, r)] + [(0, 0)] * (a.ndim - 2), mode='constant')
+    Pp, Np, Vp = pad(P), pad(N), pad(valid)
+    Cp = [pad(c) for c in chans]
+    num = [np.zeros((H, W_), np.float32) for _ in chans]
+    den = np.zeros((H, W_), np.float32)
+    for dy in range(-r, r + 1):
+        for dx in range(-r, r + 1):
+            ws = math.exp(-(dx * dx + dy * dy) / (2 * sigma_texels ** 2))
+            if ws < 0.02:
+                continue
+            sl = (slice(r + dy, r + dy + H), slice(r + dx, r + dx + W_))
+            d2 = ((Pp[sl] - P) ** 2).sum(-1)
+            nd = np.clip((Np[sl] * N).sum(-1), 0, 1) ** normal_power
+            w = (ws * np.exp(-d2 / (2 * sigma_world ** 2)) * nd * Vp[sl] * valid).astype(np.float32)
+            den += w
+            for k, c in enumerate(Cp):
+                num[k] += w * c[sl]
+    den = np.maximum(den, 1e-6)
+    return [n / den for n in num]
+
+
 class World:
     def __init__(self, name):
         bpy.ops.wm.read_factory_settings(use_empty=True)
@@ -622,25 +648,30 @@ class World:
         lm_png.save(out_base + '-lightmap.webp', quality=92, method=6)
         print(f'  lightmap written ({time.time() - t0:.1f}s)')
         if group_imgs:
-            # RGBA, one flicker group per channel: the share of each texel's light that comes from
-            # that group. The game multiplies the lightmap by (1 - share * dimming), so dimmed lamps
-            # keep the lightmap's own crisp shadows instead of subtracting a blurrier copy of them.
-            from scipy.ndimage import gaussian_filter
-            lum = lambda a: a @ np.array([.2126, .7152, .0722])
-            total = lum(np.maximum(light_raw, 0)) + 1e-4
-            chans = []
-            for g in range(4):
-                if g in group_imgs:
-                    share = np.clip(lum(np.maximum(denoised(group_imgs[g], f'g{g}'), 0)) / total, 0, 1)
-                    chans.append(gaussian_filter(share, 1.0))
-                else:
-                    chans.append(np.zeros((lm_size, lm_size)))
-            fl = np.stack(chans, -1)
+            # One flicker group per channel: the share of each texel's light that comes from that
+            # group. The game multiplies the lightmap by (1 - share * dimming), so dimmed lamps keep
+            # the lightmap's own crisp shadows. The atlas is ~20k little charts packed side by side,
+            # so nothing here filters in atlas space (an image denoiser or blur would smear each chart
+            # into its unrelated neighbours, which shows up as blocky patches when a lamp dips):
+            # the raw group bakes and the raw full bake are smoothed with a filter that only mixes
+            # texels that are close together in the world and face the same way.
+            lum = lambda a: a @ np.array([.2126, .7152, .0722], np.float32)
+            valid = (np.abs(P).sum(-1) > 1e-6).astype(np.float32)
+            chans = [lum(np.maximum(pixels(img)[..., :3], 0).astype(np.float32))]
+            order = [g for g in range(4) if g in group_imgs]
+            chans += [lum(np.maximum(pixels(group_imgs[g])[..., :3], 0).astype(np.float32)) for g in order]
+            sm = geo_filter(chans, P.astype(np.float32), Nn.astype(np.float32), valid)
+            total = sm[0] + 1e-4
+            share = {g: np.clip(sm[1 + k] / total, 0, 1) for k, g in enumerate(order)}
+            fl = np.stack([share.get(g, np.zeros_like(total)) for g in range(4)], -1)
             fl /= np.maximum(1, fl.sum(-1, keepdims=True))
             fl = (fl * 255 + 0.5).astype(np.uint8)[::-1]
-            Image.fromarray(fl, 'RGBA').save(out_base + '-flicker.webp', quality=90, method=6)
-            self.meta['flickerMap'] = 'share'
-            print(f'  flicker map written ({time.time() - t0:.1f}s)')
+            # lossless, and no alpha channel: encoders and browsers are free to throw away or
+            # premultiply colour under low alpha, which would wreck independent data
+            Image.fromarray(np.ascontiguousarray(fl[..., :3]), 'RGB').save(out_base + '-flicker.webp', lossless=True, quality=100, method=6)
+            Image.fromarray(np.ascontiguousarray(fl[..., 3]), 'L').save(out_base + '-flicker2.webp', lossless=True, quality=100, method=6)
+            self.meta['flickerMap'] = 'share2'
+            print(f'  flicker maps written ({time.time() - t0:.1f}s)')
 
         # --- export
         mats_out, tris = [], 0
