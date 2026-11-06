@@ -29,7 +29,7 @@ export function createDoors(level, collider) {
     }
     if (legacy) fixLeaf(d, meshes);
     for (const mesh of meshes) { mesh.position.set(d.hinge[0], 0, d.hinge[1]); mesh.rotation.set(0, 0, 0); }
-    doors.push({...d, meshes, angle: 0, w: 0, closing: false, lo: (d.closed || 0) - 1.65, hi: (d.closed || 0) + 1.65});
+    doors.push({...d, meshes, angle: 0, w: 0, closing: false, passers: new Set(), lo: (d.closed || 0) - 1.65, hi: (d.closed || 0) + 1.65});
   }
   // Older bakes put the handle on the hinge side and the pivot on the room face of the wall.
   // Mirror each leaf across its width (the hinge knuckles stay put) and move the pivot to mid-frame.
@@ -70,29 +70,39 @@ export function createDoors(level, collider) {
     const rx = x - d.hinge[0], rz = z - d.hinge[1];
     return {along: rx * ux + rz * uz, side: rx * -uz + rz * ux, ux, uz};
   }
+  const inLeaf = (d, m) => m.along >= -.05 && m.along <= d.width + BODY && Math.abs(m.side) < BODY + d.thick / 2;
+  // A door being pulled shut passes through anyone in its way, and stays ghostly for each of them
+  // until they've stepped clear of it; then it's solid for them again.
+  function passing(d, key, m) {
+    if (d.closing) { if (inLeaf(d, m)) d.passers.add(key); return true; }
+    if (!d.passers.has(key)) return false;
+    if (inLeaf(d, m)) return true;
+    d.passers.delete(key);
+    return false;
+  }
   return {
     doors,
-    // a body at (x, z) that just moved by (dx, dz)
-    push(x, z, dx = 0, dz = 0) {
+    // a body (key: who it is) at (x, z) that just moved by (dx, dz)
+    push(x, z, dx = 0, dz = 0, key = 'me') {
       for (const d of doors) {
         const m = measure(d, x, z);
-        if (m.along < -.05 || m.along > d.width + BODY) continue;
+        if (passing(d, key, m)) continue;
+        if (!inLeaf(d, m)) continue;
         const reach = BODY + d.thick / 2;
-        if (Math.abs(m.side) >= reach) continue;
         const along = Math.max(.15, Math.min(d.width, m.along));
         // swing the leaf just far enough to clear the body, away from the side it's on
         const s = m.side >= 0 ? 1 : -1;
         const turn = s * Math.asin(Math.min(1, (reach - Math.abs(m.side)) / along));   // turning the leaf up its own angle moves it toward -side
         const next = Math.max(d.lo, Math.min(d.hi, d.angle + turn));
-        d.closing = false;                              // a shove beats someone pulling it shut
         d.w += (next - d.angle) * 8;
         d.angle = next;
       }
     },
     // keep bodies out of leaves (only matters once a door is against its stop)
-    resolve(x, z) {
+    resolve(x, z, key = 'me') {
       for (const d of doors) {
         const m = measure(d, x, z);
+        if (d.closing || d.passers.has(key)) continue;
         if (m.along < 0 || m.along > d.width) continue;
         const reach = BODY + d.thick / 2;
         if (Math.abs(m.side) >= reach) continue;

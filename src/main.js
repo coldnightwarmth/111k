@@ -1010,7 +1010,7 @@ async function start() {
       p.avatar.root.position.set(s.x, s.g || 0, s.z); p.avatar.root.rotation.y = s.yaw;
       p.avatar.update(pdt, v, {...s, holding: !!items.heldBy(p.id)});
       p.avatar.ghostFor(camWorld, pdt);
-      doors.push(s.x, s.z, v * pdt * Math.sin(-s.yaw), 0);
+      doors.push(s.x, s.z, v * pdt * Math.sin(-s.yaw), 0, p.id);
       if (p.bubble && serverNow > p.bubbleExpires) { p.bubble.dispose(); p.bubble = null; }
       if (p.bubble || p.typing) {
         if (!p.sightAt || now - p.sightAt > 150) { p.seen = inSight(s); p.sightAt = now; }
