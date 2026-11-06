@@ -151,6 +151,8 @@ async function start() {
   camera.add(meView.root);
   let thirdPerson = params.get('view') === '3p' || (resumed && mine.view === '3p');
   let fireLatch = false, doorAim = null, doorCheckAt = 0, cleanTarget = null, cleanCheckAt = 0;   // set by the click that picks something up, until the button is let go
+  // while you emote the camera swings round you on a boom (first person too) and you hold still
+  let orbiting = false, emoteYaw = 0, boom = thirdPerson, wasBoom = thirdPerson;
   let relock = false, lastPunch = 0, lastShot = 0, lastSpray = 0, shake = 0, menuRelease = false;
 
   const controls = createControls({
@@ -185,7 +187,7 @@ async function start() {
   const emoteMenu = $('emotes'), emoteLabel = $('emoteLabel');
   for (const e of EMOTES) {
     const b = document.createElement('button'); b.type = 'button'; b.textContent = e.label;
-    b.addEventListener('click', () => { player.emote = e.id; player.emoteTime = 0; toggleEmotes(false); });
+    b.addEventListener('click', () => { player.emote = e.id; player.emoteTime = 0; toggleEmotes(false); backToPlay(); });
     emoteMenu.append(b);
   }
   function toggleEmotes(force) {
@@ -429,14 +431,14 @@ async function start() {
   function onButton() {
     camera.updateMatrixWorld();
     const o = camera.getWorldPosition(new THREE.Vector3()), d = camera.getWorldDirection(new THREE.Vector3());
-    const far = (thirdPerson ? camDist : 0) + BUTTON_RANGE;
+    const far = (boom ? camDist : 0) + BUTTON_RANGE;
     return Math.hypot(player.x - BUTTON.x, player.z - BUTTON.z) < BUTTON_RANGE - .1 && machine.aimed(o, d, far) !== null;
   }
   // an open door under the crosshair, within reach (empty hand: click pulls it shut)
   function doorTarget() {
     camera.updateMatrixWorld();
     const o = camera.getWorldPosition(new THREE.Vector3()), d = camera.getWorldDirection(new THREE.Vector3());
-    const h = hits.raycast(o, d, (thirdPerson ? camDist : 0) + 2.4, true);
+    const h = hits.raycast(o, d, (boom ? camDist : 0) + 2.4, true);
     return h && h.door !== undefined && doors.isOpen(h.door) ? h.door : null;
   }
   function primary() {
@@ -467,7 +469,7 @@ async function start() {
     toggleGallery(false);
     camera.updateMatrixWorld();
     const o = camera.getWorldPosition(new THREE.Vector3()), d = camera.getWorldDirection(new THREE.Vector3());
-    if (thirdPerson) o.addScaledVector(d, camDist);
+    if (boom) o.addScaledVector(d, camDist);
     const hit = hits.raycast(o, d, DROP_REACH);
     const msg = {type: 'drop', id: h.state.id, yaw};
     let start = null, vel = null;
@@ -504,7 +506,7 @@ async function start() {
   // where the crosshair points: the first thing along the camera's ray
   function aimPoint(far = 60, withDoors = false) {
     const o = camera.getWorldPosition(new THREE.Vector3()), d = camera.getWorldDirection(new THREE.Vector3());
-    if (thirdPerson) o.addScaledVector(d, camDist);   // start the ray at your shoulder, not behind it
+    if (boom) o.addScaledVector(d, camDist);   // start the ray at your shoulder, not behind it
     const h = hits.raycast(o, d, far, withDoors);
     return {point: h ? h.point : o.clone().addScaledVector(d, far), hit: h, origin: o, dir: d};
   }
@@ -924,7 +926,7 @@ async function start() {
     const dx = pos.x - camera.position.x, dz = pos.z - camera.position.z, d = Math.hypot(dx, dz);
     return d < .3 || collider.raycast(camera.position.x, camera.position.z, dx, dz, d, Math.min(camera.position.y, 1.7), 0) >= d - .25;
   }
-  const frameArgs = dt => ({me, myId: network.id, thirdPerson, avatarOf: id => peers.get(id)?.avatar, poseOf: id => peers.get(id)?.last, dt});
+  const frameArgs = dt => ({me, myId: network.id, thirdPerson: boom, avatarOf: id => peers.get(id)?.avatar, poseOf: id => peers.get(id)?.last, dt});
   function saveTab() {
     tabMe.set({look: mine.look, name: mine.name, x: r3(player.x), z: r3(player.z), yaw: r3(controls.state.yaw), pitch: r3(controls.state.pitch), g: r3(player.ground),
       view: thirdPerson ? '3p' : '1p'});
@@ -962,7 +964,11 @@ async function start() {
     // (sliding along a wall at a shallow angle keeps most of the speed, so that's fine)
     const meant = Math.hypot(mvx, mvz) / Math.max(dt, 1e-4);
     if (vertical.chain > 0 && meant > 2.5 && velocity < meant * .55) { vertical.crash(); player.kx = player.kz = 0; }
-    if (velocity > .3) player.emote = '';
+    if (velocity > .3 || (!frozen && (input.moveX || input.moveZ))) player.emote = '';   // any move ends it
+    if (player.emote && !orbiting) { orbiting = true; emoteYaw = input.yaw; }
+    else if (!player.emote) orbiting = false;
+    const faceYaw = orbiting ? emoteYaw : input.yaw, facePitch = orbiting ? 0 : input.pitch;
+    boom = thirdPerson || orbiting;
     if (player.emote) player.emoteTime = Math.min(EMOTE_DURATION, player.emoteTime + dt);
     if (player.punchTime >= 0) { player.punchTime += dt; if (player.punchTime > PUNCH_DURATION) player.punchTime = -1; }
     if (player.impactIn >= 0) { player.impactIn -= dt; if (player.impactIn < 0) shake = Math.max(shake, .45); }
@@ -989,32 +995,34 @@ async function start() {
     if (h?.state.type === 'paintball' && input.firing && !fireLatch && !frozen) shoot();
     document.body.classList.toggle('holding-spray', h?.state.type === 'spray');
     document.body.classList.toggle('holding-paint', h?.state.type === 'paintball');
-    const motion = {...vertical.pose, emote: player.emote, emoteTime: player.emoteTime, pitch: input.pitch,
+    const motion = {...vertical.pose, emote: player.emote, emoteTime: player.emoteTime, pitch: facePitch,
       punchTime: player.punchTime, punchHand: player.punchHand, holding};
 
     // local avatar
-    me.root.position.set(player.x, player.ground + player.stepLag, player.z); me.root.rotation.y = input.yaw;
-    me.eye = player.y - player.ground; me.pitch = input.pitch;
+    me.root.position.set(player.x, player.ground + player.stepLag, player.z); me.root.rotation.y = faceYaw;
+    me.eye = player.y - player.ground; me.pitch = facePitch;
     me.update(dt, velocity, motion);
 
     // camera
-    ghost.ghostOn.value = thirdPerson ? 1 : 0;
+    ghost.ghostOn.value = boom ? 1 : 0;
     shake *= Math.exp(-dt * 7);
     const sx = (Math.random() - .5) * .06 * shake, sy = (Math.random() - .5) * .06 * shake;
-    if (thirdPerson) {
-      // over the right shoulder, close in: you see past yourself to what you're aiming at
+    if (boom) {
+      // over the right shoulder, close in: you see past yourself to what you're aiming at.
+      // Emoting, the boom is centred on you and a little longer, and the mouse swings it round you
+      if (!wasBoom) { camDist = .3; firstFrame = true; }       // from first person: ease out of your head
       const yaw = input.yaw, pitch = input.pitch;
       const rx = Math.cos(yaw), rz = -Math.sin(yaw);
       const sideRoom = collider.raycast(player.x, player.z, rx, rz, 1.1, player.y, .12) - .2;
-      const wantSide = Math.max(.12, Math.min(.8, sideRoom));
+      const wantSide = orbiting ? 0 : Math.max(.12, Math.min(.8, sideRoom));
       camSide += (wantSide - camSide) * damp(wantSide < camSide ? 25 : 5, dt);
-      const head = Math.min(player.y + .3, ceilingAt(player.x, player.z) - .25);   // big heads: look over them
+      const head = Math.min(orbiting ? player.y - .35 : player.y + .3, ceilingAt(player.x, player.z) - .25);   // big heads: look over them
       pivot.set(player.x + rx * camSide, head, player.z + rz * camSide);
       if (firstFrame) smoothPivot.copy(pivot);
       smoothPivot.lerp(pivot, damp(22, dt));
       smoothPivot.x = pivot.x; smoothPivot.z = pivot.z;    // only ease the height (jumps, crouches)
       dir.set(Math.sin(yaw) * Math.cos(pitch), -Math.sin(pitch), Math.cos(yaw) * Math.cos(pitch));
-      const want = 1.85;
+      const want = orbiting ? 2.4 : 1.85;
       // walls: the horizontal part of the boom, tested from three points across the camera's width
       const flat = Math.hypot(dir.x, dir.z) || 1e-6;
       let free = want;
@@ -1031,7 +1039,7 @@ async function start() {
       } else if (dir.y < -1e-4) free = Math.min(free, (smoothPivot.y - .2) / -dir.y);
       free = Math.max(.2, free);
       camDist += (free - camDist) * (free < camDist ? damp(30, dt) : damp(4, dt));
-      if (firstFrame) camDist = free;
+      if (firstFrame && wasBoom) camDist = free;
       camera.position.copy(smoothPivot).addScaledVector(dir, camDist);
       me.setVisible(true);   // pressed close against a wall the camera ghosts you (dithered) rather than hiding you
       meView.root.visible = false;
@@ -1045,13 +1053,13 @@ async function start() {
         meView.update(dt, 0, {punchTime: player.punchTime, punchHand: player.punchHand, pitch: 0});
       }
     }
-    firstFrame = false;
+    firstFrame = false; wasBoom = boom;
     camera.rotation.set(input.pitch + sy, input.yaw + sx, 0);
     camera.updateMatrixWorld();
 
     // network: 15 Hz while something changes, then 3 settling packets
     if (now - sentAt >= 1000 / 15 && network.online) {
-      const pose = sanitizePose({x: player.x, y: player.y, z: player.z, g: player.ground, pc: chosenPaint, yaw: input.yaw, pitch: input.pitch, room: 'office',
+      const pose = sanitizePose({x: player.x, y: player.y, z: player.z, g: player.ground, pc: chosenPaint, yaw: faceYaw, pitch: facePitch, room: 'office',
         crouch: motion.crouch, jumpTime: motion.jumpTime, jumpPower: motion.jumpPower, emote: player.emote, emoteTime: player.emoteTime,
         typing: chat.typing, punchTime: player.punchTime, punchHand: player.punchHand, vc: voice.micOn ? 1 : 0});
       const key = JSON.stringify(pose);
@@ -1063,8 +1071,8 @@ async function start() {
 
     // anyone the camera is inside (you, pressed against a wall; someone you walk through) ghosts entirely
     const camWorld = camera.getWorldPosition(new THREE.Vector3());
-    if (thirdPerson) me.ghostFor(camWorld, dt);
-    me.ghostNear(thirdPerson); meView.ghostNear(false);
+    if (boom) me.ghostFor(camWorld, dt);
+    me.ghostNear(boom); meView.ghostNear(false);
     // remote peers
     const serverNow = network.now();
     for (const p of peers.values()) {
@@ -1109,7 +1117,7 @@ async function start() {
     micBtn.dataset.state = !voice.micOn ? 'off' : voice.talking ? 'talking' : 'live';
     if (myBubble) {
       if (serverNow > myBubbleExpires) { myBubble.dispose(); myBubble = null; }
-      else { const at = project(player, player.ground + 2.0); myBubble.update(at.x, at.y, at.visible && thirdPerson); }
+      else { const at = project(player, player.ground + 2.0); myBubble.update(at.x, at.y, at.visible && boom); }
     }
     doors.update(dt);
 
@@ -1162,7 +1170,7 @@ async function start() {
       cleanCheckAt = now;
       camera.updateMatrixWorld();
       const o = camera.getWorldPosition(new THREE.Vector3()), d = camera.getWorldDirection(new THREE.Vector3());
-      if (thirdPerson) o.addScaledVector(d, camDist);
+      if (boom) o.addScaledVector(d, camDist);
       cleanTarget = cleaning.pick(o, d, 3.2, [...splatMarks, ...sprayMarks]);
     }
     cleaning.highlight(cleanTarget);
@@ -1196,7 +1204,7 @@ async function start() {
     if (btnAct.textContent !== act) btnAct.textContent = act;
     document.body.classList.toggle('can-grab', !!t);
     // first person: say which emote you're doing, since you can't see yourself
-    const label = !thirdPerson && player.emote ? EMOTES.find(e => e.id === player.emote)?.label || '' : '';
+    const label = !boom && player.emote ? EMOTES.find(e => e.id === player.emote)?.label || '' : '';
     if (emoteLabel.textContent !== label) { emoteLabel.textContent = label; emoteLabel.hidden = !label; }
 
     avatarLights.update(camera.position.x, camera.position.z);
