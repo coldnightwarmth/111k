@@ -621,6 +621,9 @@ class World:
             os.remove(raw); os.remove(dn)
             return out
 
+        # keep the raw full bake in memory: once its file is saved and removed below, Blender
+        # can no longer hand back its pixels
+        full_raw = pixels(img)[..., :3].copy()
         raw_path = out_base + '-raw.exr'
         img.filepath_raw = raw_path; img.file_format = 'OPEN_EXR'; img.save()
         if denoise:
@@ -630,7 +633,7 @@ class World:
             light = pixels(dimg)[..., :3].astype(float)
             os.remove(out_base + '-dn.exr')
         else:
-            light = pixels(img)[..., :3].astype(float)
+            light = full_raw.astype(float)
         os.remove(raw_path)
         P = pixels(pos_img)[..., :3].astype(float)
         P = np.stack([P[..., 0], P[..., 2], -P[..., 1]], -1)  # blender -> game
@@ -657,7 +660,7 @@ class World:
             # texels that are close together in the world and face the same way.
             lum = lambda a: a @ np.array([.2126, .7152, .0722], np.float32)
             valid = (np.abs(P).sum(-1) > 1e-6).astype(np.float32)
-            chans = [lum(np.maximum(pixels(img)[..., :3], 0).astype(np.float32))]
+            chans = [lum(np.maximum(full_raw, 0).astype(np.float32))]
             order = [g for g in range(4) if g in group_imgs]
             chans += [lum(np.maximum(pixels(group_imgs[g])[..., :3], 0).astype(np.float32)) for g in order]
             sm = geo_filter(chans, P.astype(np.float32), Nn.astype(np.float32), valid)
