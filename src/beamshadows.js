@@ -31,6 +31,9 @@ export function createBeamShadows(renderer, scene) {
   function renderSlot(i) {
     const s = slots[i], x = (i % COLS) * TILE, y = Math.floor(i / COLS) * TILE;
     target.viewport.set(x, y, TILE, TILE); target.scissor.set(x, y, TILE, TILE);
+    // three.js only reads a target's viewport when it is bound, so bind it again for each tile;
+    // otherwise every beam redrawn this frame landed in one tile and the others read its depths
+    renderer.setRenderTarget(target);
     renderer.render(scene, s.cam);
     s.age = 0;
   }
@@ -63,7 +66,6 @@ export function createBeamShadows(renderer, scene) {
       const prevTarget = renderer.getRenderTarget(), prevOverride = scene.overrideMaterial, prevAuto = renderer.autoClear;
       const prevShadow = renderer.shadowMap.autoUpdate;
       scene.overrideMaterial = caster; renderer.autoClear = true; renderer.shadowMap.autoUpdate = false;
-      renderer.setRenderTarget(target);
       const done = new Set();
       for (const {i} of pending) if (!done.has(i)) { done.add(i); renderSlot(i); }
       pending.length = 0;
