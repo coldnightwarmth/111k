@@ -232,7 +232,7 @@ test('items: scattered flashlights start lit or not, and an idle room puts every
   const {ITEM_SPAWNS} = await import('../../src/world-items.js');
   const {IDLE_RESET_MS} = await import('../../src/protocol.js');
   const lights = ITEM_SPAWNS.filter(s => s.type === 'flashlight');
-  assert.equal(lights.length, 15); assert.equal(lights.filter(s => s.on).length, 6);
+  assert.equal(lights.length, 20); assert.equal(lights.filter(s => s.on).length, 6);
   const {room, sockets, ctx} = makeRoom();
   await join(room, S1); await join(room, S2);
   const [a, b] = sockets;
@@ -315,4 +315,28 @@ test('voice: setup notes go only to the named player, big offers allowed, others
   // a big non-voice message is still refused
   await room.webSocketMessage(a, JSON.stringify({type: 'chat', text: 'y'.repeat(6000)}));
   assert.equal(a.closed?.reason, 'Message too large');
+});
+
+test('bucket: scrubbing splats, tags and the level graffiti, only with the bucket in hand', async () => {
+  const {handleMessage, newPlayer, freshMarks, marksMessage, validMarks, sprayId} = await import('../room.js');
+  const {ITEM_SPAWNS} = await import('../../src/world-items.js');
+  const items = Object.fromEntries(ITEM_SPAWNS.map(s => [s.id, {...s, holder: null, on: false}]));
+  const marks = freshMarks();
+  marks.splats.push({p: [1, 1, 1], n: [1, 0, 0], c: 5, s: 4242, at: Date.now()});
+  const tag = {p: [2, 1.5, 3], n: [0, 0, 1], up: [0, 1, 0], piece: 'tag_ruse', size: 1};
+  marks.sprays.push(tag);
+  const a = newPlayer('aaa', 0); a.pose = {x: 0, y: 1.45, z: 0, yaw: 0, pitch: 0};
+  const room = {items, marks, race: null, players: () => [a]};
+  let now = 10_000;
+  const erase = (kind, id) => { now += 200; return handleMessage(a, JSON.stringify({type: 'erase', kind, id}), now, room); };
+  assert.equal(erase('splat', '4242').out.length, 0, 'no bucket, no scrubbing');
+  const bucket = ITEM_SPAWNS.find(s => s.type === 'bucket');
+  items[bucket.id].holder = 'aaa';
+  assert.equal(erase('splat', '4242').out[0].msg.type, 'erase');
+  assert.equal(marks.splats.length, 0);
+  erase('spray', sprayId(tag)); assert.equal(marks.sprays.length, 0);
+  erase('baked', 'graffiti_0:1.00,2.00,3.00'); erase('baked', 'graffiti_0:1.00,2.00,3.00');
+  assert.deepEqual(marks.erased, ['graffiti_0:1.00,2.00,3.00']);
+  assert.deepEqual(marksMessage(validMarks(structuredClone(marks))).erased, ['graffiti_0:1.00,2.00,3.00'], 'kept and sent to newcomers');
+  assert.equal(erase('nonsense', 'x').out.length, 0);
 });

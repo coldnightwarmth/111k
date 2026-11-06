@@ -35,12 +35,16 @@ export function snapshot(players, now, items = {}) {
 }
 
 // Paint and sprayed pieces stay on the walls; the oldest go when there are too many.
-export function freshMarks() { return {splats: [], sprays: []}; }
+const MAX_ERASED = 600;   // pieces of the level's own graffiti scrubbed off
+// how clients name a sprayed tag when asking to scrub it
+export const sprayId = s => `${s.piece}@${s.p.join(',')}`;
+export function freshMarks() { return {splats: [], sprays: [], erased: []}; }
 export function validMarks(stored) {
   if (!stored || !Array.isArray(stored.splats) || !Array.isArray(stored.sprays)) return freshMarks();
   const splats = stored.splats.map(s => { const c = cleanSplat(s); return c && Number.isFinite(s.at) ? {...c, at: s.at} : null; });
   return {splats: splats.filter(Boolean).slice(-MAX_SPLATS),
-    sprays: stored.sprays.map(cleanSpray).filter(Boolean).slice(-MAX_SPRAYS)};
+    sprays: stored.sprays.map(cleanSpray).filter(Boolean).slice(-MAX_SPRAYS),
+    erased: Array.isArray(stored.erased) ? stored.erased.filter(id => typeof id === 'string' && id.length <= 80).slice(-MAX_ERASED) : []};
 }
 // paint lasts a minute; sprayed pieces stay
 export function pruneSplats(marks, now) {
@@ -50,7 +54,7 @@ export function pruneSplats(marks, now) {
 }
 export const marksMessage = (marks, now = Date.now()) => ({type: 'marks',
   splats: marks.splats.filter(s => now - s.at < SPLAT_LIFE_MS).map(({at, ...s}) => ({...s, age: Math.max(0, now - at)})),
-  sprays: marks.sprays});
+  sprays: marks.sprays, erased: marks.erased || []});
 
 const flat = (a, b) => Math.hypot(a.x - b.x, a.z - b.z);
 
@@ -159,6 +163,20 @@ export function handleMessage(player, data, now, room = {items: {}, players: () 
     player.lastDoor = now; player.lastActive = now;
     out.push({to: 'all', msg: {type: 'door', i: m.i, by: player.id}});
     return {out, changed: true};
+  }
+
+  // ------------------------------------------------- scrubbing marks off
+  if (m.type === 'erase') {
+    const bucket = Object.values(items).find(it => it.holder === player.id && it.type === 'bucket');
+    const id = typeof m.id === 'string' && m.id.length <= 80 ? m.id : null;
+    if (!bucket || !id || !['splat', 'spray', 'baked'].includes(m.kind) || !room.marks || now - (player.lastErase || 0) < 150) return {out, changed: false};
+    player.lastErase = now; player.lastActive = now;
+    const marks = room.marks;
+    if (m.kind === 'splat') marks.splats = marks.splats.filter(s => String(s.s) !== id);
+    else if (m.kind === 'spray') marks.sprays = marks.sprays.filter(s => sprayId(s) !== id);
+    else if (!(marks.erased ||= []).includes(id)) { marks.erased.push(id); if (marks.erased.length > MAX_ERASED) marks.erased.shift(); }
+    out.push({to: 'all', msg: {type: 'erase', kind: m.kind, id, by: player.id}});
+    return {out, changed: true, marksChanged: true};
   }
 
   // ---------------------------------------------------------- lap timer

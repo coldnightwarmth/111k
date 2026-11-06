@@ -8,7 +8,7 @@ import {EYE_HEIGHT} from './motion.js';
 import {PAINT_COLORS, RANDOM_PAINT} from './decals.js';
 
 const BEAM_COLOR = new THREE.Color(1, .93, .8);
-export const ITEM_NAMES = {flashlight: 'flashlight', paintball: 'paintball marker', spray: 'spray can'};
+export const ITEM_NAMES = {flashlight: 'flashlight', paintball: 'paintball marker', spray: 'spray can', bucket: 'bucket and sponge'};
 
 const std = (color, roughness = .55, metalness = .2, extra = {}) => new THREE.MeshStandardMaterial({color, roughness, metalness, ...extra});
 function part(g, geo, mat, [x, y, z] = [0, 0, 0], [rx, ry, rz] = [0, 0, 0]) {
@@ -170,7 +170,73 @@ function sprayModel(id) {
   return g;
 }
 
-const MODELS = {flashlight: flashlightModel, paintball: paintballModel, spray: sprayModel};
+// --------------------------------------------------------------- the bucket
+// A dented galvanised pail of grey suds with a wire bail, a rag hung over the rim and a sponge.
+// Held, the pail hangs from the left hand and the sponge goes in the right.
+function grimeTexture(base, streaks, seed0) {
+  const c = document.createElement('canvas'); c.width = c.height = 256;
+  const g = c.getContext('2d');
+  let seed = seed0; const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+  g.fillStyle = base; g.fillRect(0, 0, 256, 256);
+  for (let i = 0; i < 900; i++) { g.fillStyle = `rgba(${rnd() < .5 ? '255,255,255' : '0,0,0'},${rnd() * .06})`; g.fillRect(rnd() * 256, rnd() * 256, 2 + rnd() * 10, 1 + rnd() * 5); }
+  for (let i = 0; i < streaks; i++) {
+    const x = rnd() * 256, y = rnd() * 120, len = 40 + rnd() * 140, grad = g.createLinearGradient(x, y, x, y + len);
+    grad.addColorStop(0, 'rgba(60,50,35,.45)'); grad.addColorStop(1, 'rgba(60,50,35,0)');
+    g.fillStyle = grad; g.fillRect(x, y, 2 + rnd() * 6, len);
+  }
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  return t;
+}
+function bucketModel(id) {
+  const g = new THREE.Group();
+  const n = [...id].reduce((s, c) => s + c.charCodeAt(0), 0);
+  const zinc = std(0xffffff, .42, .85, {map: grimeTexture('#a3aaae', 30, 11 + n), side: THREE.DoubleSide});
+  const dark = std(0x55595c, .5, .8), wood = std(0x7a5232, .7, 0);
+  // the pail: a tapered shell with a rolled rim and a dished floor
+  const shell = new THREE.LatheGeometry([[.118, 0], [.122, .01], [.145, .27]].map(([r, y]) => new THREE.Vector2(r, y)), 32);
+  part(g, shell, zinc);
+  part(g, new THREE.TorusGeometry(.146, .0065, 8, 40), zinc, [0, .27, 0], [Math.PI / 2, 0, 0]);
+  for (const y of [.09, .18]) part(g, new THREE.TorusGeometry(.128 + y * .085, .003, 4, 40), zinc, [0, y, 0], [Math.PI / 2, 0, 0]);   // pressed ribs
+  part(g, new THREE.CircleGeometry(.118, 32), dark, [0, .004, 0], [-Math.PI / 2, 0, 0]);
+  // grey suds with a little foam
+  part(g, new THREE.CircleGeometry(.14, 32), std(0x6f7a70, .08, .3, {transparent: true, opacity: .92}), [0, .215, 0], [-Math.PI / 2, 0, 0]);
+  const foam = std(0xe9ece6, .9, 0);
+  for (let i = 0; i < 9; i++) {
+    const a = i * 2.39, r = .03 + (i % 4) * .025;
+    const b = part(g, new THREE.SphereGeometry(.018 + (i % 3) * .006, 10, 6), foam, [Math.cos(a) * r, .215, Math.sin(a) * r]);
+    b.scale.y = .35;
+  }
+  // ears and the wire bail with a wooden grip (it flops over when the pail is set down)
+  for (const x of [-1, 1]) part(g, new THREE.BoxGeometry(.012, .035, .022), dark, [x * .148, .245, 0]);
+  const bail = new THREE.Group(); bail.position.y = .245; g.add(bail);
+  part(bail, new THREE.TorusGeometry(.15, .0028, 6, 32, Math.PI), dark);
+  part(bail, new THREE.CylinderGeometry(.013, .013, .085, 12), wood, [0, .15, 0], [0, 0, Math.PI / 2]);
+  // a rag hung over the rim: a strip bent inside, over the rim and down the outside
+  const rag = new THREE.PlaneGeometry(.11, 1, 1, 16), path = new THREE.CatmullRomCurve3([
+    [.1, .16], [.128, .25], [.148, .282], [.162, .262], [.168, .16], [.165, .06]].map(([r, y]) => new THREE.Vector3(r, y, 0)));
+  const rp = rag.attributes.position;
+  for (let i = 0; i < rp.count; i++) {
+    const t = rp.getY(i) + .5, w = rp.getX(i), p = path.getPoint(1 - t);
+    const ang = .55 + w / .16 + Math.sin(t * 9) * .02;            // wrap round the rim by the strip's width
+    rp.setXYZ(i, Math.cos(ang) * p.x, p.y + Math.sin(t * 13 + w * 30) * .004, Math.sin(ang) * p.x);
+  }
+  rag.computeVertexNormals();
+  const cloth = grimeTexture(['#8f3a30', '#3b5a7a', '#6d6a3a'][n % 3], 14, 31 + n);
+  part(g, rag, std(0xffffff, .95, 0, {map: cloth, side: THREE.DoubleSide}));
+  // the sponge: soft yellow foam with a green scouring pad
+  const sponge = new THREE.Group();
+  part(sponge, new THREE.BoxGeometry(.1, .04, .066), std(0xe6c048, .95, 0));
+  part(sponge, new THREE.BoxGeometry(.1, .012, .066), std(0x2f7a3c, .9, 0), [0, .026, 0]);
+  const rest = {position: new THREE.Vector3(-.02, .225, .03), rotation: new THREE.Euler(.35, .6, .2)};
+  sponge.position.copy(rest.position); sponge.rotation.copy(rest.rotation);
+  g.add(sponge);
+  g.userData = {tip: new THREE.Vector3(0, .1, 0), ground: 0, groundRoll: 0, standing: true, sponge, bail,
+    // put the sponge back in the pail and let the bail fall over
+    dock() { if (sponge.parent !== g) g.add(sponge); sponge.position.copy(rest.position); sponge.rotation.copy(rest.rotation); bail.rotation.x = 1.1; }};
+  return g;
+}
+
+const MODELS = {flashlight: flashlightModel, paintball: paintballModel, spray: sprayModel, bucket: bucketModel};
 export const ITEM_MODELS = MODELS;   // for previews
 
 // ------------------------------------------------------------------- falling
@@ -306,6 +372,8 @@ export function createItems({scene, camera, hits}) {
     kick(id, amount = 1) { const it = items.get(id); if (it) it.kick = amount; },
     shake(id) { const it = items.get(id); if (it) it.shake = .5; },
     setMyPaint(c) { myPaint = c; },
+    // the sponge's scrubbing motion (your view and others')
+    scrub(id) { const it = items.get(id); if (it) it.scrub = .45; },
     // nearest free item within reach that you're roughly looking at
     // the item the crosshair is actually on: the camera's ray has to pass over it
     // (with a few centimetres to spare), it has to be within reach of your body,
@@ -345,6 +413,8 @@ export function createItems({scene, camera, hits}) {
           m.position.set(s.x, s.y + u.ground, s.z);
           m.rotation.set(0, s.yaw, u.groundRoll, 'YXZ');
           if (u.upright) { m.rotation.set(Math.PI / 2, s.yaw, 0, 'YXZ'); m.position.y = s.y + u.ground; }
+          if (u.standing) { m.rotation.set(0, s.yaw, 0); m.position.y = s.y; }
+          u.dock?.();
           if (it.fall) {                      // still on its way down: follow the path, tumbling, settling into its rest pose
             const f = it.fall; f.t += dt;
             const at = f.t / FALL_DT, i = Math.floor(at), last = f.path.length - 1;
@@ -372,6 +442,14 @@ export function createItems({scene, camera, hits}) {
             m.scale.setScalar(.8);
             m.position.set(.05 + sh, -.1 + bob, .02);
             m.rotation.set(-.15, -.35, sh * 2);
+          } else if (s.type === 'bucket') {
+            m.scale.setScalar(.85);
+            m.position.set(-.56, -.36 + bob, -.12); m.rotation.set(.12, .5, 0); u.bail.rotation.x = 0;
+            if (u.sponge.parent !== view) view.add(u.sponge);
+            it.scrub = Math.max(0, (it.scrub || 0) - dt);
+            const sc = it.scrub > 0 ? Math.sin(it.scrub * 40) * .03 : 0;
+            u.sponge.position.set(-.02 + sc, -.03 + bob + Math.abs(sc) * .4, -.06 - (it.scrub > 0 ? .06 : 0));
+            u.sponge.rotation.set(-.9, -.25, .15 + sc * 3);
           } else {
             m.position.set(0, bob, 0);
             m.rotation.set(.04, -.06, 0);
@@ -388,8 +466,19 @@ export function createItems({scene, camera, hits}) {
           dir = new THREE.Vector3(-Math.sin(yaw) * Math.cos(pitch), Math.sin(pitch), -Math.cos(yaw) * Math.cos(pitch));
           // gripped in the right hand, aimed where its holder is looking
           if (s.type === 'spray') m.rotation.set(-.35 + pitch * .5, yaw, 0, 'YXZ');
+          else if (s.type === 'bucket') m.rotation.set(0, yaw, 0);
           else m.rotation.set(pitch, yaw, 0, 'YXZ');
-          if (socket) {
+          if (s.type === 'bucket' && avatar?.handL && socket) {
+            m.scale.setScalar(1);
+            avatar.handL.getWorldPosition(m.position); m.position.y -= .4;      // the bail's grip in the fist
+            u.bail.rotation.x = 0;
+            if (u.sponge.parent !== scene) scene.add(u.sponge);
+            socket.getWorldPosition(u.sponge.position);
+            it.scrub = Math.max(0, (it.scrub || 0) - dt);
+            u.sponge.position.addScaledVector(dir, it.scrub > 0 ? .08 + Math.sin(it.scrub * 40) * .03 : .02);
+            u.sponge.rotation.set(-.4 + pitch, yaw, 0, 'YXZ');
+            m.visible = u.sponge.visible = avatar.root.visible && avatar.model.visible !== false;
+          } else if (socket) {
             socket.getWorldPosition(m.position);
             if (s.type === 'paintball') m.position.addScaledVector(dir, .08).y += .06;
             else if (s.type === 'spray') m.position.y -= .07;

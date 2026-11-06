@@ -680,15 +680,10 @@ W.meta.update({'name': 'world', 'ambient': [0.035, 0.035, 0.045], 'fog': {'color
 
 
 def write_items():
-    from scatter import scatter_flashlights
+    from scatter import scatter_flashlights, scatter_buckets, write_spawns
     ITEMS.extend(scatter_flashlights(W.colliders, ITEMS))
-    prefix, count, items = {'flashlight': 'fl', 'paintball': 'pb', 'spray': 'sp'}, {}, []
-    for it in ITEMS:
-        count[it['type']] = count.get(it['type'], 0) + 1
-        items.append({'id': f"{prefix[it['type']]}{count[it['type']]}", **it})
-    with open(os.path.join(HERE, '..', 'src', 'world-items.js'), 'w') as f:
-        f.write('// Written by tools/build_world.py: where held items start. Shared by the client and the server.\n')
-        f.write(f'export const ITEM_SPAWNS = Object.freeze({json.dumps(items)});\n')
+    ITEMS.extend(scatter_buckets(W.colliders, ITEMS))
+    write_spawns(os.path.join(HERE, '..', 'src', 'world-items.js'), ITEMS)
 
 
 if __name__ == '__main__':

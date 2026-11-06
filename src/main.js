@@ -9,6 +9,8 @@ import {createChatUI, createBubble} from './chat.js';
 import {createControls} from './controls.js';
 import {createItems, ITEM_NAMES, simulateFall} from './items.js';
 import {createMachine} from './machine.js';
+import {createShelves, SHELF_COLLIDERS} from './shelves.js';
+import {createCleaning} from './cleaning.js';
 import {MACHINE_COLLIDER, BUTTON, BUTTON_RANGE, RACE_LAPS} from './race.js';
 import {createWorldHits, cutDecal, createBatch, markMaterial, splatAtlas, splatCell, PAINT_COLORS, PAINT_ROWS, RANDOM_PAINT, rgbOf} from './decals.js';
 import {createDoors} from './doors.js';
@@ -98,12 +100,14 @@ async function start() {
     camera.far = fog.far + 5; camera.updateProjectionMatrix();
   }
   const avatarLights = createAvatarLights(level.meta, scene);
-  level.meta.colliders.push(MACHINE_COLLIDER);   // the lap timer stands in the tunnel too
+  level.meta.colliders.push(MACHINE_COLLIDER, ...SHELF_COLLIDERS);   // the lap timer and the supply shelves stand in the level too
   const collider = createCollider(level.meta);
   const doors = createDoors(level, collider);
   const hits = createWorldHits(level, doors.doors);
   const machine = createMachine(scene);
   hits.addSolid(machine.root);
+  hits.addSolid(createShelves(THREE, scene));
+  const cleaning = createCleaning({level, scene, hits});
   const bore = level.meta.bore;
   // height of the ceiling over a point: the tunnel's vault, a door passage, or a room
   function ceilingAt(x, z) {
@@ -137,7 +141,7 @@ async function start() {
   meView.root.visible = false;
   camera.add(meView.root);
   let thirdPerson = params.get('view') === '3p' || (resumed && mine.view === '3p');
-  let fireLatch = false, doorAim = null, doorCheckAt = 0;   // set by the click that picks something up, until the button is let go
+  let fireLatch = false, doorAim = null, doorCheckAt = 0, cleanTarget = null, cleanCheckAt = 0;   // set by the click that picks something up, until the button is let go
   let relock = false, lastPunch = 0, lastShot = 0, lastSpray = 0, shake = 0, menuRelease = false;
 
   const controls = createControls({
@@ -240,7 +244,8 @@ async function start() {
     const verts = cutDecal(onDoor ? onDoor.surface : hits, {point, normal, up, width: size, height: size, depth: onDoor ? .025 : .12});
     const [cu, cv] = splatCell(s.s);
     for (const q of verts) { q.u = cu + q.u / 4; q.v = cv + q.v / 2; }
-    splatMarks.push({batch, m: batch.add(verts, rgbOf(s.c)), born: performance.now() - age});
+    const m = batch.add(verts, rgbOf(s.c));
+    splatMarks.push({batch, m, born: performance.now() - age, kind: 'splat', id: String(s.s), verts: m.verts});
     while (splatMarks.length > MAX_SPLATS) { const old = splatMarks.shift(); old.batch.remove(old.m); }
     if (fresh) {
       if (onDoor) { onDoor.surface.mesh.localToWorld(point); normal.transformDirection(onDoor.surface.mesh.matrixWorld); }
@@ -270,11 +275,20 @@ async function start() {
     for (const q of verts) { q.u = u0 + q.u * (u1 - u0); q.v = v0 + q.v * (v1 - v0); }
     const batch = onDoor ? doorPageBatch(s.d, piece.page) : pageBatch(piece.page);
     const m = batch.add(verts, [255, 255, 255], fresh ? 0 : 1);
-    sprayMarks.push({batch, m});
+    sprayMarks.push({batch, m, kind: 'spray', id: `${s.piece}@${s.p.join(',')}`, verts: m.verts});
     while (sprayMarks.length > MAX_SPRAYS) { const old = sprayMarks.shift(); old.batch.remove(old.m); }
     if (fresh) fades.push({batch, m, t: 0});
   }
+  // a mark scrubbed off by someone with the bucket
+  function eraseMark(kind, id) {
+    if (kind === 'baked') { cleaning.eraseBaked(id); return; }
+    const list = kind === 'splat' ? splatMarks : sprayMarks;
+    const i = list.findIndex(k => k.id === id);
+    if (i >= 0) { list[i].batch.remove(list[i].m); list.splice(i, 1); }
+    cleaning.forget(kind, id);
+  }
   function resetMarks(list) {
+    for (const id of list.erased || []) cleaning.eraseBaked(id);
     splats.clear(); splatMarks.length = 0;
     for (const d of doorBatches.values()) d.batch.clear();
     for (const b of pageBatches.values()) b.clear();
@@ -412,6 +426,10 @@ async function start() {
     if (h?.state.type === 'flashlight') { network.send({type: 'toggle', id: h.state.id, on: !h.state.on}); return; }
     if (h?.state.type === 'paintball') { shoot(); return; }
     if (h?.state.type === 'spray') { spray(); return; }
+    if (h?.state.type === 'bucket') {
+      if (cleanTarget) { network.send({type: 'erase', kind: cleanTarget.kind, id: cleanTarget.id}); items.scrub(h.state.id); }
+      return;
+    }
     if (grab()) return;
     punch();
   }
@@ -681,6 +699,11 @@ async function start() {
     onMessage: m => {
       if (m.type === 'rtc') { voice.signal(m.from, m.d); return; }
       if (m.type === 'door') { doors.close(m.i); return; }
+      if (m.type === 'erase') {
+        eraseMark(m.kind, m.id);
+        if (m.by !== network.id) { const b = items.heldBy(m.by); if (b) items.scrub(b.state.id); }
+        return;
+      }
       if (m.type === 'look' && m.id !== network.id) setLook(peer(m.id), m.look);
       else if (m.type === 'marks') resetMarks(m);
       else if (m.type === 'shot') {
@@ -997,6 +1020,17 @@ async function start() {
 
     // held items and what you can do right now
     items.frame(frameArgs(dt));
+    // with the bucket: the paint or graffiti under the crosshair, glowing
+    cleaning.tick(dt);
+    if (h?.state.type !== 'bucket' || frozen) cleanTarget = null;
+    else if (now - cleanCheckAt > 70) {
+      cleanCheckAt = now;
+      camera.updateMatrixWorld();
+      const o = camera.getWorldPosition(new THREE.Vector3()), d = camera.getWorldDirection(new THREE.Vector3());
+      if (thirdPerson) o.addScaledVector(d, camDist);
+      cleanTarget = cleaning.pick(o, d, 3.2, [...splatMarks, ...sprayMarks]);
+    }
+    cleaning.highlight(cleanTarget);
     const pushable = !frozen && onButton();
     machine.highlight(pushable);
     machine.update(dt);
@@ -1007,7 +1041,9 @@ async function start() {
     else if (now - doorCheckAt > 120) { doorCheckAt = now; doorAim = doorTarget(); }
     const type = h?.state.type;
     const hint = isTouch ? '' : pushable ? 'click: push the button' : doorAim !== null ? 'click: close the door' : h ? (type === 'flashlight' ? `click: ${h.state.on ? 'turn off' : 'turn on'}  ·  right-click: drop`
-      : type === 'paintball' ? 'click: fire  ·  right-click: drop' : 'click a wall: spray  ·  esc: pick a piece  ·  right-click: drop')
+      : type === 'paintball' ? 'click: fire  ·  right-click: drop'
+      : type === 'bucket' ? (cleanTarget ? 'click: scrub it off  ·  right-click: drop' : 'aim at paint or graffiti to scrub it  ·  right-click: drop')
+      : 'click a wall: spray  ·  esc: pick a piece  ·  right-click: drop')
       : t ? `click: pick up ${ITEM_NAMES[t.state.type] || 'it'}` : '';
     if (prompt.textContent !== hint) prompt.textContent = hint;
     document.body.classList.toggle('holding', !!h);
@@ -1015,7 +1051,8 @@ async function start() {
     paintLabel.hidden = type !== 'paintball';
     const galleryLabel = type === 'paintball' ? 'paint' : 'tags';
     if (btnGallery.textContent !== galleryLabel) btnGallery.textContent = galleryLabel;
-    const act = pushable ? 'push' : doorAim !== null ? 'close' : h ? (type === 'flashlight' ? (h.state.on ? 'light off' : 'light on') : type === 'paintball' ? 'fire' : 'spray') : t ? 'grab' : 'punch';
+    const act = pushable ? 'push' : doorAim !== null ? 'close' : h ? (type === 'flashlight' ? (h.state.on ? 'light off' : 'light on')
+      : type === 'paintball' ? 'fire' : type === 'bucket' ? 'scrub' : 'spray') : t ? 'grab' : 'punch';
     if (btnAct.textContent !== act) btnAct.textContent = act;
     document.body.classList.toggle('can-grab', !!t);
     // first person: say which emote you're doing, since you can't see yourself
@@ -1028,7 +1065,7 @@ async function start() {
   });
   document.body.classList.add('ready');
   window.__111k = {scene, camera, player, peers, network, renderer, items, controls, hits, doors, me, meView, vertical,
-    voice, splatMarks, addSplat, doorBatches, setView: v => { thirdPerson = v; }, primary, secondary, shoot, spray, choosePiece, choosePaint, toggleGallery, get pieces() { return pieces; }};
+    voice, cleaning, get cleanTarget() { return cleanTarget; }, splatMarks, sprayMarks, addSplat, doorBatches, setView: v => { thirdPerson = v; }, primary, secondary, shoot, spray, choosePiece, choosePaint, toggleGallery, get pieces() { return pieces; }};
 }
 
 start().catch(err => {

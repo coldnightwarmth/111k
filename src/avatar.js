@@ -138,7 +138,8 @@ export async function createAvatar(look) {
   let moving = false, speed = 0, walkBlend = 0, holdBlend = 0, hideHead = false;
 
   return {
-    root, model, socket, hand: model.getObjectByName('HandR') || model.getObjectByName('Hand.R'), look, scale: AVATAR_SCALE, eye: 1.45, pitch: 0,
+    root, model, socket, hand: model.getObjectByName('HandR') || model.getObjectByName('Hand.R'),
+    handL: model.getObjectByName('HandL') || model.getObjectByName('Hand.L'), look, scale: AVATAR_SCALE, eye: 1.45, pitch: 0,
     setVisible(v) { model.visible = v; },
     // first person: keep the body (so you see your own punch) but fold the head away
     setHeadless(v) { hideHead = v; },
