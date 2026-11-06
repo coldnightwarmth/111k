@@ -37,9 +37,9 @@ uniform vec3 flDir[${MAX_FLASHLIGHTS}];
 uniform float flOn[${MAX_FLASHLIGHTS}];`)
       .replace(LIGHTMAP_LINE, `
     vec3 baked = lightMapTexel.rgb;
-    // take away the share of light from lamp groups that are currently dimmed
-    vec4 share = pow(texture2D(flickerMap, vLightMapUv), vec4(2.2));
-    baked = max(baked - flickerTint * dot(share, vec4(1.0) - flickerK), vec3(0.0));
+    // dim the share of each texel's light that comes from lamp groups currently flickering off
+    float off = dot(texture2D(flickerMap, vLightMapUv), vec4(1.0) - flickerK);
+    baked *= max(vec3(1.0) - flickerTint * off, vec3(0.0));
     reflectedLight.indirectDiffuse += baked * lightMapIntensity * RECIPROCAL_PI;
     // flashlights: a soft-edged cone with distance falloff, on the face normal
     vec3 faceN = normalize(cross(dFdx(vWorldPos), dFdy(vWorldPos)));
@@ -91,9 +91,11 @@ export async function loadLevel(name, renderer) {
       hookShader(m);
     }
     if (m.userData.emissive) m.toneMapped = false;
-    if (m.transparent) { m.depthWrite = false; m.polygonOffset = true; m.polygonOffsetFactor = -1; }
+    if (m.transparent) { m.depthWrite = false; m.polygonOffset = true; m.polygonOffsetFactor = -2; m.polygonOffsetUnits = -4; }
   });
-  for (const o of meshes) if (o.material.transparent) o.renderOrder = 1;
+  // Decals never write depth, so overlapping ones are drawn in a fixed order (by name)
+  // rather than re-sorted by distance every frame, which made them flicker.
+  meshes.filter(o => o.material.transparent).sort((a, b) => (a.name < b.name ? -1 : 1)).forEach((o, i) => { o.renderOrder = 1 + i * .001; });
   return {scene: gltf.scene, meta, materials, meshes, lightmap, baseIntensity: Math.PI * meta.lightmapScale};
 }
 

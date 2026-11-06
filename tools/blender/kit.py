@@ -10,7 +10,7 @@ Outputs per level (same contract as before, read by src/level.js):
   <name>-lightmap.png baked light (sRGB of irradiance / LM_SCALE)
   <name>.json         colliders, runtime lights for avatars, spawns, metadata
 """
-import contextlib, json, math, os, subprocess, sys, time
+import contextlib, json, math, os, re, subprocess, sys, time
 import numpy as np
 import bpy, bmesh
 
@@ -415,7 +415,7 @@ class World:
                     c = Vector(np.mean([me.vertices[v].co[:] for v in poly.vertices], 0)); n = Vector((0, 0, 1))
                 best = None
                 for tree, sm in trees:
-                    hit = tree.ray_cast(c + n * (0.4 if down else 0.05), -n, 1.5 if down else 0.2)
+                    hit = tree.ray_cast(c + n * (0.4 if down else 0.006), -n, 1.5 if down else 0.2)   # from just in front of the paint, so pipes and trays in front don't catch it
                     if hit[0] is not None and (best is None or hit[3] < best[3]):
                         best = (*hit, sm)
                 if best is None:
@@ -539,7 +539,7 @@ class World:
         group_imgs = {}
         if groups:
             # light from each flicker group on its own, so the game can dim lamps one group at a time
-            gsize = lm_size // 2
+            gsize = lm_size
             lamps = [o for o in sc.objects if o.type == 'LIGHT']
             emitters = []
             for m in self.mats.values():
@@ -594,6 +594,7 @@ class World:
         Nn = np.stack([Nn[..., 0], Nn[..., 2], -Nn[..., 1]], -1)
         # a little flat fill so unlit corners are dark rather than void
         light += np.asarray(fill, float)[None, None]
+        light_raw = light.copy()
         if grime is not None:
             light *= np.clip(grime(P.reshape(-1, 3), Nn.reshape(-1, 3)), 0, 2).reshape(lm_size, lm_size, 1)
         light = np.maximum(light, 0)
@@ -603,27 +604,31 @@ class World:
         lm_png.save(out_base + '-lightmap.webp', quality=92, method=6)
         print(f'  lightmap written ({time.time() - t0:.1f}s)')
         if group_imgs:
-            # RGBA: one flicker group per channel, brightness only (lamps in a group share a colour)
-            gsize = lm_size // 2
-            Pg = P[::2, ::2].reshape(-1, 3); Ng = Nn[::2, ::2].reshape(-1, 3)
-            gm = np.clip(grime(Pg, Ng), 0, 2).reshape(gsize, gsize) if grime is not None else 1.0
+            # RGBA, one flicker group per channel: the share of each texel's light that comes from
+            # that group. The game multiplies the lightmap by (1 - share * dimming), so dimmed lamps
+            # keep the lightmap's own crisp shadows instead of subtracting a blurrier copy of them.
+            from scipy.ndimage import gaussian_filter
+            lum = lambda a: a @ np.array([.2126, .7152, .0722])
+            total = lum(np.maximum(light_raw, 0)) + 1e-4
             chans = []
             for g in range(4):
                 if g in group_imgs:
-                    v = denoised(group_imgs[g], f'g{g}').mean(-1) * gm
-                    chans.append(np.clip(v / LM_SCALE, 0, 1) ** (1 / 2.2))
+                    share = np.clip(lum(np.maximum(denoised(group_imgs[g], f'g{g}'), 0)) / total, 0, 1)
+                    chans.append(gaussian_filter(share, 1.0))
                 else:
-                    chans.append(np.zeros((gsize, gsize)))
-            fl = (np.stack(chans, -1) * 255 + 0.5).astype(np.uint8)[::-1]
-            Image.fromarray(fl, 'RGBA').save(out_base + '-flicker.webp', lossless=True, method=6)
-            self.meta['flickerMap'] = True
+                    chans.append(np.zeros((lm_size, lm_size)))
+            fl = np.stack(chans, -1)
+            fl /= np.maximum(1, fl.sum(-1, keepdims=True))
+            fl = (fl * 255 + 0.5).astype(np.uint8)[::-1]
+            Image.fromarray(fl, 'RGBA').save(out_base + '-flicker.webp', quality=90, method=6)
+            self.meta['flickerMap'] = 'share'
             print(f'  flicker map written ({time.time() - t0:.1f}s)')
 
         # --- export
         mats_out, tris = [], 0
         for m in self.mats.values():
             obs = [o for os_ in objs.values() for o in os_ if o.data.materials[0].name == m.name]
-            pos, nor, uv0, uv1 = [], [], [], []
+            pos, nor, uv0, uv1, fixed = [], [], [], [], []
             for o in obs:
                 me = o.data
                 me.calc_loop_triangles()
@@ -645,10 +650,15 @@ class World:
                     l = np.zeros(len(me.loops) * 2); me.uv_layers['lm'].data.foreach_get('uv', l); l = l.reshape(-1, 2)
                     ll = l[li].copy(); ll[:, 1] = 1 - ll[:, 1]; uv1.append(ll)
                 tris += nt
+                # swinging doors are meshes of their own (chunk 1000 + door number)
+                part = o.name.split(':')[0]
+                fixed.append(np.full(nt, 1000 + int(part[4:]) if re.fullmatch(r'door\d+', part) else -1))
             if not pos:
                 continue
             cols = [np.concatenate(pos), np.concatenate(uv0)] + ([np.concatenate(uv1)] if uv1 else [])
             tri_chunk = np.zeros(len(cols[0]) // 3, int) if chunk is None else chunk(cols[0].reshape(-1, 3, 3).mean(1))
+            fixed = np.concatenate(fixed)
+            tri_chunk = np.where(fixed >= 0, fixed, tri_chunk)
             chunks = []
             for ck in np.unique(tri_chunk):
                 sel = np.repeat(tri_chunk == ck, 3)

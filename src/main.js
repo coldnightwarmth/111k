@@ -411,13 +411,11 @@ async function start() {
     const c = document.createElement('canvas');
     if (!img) return c;
     const [u0, v0, u1, v1] = piece.uv;
-    const sw = (u1 - u0) * img.width, sh = (v1 - v0) * img.height;
+    const sw = (u1 - u0) * img.width, sh = Math.abs(v1 - v0) * img.height;
     const s = Math.min(maxW / sw, maxW * .75 / sh, 1);
     c.width = Math.max(1, Math.round(sw * s)); c.height = Math.max(1, Math.round(sh * s));
-    // atlas uvs run bottom-up when the texture is flipped, top-down otherwise
-    const flip = level.materials.get(`graffiti_${piece.page}`).map.flipY;
-    const sy = flip ? (1 - v1) * img.height : v0 * img.height;
-    c.getContext('2d').drawImage(img, u0 * img.width, sy, sw, sh, 0, 0, c.width, c.height);
+    // glTF textures aren't flipped: v runs down the image, so the piece's top edge is the smaller v
+    c.getContext('2d').drawImage(img, u0 * img.width, Math.min(v0, v1) * img.height, sw, Math.abs(sh), 0, 0, c.width, c.height);
     return c;
   }
   function buildGallery() {

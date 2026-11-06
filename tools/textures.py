@@ -129,21 +129,56 @@ def ceiling_tile(seed=30):
     return to_img(col)
 
 
-def painted_metal(paint=(0.42, 0.47, 0.44), seed=40):
-    n = periodic_noise(S, 4, seed)
-    fine = periodic_noise(S, 90, seed + 1, 2)
-    base = 0.85 + 0.12 * n + 0.05 * fine
-    col = colorize(base, paint)
+def painted_metal(paint=(0.42, 0.47, 0.44), seed=40, size=1024):
+    """Old enamel on steel, one tile covering 2 m: broad uneven fading, wear clustered in a few
+    places rather than sprinkled evenly, chips down to grey primer, rust that blooms out of the
+    chips and runs downward, a handful of scuffs. Built to not read as a repeating pattern."""
+    Sz = size
     r = rng(seed + 2)
-    scr = np.zeros((S, S))
-    for _ in range(70):
-        cx, cy, ln, ang = r.integers(0, S), r.integers(0, S), r.integers(10, 70), r.random() * math.pi
-        for k in range(ln):
-            scr[int(cy + math.sin(ang) * k) % S, int(cx + math.cos(ang) * k) % S] = 1
-    scr = np.clip(blur_wrap(scr, 0.5) * 2, 0, 1)
-    col = col * (1 - scr[..., None] * 0.5) + scr[..., None] * np.array([0.55, 0.55, 0.53]) * 0.5
-    rust = np.clip(periodic_noise(S, 10, seed + 3, 3) - 0.72, 0, 1) * 3
-    col = col * (1 - rust[..., None]) + rust[..., None] * np.array([0.36, 0.2, 0.1])
+    broad = periodic_noise(Sz, 2, seed, 3)                 # fading across the whole tile
+    mid = periodic_noise(Sz, 9, seed + 1, 3)
+    fine = periodic_noise(Sz, 120, seed + 5, 2)
+    base = 0.78 + 0.2 * broad + 0.06 * mid + 0.035 * fine
+    col = colorize(base, paint)
+    # where wear happens at all: a few large regions, so most of the paint stays clean
+    zone = np.clip((periodic_noise(Sz, 3, seed + 7, 2) - 0.6) * 5, 0, 1)
+    detail = periodic_noise(Sz, 22, seed + 3, 3)
+    chips = np.clip((detail + zone * 0.42 - 0.99) * 9, 0, 1)
+    # water stains and handling marks: soft darker blotches, no hard spots
+    stain = np.clip((periodic_noise(Sz, 5, seed + 9, 3) - 0.55) * 3, 0, 1)
+    col *= 1 - 0.09 * stain[..., None]
+    primer = np.array([0.52, 0.52, 0.5])
+    col = col * (1 - chips[..., None]) + chips[..., None] * primer * (0.9 + 0.2 * fine[..., None])
+    # rust grows inside the larger chips and bleeds downward in streaks
+    core = np.clip((detail + zone * 0.42 - 1.05) * 12, 0, 1)
+    rust = np.clip(blur_wrap(core, 2.5) * 2.2, 0, 1)
+    streak = np.zeros((Sz, Sz))
+    ys, xs = np.nonzero(core > 0.6)
+    pick = r.choice(len(ys), size=min(len(ys), 90), replace=False) if len(ys) else []
+    for i in pick:
+        x, y0 = xs[i], ys[i]
+        length = int(r.integers(Sz // 30, Sz // 6))
+        wid = int(r.integers(1, 4))
+        for k_ in range(length):
+            yy = (y0 + k_) % Sz        # downward in the image = down the surface
+            fade = (1 - k_ / length) ** 1.5
+            for dx in range(-wid, wid + 1):
+                streak[yy, (x + dx + int(math.sin(k_ * 0.05) * 2)) % Sz] = max(streak[yy, (x + dx) % Sz], fade * (1 - abs(dx) / (wid + 1)))
+    streak = blur_wrap(streak, 1.2)
+    rust = np.clip(rust + streak * 0.55, 0, 1)
+    rust_col = np.array([0.3, 0.18, 0.1]) * (0.75 + 0.4 * mid[..., None])
+    col = col * (1 - rust[..., None] * 0.75) + rust[..., None] * 0.75 * rust_col
+    # a few long scuffs and a lot of fine ones, mostly in the worn zones
+    scr = np.zeros((Sz, Sz))
+    for _ in range(26):
+        cx, cy, ln, ang = r.integers(0, Sz), r.integers(0, Sz), r.integers(20, 160), r.normal(0, .5)
+        for k_ in range(ln):
+            scr[int(cy + math.sin(ang) * k_) % Sz, int(cx + math.cos(ang) * k_) % Sz] = 1
+    scr = np.clip(blur_wrap(scr, 0.6) * 2, 0, 1) * (0.35 + 0.65 * zone)
+    col = col * (1 - scr[..., None] * 0.35) + scr[..., None] * np.array([0.6, 0.6, 0.58]) * 0.35
+    # grime collects low down
+    yv = np.linspace(0, 1, Sz)[:, None, None]
+    col *= 1 - 0.1 * np.clip(yv - 0.6, 0, 1) * 2.5 * (0.6 + 0.4 * broad[..., None])
     return to_img(col)
 
 

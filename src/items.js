@@ -142,7 +142,7 @@ export function createItems({scene, camera}) {
         const s = it.state, m = it.model, u = m.userData;
         it.kick *= Math.exp(-dt * 14); it.shake = Math.max(0, it.shake - dt);
         let origin = null, dir = null;
-        if (!(s.holder === myId && !thirdPerson)) m.scale.setScalar(1);
+        if (!(s.holder === myId && !thirdPerson) || s.type === 'flashlight') m.scale.setScalar(1);
         if (!s.holder) {
           if (m.parent !== scene) scene.add(m);
           m.visible = true;
@@ -164,8 +164,9 @@ export function createItems({scene, camera}) {
             m.rotation.set(.04 + it.kick * .12, -.06, 0);
           } else if (s.type === 'spray') {
             const sh = it.shake > 0 ? Math.sin(it.sway * 70) * .006 : 0;
-            m.position.set(.02 + sh, -.07 + bob, .06);
-            m.rotation.set(-.15, -.25, sh * 2);
+            m.scale.setScalar(.8);
+            m.position.set(.05 + sh, -.1 + bob, .02);
+            m.rotation.set(-.15, -.35, sh * 2);
           } else {
             m.position.set(0, bob, 0);
             m.rotation.set(.04, -.06, 0);

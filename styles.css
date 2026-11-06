@@ -83,7 +83,7 @@ body.locked::after { content: ''; position: fixed; left: 50%; top: 50%; width: 4
 #gallery[hidden] { display: none; }
 #gallery h2 { margin: 0; font-size: 12px; font-weight: 600; letter-spacing: .18em; color: var(--dim); }
 #gallery p { margin: 0; font-size: 11px; color: var(--dim); }
-#gallery .list { flex: 1; overflow-y: auto; display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px; touch-action: pan-y;
+#gallery .list { flex: 1; overflow-y: auto; overflow-x: hidden; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; touch-action: pan-y;
   scrollbar-width: thin; }
 #gallery button { padding: 4px; border: 1px solid var(--line); border-radius: 4px; cursor: pointer; aspect-ratio: 4 / 3;
   background: repeating-conic-gradient(#3a3a3e 0 25%, #2c2c30 0 50%) 0 0 / 12px 12px; display: grid; place-items: center; }

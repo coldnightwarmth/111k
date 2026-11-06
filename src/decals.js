@@ -14,7 +14,7 @@ export function createWorldHits(level) {
   const parts = [];
   for (const mesh of level.meshes) {
     const g = mesh.geometry;
-    if (mesh.material.transparent || !g.attributes.uv1 || !g.index) continue;
+    if (mesh.material.transparent || !g.attributes.uv1 || !g.index || /#10\d\d$/.test(mesh.name)) continue;   // not swinging doors
     const bvh = new MeshBVH(g, {maxLeafTris: 12});
     mesh.updateMatrixWorld();
     const inv = mesh.matrixWorld.clone().invert();

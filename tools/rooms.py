@@ -135,9 +135,14 @@ def bathroom(C, door_x, r, group=None):
     # three stalls along the east wall
     x_front, x_back = 1.9, P.X1
     zs = [-2.2, -1.2, -0.2, 0.8]
-    for z in zs:  # partitions, raised off the floor
+    for z in zs:  # partitions, raised off the floor on pilasters
         W.box(((x_front + x_back) / 2, 1.05, z), (x_back - x_front, 1.7, 0.03), part, collide=True)
         P.box((x_front, 0.1, z), (0.05, 0.2, 0.05), 'steel')
+        P.box((x_front + 0.02, 0.012, z), (0.09, 0.024, 0.07), 'steel')                       # pilaster shoe
+        for y in (0.4, 1.6):                                                                   # wall brackets
+            P.box((x_back - 0.03, y, z + 0.02), (0.05, 0.04, 0.008), 'steel')
+            P.box((x_back - 0.03, y, z - 0.02), (0.05, 0.04, 0.008), 'steel')
+    P.tube((x_front, 1.93, zs[0]), (x_front, 1.93, zs[-1]), 0.02, 'steel', sides=6)             # head rail
     doors = [0.2, None, 1.4]   # ajar, missing (lying on the floor), wide open
     for k in range(3):
         z0, z1 = zs[k], zs[k + 1]
@@ -150,26 +155,50 @@ def bathroom(C, door_x, r, group=None):
             hinge = np.array([x_front, 0, z0 + 0.17])
             a = doors[k]
             with W.frame(hinge, -math.pi / 2 + a):
-                W.box((0.33, 1.05, 0), (0.66, 1.55, 0.03), part)
-                P.box((0.6, 1.0, -0.03), (0.04, 0.08, 0.03), 'steel')
+                W.box((0.33, 1.05, 0), (0.64, 1.55, 0.03), part)
+                for hy in (0.45, 1.6):
+                    P.box((0.03, hy, 0), (0.07, 0.1, 0.036), 'steel')                          # hinge plates
+                P.box((0.6, 1.0, -0.022), (0.05, 0.09, 0.012), 'steel')                       # latch
+                P.box((0.6, 1.0, 0.022), (0.05, 0.09, 0.012), 'steel')
+                P.box((0.6, 1.0, -0.035), (0.012, 0.03, 0.02), 'black')
+                P.tube((0.3, 1.62, 0.016), (0.3, 1.62, 0.07), 0.008, 'steel', sides=6)       # coat hook
         else:
             W.box((x_front - 0.7, 0.03, zc + 0.2), (0.66, 0.03, 1.55), part, yaw=0.3)
         # toilet
         tx = x_back - 0.45
         with W.frame((tx, 0, zc), -math.pi / 2):
-            P.cyl((0, 0, 0), 0.13, 0.36, 'porcelain', sides=10, top=0.19)
-            P.cyl((0, 0.36, 0.03), 0.2, 0.035, 'porcelain' if k != 2 else 'black', sides=12)
+            P.cyl((0, 0, 0.06), 0.12, 0.05, 'porcelain', sides=16)                               # foot
+            P.cyl((0, 0.05, 0.04), 0.115, 0.22, 'porcelain', sides=16, top=0.16)                 # pedestal
+            P.cyl((0, 0.27, 0.0), 0.16, 0.08, 'porcelain', sides=18, top=0.2)                    # bowl
+            P.cyl((0, 0.35, 0.0), 0.2, 0.025, 'porcelain', sides=18)                             # rim
+            P.cyl((0, 0.352, 0.0), 0.15, 0.026, 'dirty', sides=18)                               # inside, stained
+            P.cyl((-0.09, 0.0, 0.05), 0.014, 0.02, 'white', sides=6)                             # bolt caps
+            P.cyl((0.09, 0.0, 0.05), 0.014, 0.02, 'white', sides=6)
+            if k != 2:   # seat: a horseshoe of two halves, and the lid up
+                for s_ in (-1, 1):
+                    P.rbox((s_ * 0.13, 0.385, -0.02), (0.08, 0.025, 0.36), 'black' if k == 0 else 'white', ch=0.01, yaw=s_ * 0.18)
+                P.rbox((0, 0.385, 0.16), (0.3, 0.025, 0.06), 'black' if k == 0 else 'white', ch=0.01)
             if k != 1:
-                P.rbox((0, 0.62, 0.28), (0.44, 0.36, 0.17), 'porcelain', ch=0.02)
+                P.rbox((0, 0.62, 0.28), (0.46, 0.36, 0.17), 'porcelain', ch=0.025)              # tank
+                P.rbox((0, 0.81, 0.28), (0.48, 0.035, 0.19), 'porcelain', ch=0.012)             # tank lid
+                P.box((-0.17, 0.74, 0.19), (0.07, 0.015, 0.015), 'steel')                       # flush lever
                 P.rbox((0, 0.97, 0.12), (0.4, 0.03, 0.42), 'porcelain', ch=0.01, pitch=-1.45)  # seat lid up
             else:
-                P.tube((0, 0.5, 0.36), (0, 1.0, 0.4), 0.02, 'steel')  # flush valve, no tank
+                P.tube((0, 0.45, 0.33), (0, 1.0, 0.36), 0.02, 'steel', sides=8)              # flush valve, no tank
+                P.cyl((0, 0.98, 0.33), 0.045, 0.1, 'steel', sides=10)
+                P.tube((0, 0.4, 0.05), (0, 0.45, 0.33), 0.022, 'steel', sides=8)
         W.collider_circle((tx, 0, zc), 0.25, 0, 0.5)
         P.cyl((x_back - 0.06, 0.75, z0 + 0.3), 0.06, 0.1, 'white', axis='x', sides=8)  # toilet roll
     # urinals on the south wall
     for k, x in enumerate((-0.4, 0.5)):
-        P.rbox((x, 0.85, P.Z1 - 0.17), (0.38, 0.62, 0.3), 'porcelain', ch=0.07)
-        P.box((x, 0.85, P.Z1 - 0.3), (0.26, 0.36, 0.02), 'dirty')
+        # a rounded wall-hung bowl: wide at the lip, tapering into the wall
+        pts = []
+        for t in np.linspace(0, 2 * math.pi, 14, endpoint=False):
+            for yy, rx, rz in ((0.52, 0.17, 0.13), (0.7, 0.2, 0.17), (0.95, 0.19, 0.16), (1.18, 0.15, 0.1)):
+                pts.append((x + math.cos(t) * rx, yy, P.Z1 - 0.16 + min(0.0, math.sin(t)) * rz * 1.4 + max(0.0, math.sin(t)) * 0.12))
+        P.hull(pts, 'porcelain')
+        P.box((x, 0.86, P.Z1 - 0.31), (0.24, 0.34, 0.02), 'dirty')
+        P.cyl((x, 0.6, P.Z1 - 0.2), 0.03, 0.01, 'steel', sides=8)                                 # drain
         P.box((x + 0.45, 1.05, P.Z1 - 0.22), (0.03, 0.9, 0.42), 'beige')
         P.tube((x, 1.2, P.Z1 - 0.06), (x, 1.75, P.Z1 - 0.06), 0.015, 'steel')
     W.collider_box((0.05, 0, P.Z1 - 0.2), 0.7, 0.2, 0, 0, 1.2)
@@ -177,9 +206,17 @@ def bathroom(C, door_x, r, group=None):
     W.box((P.X0 + 0.3, 0.84, -0.6), (0.58, 0.06, 2.6), M['tile_wall'])
     W.box((P.X0 + 0.3, 0.42, -0.6), (0.5, 0.8, 0.04), part)
     for z in (-1.4, -0.2):
-        P.box((P.X0 + 0.3, 0.86, z), (0.38, 0.03, 0.42), 'dirty')
-        P.tube((P.X0 + 0.06, 0.88, z), (P.X0 + 0.06, 1.05, z), 0.014, 'steel')
-        P.tube((P.X0 + 0.06, 1.05, z), (P.X0 + 0.2, 1.02, z), 0.012, 'steel')
+        P.rbox((P.X0 + 0.3, 0.86, z), (0.42, 0.04, 0.46), 'porcelain', ch=0.015)                 # basin rim
+        P.box((P.X0 + 0.3, 0.875, z), (0.32, 0.012, 0.36), 'dirty')                               # bowl
+        P.cyl((P.X0 + 0.3, 0.878, z), 0.02, 0.006, 'steel', sides=8)                              # plug hole
+        P.cyl((P.X0 + 0.07, 0.88, z), 0.025, 0.02, 'steel', sides=10)                             # faucet base
+        P.tube((P.X0 + 0.07, 0.88, z), (P.X0 + 0.07, 1.04, z), 0.013, 'steel', sides=8)
+        P.tube((P.X0 + 0.07, 1.04, z), (P.X0 + 0.2, 1.01, z), 0.011, 'steel', sides=8)
+        for s_ in (-1, 1):
+            P.rbox((P.X0 + 0.08, 0.92, z + s_ * 0.1), (0.04, 0.03, 0.06), 'steel', ch=0.008)  # taps
+        P.tube((P.X0 + 0.3, 0.84, z), (P.X0 + 0.3, 0.55, z), 0.018, 'steel', sides=8)       # trap
+        P.tube((P.X0 + 0.3, 0.55, z), (P.X0 + 0.02, 0.5, z), 0.018, 'steel', sides=8)
+    P.rbox((P.X0 + 0.06, 1.25, -0.8), (0.1, 0.2, 0.12), 'white', ch=0.02)                         # soap dispenser
     W.collider_box((P.X0 + 0.3, 0, -0.6), 0.3, 1.3, 0, 0, 0.9)
     W.face([(P.X0 + 0.015, 1.15, 0.6), (P.X0 + 0.015, 1.15, -1.8), (P.X0 + 0.015, 2.05, -1.8), (P.X0 + 0.015, 2.05, 0.6)],
            M['mirror'], uv=[(0, 1), (2.4, 1), (2.4, 0), (0, 0)])

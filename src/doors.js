@@ -6,16 +6,28 @@ const BODY = .3;
 
 export function createDoors(level, collider) {
   const doors = [];
+  // each door's leaf parts were exported as meshes named "<material>#<1000 + door number>"
+  const parts = new Map();
+  level.scene.traverse(o => {
+    const m = o.isMesh && /#(\d+)$/.exec(o.name);
+    if (m && Number(m[1]) >= 1000) {
+      const k = Number(m[1]) - 1000;
+      if (!parts.has(k)) parts.set(k, []);
+      parts.get(k).push(o);
+    }
+  });
   for (const d of level.meta.doors || []) {
-    const mesh = level.scene.getObjectByName(d.mesh);
-    if (!mesh) continue;
+    const meshes = parts.get(d.index) || [];
+    if (!meshes.length) continue;
     // re-centre the leaf on its hinge so it can turn
-    mesh.matrixAutoUpdate = true;
-    mesh.geometry = mesh.geometry.clone();
-    mesh.geometry.translate(-d.hinge[0], 0, -d.hinge[1]);
-    mesh.position.set(d.hinge[0], 0, d.hinge[1]);
-    mesh.rotation.set(0, 0, 0);
-    doors.push({...d, mesh, angle: d.open || 0, w: 0});
+    for (const mesh of meshes) {
+      mesh.matrixAutoUpdate = true;
+      mesh.geometry = mesh.geometry.clone();
+      mesh.geometry.translate(-d.hinge[0], 0, -d.hinge[1]);
+      mesh.position.set(d.hinge[0], 0, d.hinge[1]);
+      mesh.rotation.set(0, 0, 0);
+    }
+    doors.push({...d, meshes, angle: 0, w: 0, lo: (d.closed || 0) - 1.65, hi: (d.closed || 0) + 1.65});
   }
   const leafDir = (d, a) => { const t = d.yaw + a; return [Math.cos(t), -Math.sin(t)]; };
   // signed distance of a point from the leaf's plane, and how far along the leaf it is
@@ -36,9 +48,8 @@ export function createDoors(level, collider) {
         const along = Math.max(.15, Math.min(d.width, m.along));
         // swing the leaf just far enough to clear the body, away from the side it's on
         const s = m.side >= 0 ? 1 : -1;
-        const turn = -s * Math.asin(Math.min(1, (reach - Math.abs(m.side)) / along));
-        const lim = d.limit ?? 1.7;
-        const next = Math.max(-lim, Math.min(lim, d.angle + turn));
+        const turn = s * Math.asin(Math.min(1, (reach - Math.abs(m.side)) / along));   // turning the leaf up its own angle moves it toward -side
+        const next = Math.max(d.lo, Math.min(d.hi, d.angle + turn));
         d.w += (next - d.angle) * 8;
         d.angle = next;
       }
@@ -57,11 +68,10 @@ export function createDoors(level, collider) {
     },
     update(dt) {
       for (const d of doors) {
-        const lim = d.limit ?? 1.7;
         d.angle += d.w * dt;
         d.w *= Math.exp(-dt * 3.2);                    // hinge friction
-        if (Math.abs(d.angle) > lim) { d.angle = Math.sign(d.angle) * lim; d.w *= -.25; }   // bounce off the stop
-        d.mesh.rotation.y = d.angle;
+        if (d.angle < d.lo || d.angle > d.hi) { d.angle = Math.max(d.lo, Math.min(d.hi, d.angle)); d.w *= -.25; }   // bounce off the stop
+        for (const m of d.meshes) m.rotation.y = d.angle;
       }
     },
   };

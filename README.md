@@ -21,15 +21,26 @@ npm run dev        # http://localhost:8000
 Open two browser windows to see each other. The dev server runs the same room
 logic as production, on the same port.
 
-Controls: click to look · WASD move · shift run · space jump · C crouch ·
-enter chat · E emotes · V first/third person. Left click punches, or picks up
-a flashlight you're looking at; holding one, left click switches it on and
-off and right click (or F) drops it. Punching someone knocks them back and
-makes them drop what they hold. On phones: left stick moves, drag to look,
-buttons for the rest.
+When you arrive you pick a name (it only shows in the chat log) and one of twelve
+random avatars, six Drifellas and six Driladies, or the one you wore last time.
+Refreshing keeps you where you were; closing the tab sends you back to the picker.
+
+Controls: click to look · WASD move · shift run · space jump (jump again right as
+you land to bunny hop: each clean hop goes a little higher and faster) · C crouch ·
+enter chat · E emotes · V first/third person · left click punches, or uses what
+you hold · right click (or F) drops it.
+
+- Flashlights (three): left click switches them on and off.
+- The paintball marker (in the starting room): left click fires, hold to keep firing.
+  Paint stays on the walls; a hit player gets paint on them and drops what they hold.
+- Spray cans (ten, round the loop): left click a wall to tag it. Press Esc while
+  holding one to pick which piece you spray.
+- Doors swing open when you walk into them.
+
+On phones: left stick moves, drag to look, buttons for the rest.
 
 Debug URL params: `?view=3p`, `?cam=x,z,yaw,pitch`, `?exposure=1.2`,
-`?server=wss://…`.
+`?server=wss://…`, `?pick=auto&name=…` (skip the picker with a random avatar).
 
 ## Deploy
 
@@ -69,20 +80,40 @@ python3 tools/build_world.py --fast --preview   # quick bake + preview renders i
    extinguisher drips, scratchiti, stencils), and every stroke is sprayed like a
    can, with paint building up where the hand slows, overspray and drips.
 3. Blender packs lightmap UVs, bakes direct and bounced light with Cycles and
-   denoises the result (`tools/blender/kit.py`). Lamps that flicker are baked a
-   second time into `world-flicker.webp`, one lamp group per channel, so the
-   game can dim them individually. Graffiti and small junk borrow the lightmap
-   of the surface they sit on.
-4. In the browser every surface is an unlit material times the lightmap, minus
-   any dimmed lamp groups, plus flashlight beams (`src/level.js`). Avatars are
-   lit by the six baked lights nearest the camera.
+   denoises the result (`tools/blender/kit.py`). Lamps that flicker are baked
+   again on their own; `world-flicker.webp` stores each lamp group's share of
+   every texel's light (one group per channel), so the game can dim lamps one
+   group at a time without disturbing the lightmap's shadows. Graffiti and small
+   junk borrow the lightmap of the surface they sit on. Unlocked room doors are
+   exported as separate meshes with their hinges, and swing in the game.
+4. In the browser every surface is an unlit material times the lightmap, scaled
+   down for dimmed lamp groups, plus flashlight beams (`src/level.js`). Avatars
+   are lit by the six baked lights nearest the camera. Paint splats and sprayed
+   tags are cut out of the level's triangles around the hit (`src/decals.js`),
+   so they wrap corners and carry the wall's own lightmap coordinates.
 
 The build also writes `src/world-items.js` (where the flashlights start), which
 the client and the multiplayer server share.
 
-The avatar (`assets/avatars/drifella-default.glb`) is the cards.art default
-Drifella. `tools/glbslim.py` prunes the wardrobe options and quantizes the
-geometry, which takes the file from 49 MB to 1.2 MB with an identical render.
+## Avatars
+
+Drifellas and Driladies come from the cards.art models (cardbinder repo).
+`tools/avatarparts.py` splits each character's trait packs into a small base
+(rig, body, animation library) and one file per trait, compressed with
+gltfpack (meshopt), so a visitor only downloads what their avatar wears: about
+0.2–0.8 MB instead of 70–135 MB per character.
+
+```sh
+npm i -g gltfpack
+python3 tools/avatarparts.py /path/to/cardbinder
+python3 tools/blender/punch.py /path/to/cardbinder/assets/models/drifmaker/drifella-customizable.blend assets/avatars/moves.glb
+```
+
+`src/cards/` holds the cards.art appearance modules unchanged (trait catalogs,
+finishes, which parts show), so looks match the showroom. `src/looks.js` rolls
+random looks with the drifmaker rarity weights. The punch is authored in
+Blender by `tools/blender/punch.py` as aimed key poses on the shared 19-bone
+rig.
 
 ## Layout
 
@@ -92,7 +123,9 @@ src/                      client (ES modules, no bundler)
   main.js                 game loop, camera, peers
   avatar.js  motion.js    character animation, movement, interpolation
   level.js   physics.js   baked level + shader hook, flicker, avatar lights, collision + camera rays
-  items.js                 flashlights: on the ground, in hands, beams
+  items.js                held items (flashlights, paintball marker, spray cans)
+  decals.js  doors.js     paint and tags on the level, swinging doors
+  picker.js  looks.js     avatar picker, random looks; cards/ = cards.art appearance code
   net.js     chat.js      websocket client, chat log + bubbles
   controls.js             keyboard/mouse and touch input
   protocol.js             message validation shared with the server

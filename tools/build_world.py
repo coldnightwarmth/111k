@@ -100,11 +100,11 @@ def mat(name, *a, **k):
 mat('tunnel_lining', T.tunnel_lining(), tile=1.6)
 mat('tunnel_floor', T.tunnel_floor(), tile=2.0)
 mat('safety_paint', T.safety_paint(), tile=1.0)
-mat('metal_grey', T.painted_metal(), tile=1.0)
-mat('metal_galv', T.painted_metal((0.55, 0.56, 0.55), seed=44), tile=1.0)
-mat('metal_teal', T.painted_metal((0.30, 0.42, 0.43), seed=41), tile=1.0)
-mat('metal_red', T.painted_metal((0.45, 0.16, 0.12), seed=42), tile=1.0)
-mat('metal_beige', T.painted_metal((0.62, 0.58, 0.48), seed=43), tile=1.0)
+mat('metal_grey', T.painted_metal(), tile=2.0)
+mat('metal_galv', T.painted_metal((0.55, 0.56, 0.55), seed=44), tile=2.0)
+mat('metal_teal', T.painted_metal((0.30, 0.42, 0.43), seed=41), tile=2.0)
+mat('metal_red', T.painted_metal((0.45, 0.16, 0.12), seed=42), tile=2.0)
+mat('metal_beige', T.painted_metal((0.62, 0.58, 0.48), seed=43), tile=2.0)
 mat('props', pal_img, tile=1.0)
 mat('glow', pal_img, emit=6.0)
 mat('lens_dead', pal_img)
@@ -228,43 +228,73 @@ def s_for_height(y, side):
     return float(_SS[mask][np.argmin(np.abs(_PTS[mask, 1] - y))])
 
 
-def tunnel_decal(name, a, side, y, scale=1.0, eps=0.012):
-    """A decal conforming to the curved wall: a grid over (angle, arc length)."""
+def _clip(poly, nx, ny, lim):
+    """Keep the part of a 2D polygon where nx*x + ny*y <= lim."""
+    out = []
+    for i in range(len(poly)):
+        p, q = poly[i], poly[(i + 1) % len(poly)]
+        dp, dq = nx * p[0] + ny * p[1] - lim, nx * q[0] + ny * q[1] - lim
+        if dp <= 0: out.append(p)
+        if (dp <= 0) != (dq <= 0):
+            t = dp / (dp - dq)
+            out.append((p[0] + (q[0] - p[0]) * t, p[1] + (q[1] - p[1]) * t))
+    return out
+
+
+def tunnel_decal(name, a, side, y, scale=1.0, eps=0.012, rot=0.0):
+    """A decal conforming to the curved wall, optionally turned by `rot` radians on the wall:
+    a grid over (angle, arc length) cells, each clipped to the turned rectangle."""
     rect = rects[name]
     w, h = rect['size'][0] * scale, rect['size'][1] * scale
+    c, s_ = math.cos(rot), math.sin(rot)
+    bw, bh = (abs(w * c) + abs(h * s_)) / 2, (abs(w * s_) + abs(h * c)) / 2
     sc = s_for_height(y, side)
     xc = prof_at(sc)[0]
-    da = w / 2 / (RL + xc)
-    s0, s1 = sc - h / 2, sc + h / 2
-    a_s = sorted({a - da, a + da, *[b + k * 2 * math.pi for b in bounds for k in (-1, 0, 1) if a - da < b + k * 2 * math.pi < a + da]})
+    rr = RL + xc
+    da = bw / rr
+    s0, s1 = sc - bh, sc + bh
+    a_s = sorted({a - da, a + da, *np.linspace(a - da, a + da, max(2, int(2 * bw / 0.35)) + 1),
+                  *[b + k * 2 * math.pi for b in bounds for k in (-1, 0, 1) if a - da < b + k * 2 * math.pi < a + da]})
     s_s = sorted({s0, s1, *[v for v in PROF_S if s0 < v < s1]})
     u0, vb, u1, vt = rect['uv']
     m = gmat(name)
     with W.using('decals', density=0.6):
         for i in range(len(a_s) - 1):
             for j in range(len(s_s) - 1):
+                X0_, X1_ = (a_s[i] - a) * rr, (a_s[i + 1] - a) * rr
+                Y0_, Y1_ = s_s[j] - sc, s_s[j + 1] - sc
+                poly = [(X0_, Y0_), (X1_, Y0_), (X1_, Y1_), (X0_, Y1_)]
+                # the piece's own axes: (c, s) along its width, (-s, c) up its height
+                for nx, ny, lim in [(c, s_, w / 2), (-c, -s_, w / 2), (-s_, c, h / 2), (s_, -c, h / 2)]:
+                    poly = _clip(poly, nx, ny, lim)
+                    if len(poly) < 3: break
+                if len(poly) < 3: continue
                 quad, uv = [], []
-                for (aa, ss) in [(a_s[i], s_s[j]), (a_s[i + 1], s_s[j]), (a_s[i + 1], s_s[j + 1]), (a_s[i], s_s[j + 1])]:
+                for X, Y in poly:
+                    aa, ss = a + X / rr, sc + Y
                     x, yy = prof_at(ss)
                     n = np.array([-x, CY - yy]); n /= np.linalg.norm(n)
                     quad.append(P(aa, x + n[0] * eps, yy + n[1] * eps))
-                    fu = (aa - (a - da)) / (2 * da)
+                    lx, ly = X * c + Y * s_, -X * s_ + Y * c
+                    fu, fv = lx / w + 0.5, ly / h + 0.5
                     fu = 1 - fu if side > 0 else fu
-                    fv = (ss - s0) / (s1 - s0)
                     fv = fv if side > 0 else 1 - fv
                     uv.append((u0 + (u1 - u0) * fu, vb + (vt - vb) * fv))
                 centre = P((a_s[i] + a_s[i + 1]) / 2, 0, CY)
-                if np.dot(np.cross(quad[1] - quad[0], quad[3] - quad[0]), centre - np.mean(quad, 0)) < 0:
+                if np.dot(np.cross(quad[1] - quad[0], quad[-1] - quad[0]), centre - np.mean(quad, 0)) < 0:
                     quad, uv = quad[::-1], uv[::-1]
                 W.face(quad, m, uv=uv, world=True)
+    return w, h
 
 
-def plane_decal(name, center, right, scale=1.0, up=(0, 1, 0)):
+def plane_decal(name, center, right, scale=1.0, up=(0, 1, 0), rot=0.0):
     """A flat decal in the current frame: centre point (already off the wall), right and up vectors."""
     rect = rects[name]
     w, h = rect['size'][0] * scale, rect['size'][1] * scale
     u0, vb, u1, vt = rect['uv']
     c, right, up = np.asarray(center, float), np.asarray(right, float), np.asarray(up, float)
+    if rot:
+        right, up = right * math.cos(rot) + up * math.sin(rot), -right * math.sin(rot) + up * math.cos(rot)
     pts = [c - right * w / 2 - up * h / 2, c + right * w / 2 - up * h / 2, c + right * w / 2 + up * h / 2,
            c - right * w / 2 + up * h / 2]
     with W.using('decals', density=0.6):
@@ -275,10 +305,10 @@ WALL_SPEC = {'S': ((0, 0, Z1), (-1, 0, 0), (0, 0, -1)), 'N': ((0, 0, Z0), (1, 0,
              'W': ((X0, 0, 0), (0, 0, -1), (1, 0, 0)), 'E': ((X1, 0, 0), (0, 0, 1), (-1, 0, 0))}
 
 
-def room_wall_decal(name, wall, along, y, scale=1.0, eps=0.012):
+def room_wall_decal(name, wall, along, y, scale=1.0, eps=0.012, rot=0.0):
     """Decal on a room wall in the current room frame; along = offset to the viewer's right."""
     base_, right, inward = (np.array(v, float) for v in WALL_SPEC[wall])
-    plane_decal(name, base_ + right * along + np.array([0, y, 0]) + inward * eps, right, scale)
+    plane_decal(name, base_ + right * along + np.array([0, y, 0]) + inward * eps, right, scale, rot=rot)
 
 
 # ------------------------------------------------------------- vestibules
@@ -531,25 +561,58 @@ with W.using('decals', density=0.6):
         if name in rects:
             tunnel_decal(name, party_a + da, side, y, eps=0.012 + 0.004 * (name == 'tag_mute'))
             used.add(name)
-    # everything else, at least once, spread round the loop; bigger work low, tags high, notes at eye level
+    # everything else, at least once, spread round the loop. Each piece looks for a patch of wall
+    # that's mostly free; only now and then does one go over another (as tags do).
+    occupied = {1: [], -1: []}          # per side: (centre along the loop in m, centre height, half w, half h)
+    for name, da, side, y in plan:
+        if name in rects:
+            w_, h_ = rects[name]['size']
+            occupied[side].append(((party_a + da) * RL, y, w_ / 2, h_ / 2))
+
+    def overlap(side, x, y, hw, hh):
+        worst = 0.0
+        for (ox, oy, ow, oh) in occupied[side]:
+            dx = min(x + hw, ox + ow) - max(x - hw, ox - ow)
+            dy = min(y + hh, oy + oh) - max(y - hh, oy - oh)
+            if dx > 0 and dy > 0:
+                worst = max(worst, dx * dy / min(4 * hw * hh, 4 * ow * oh))
+        return worst
+
     order = [k for k in big + mids + small + cat('hs_', 'ex_') if k not in used]
     gr.shuffle(order)
     order += list(gr.choice(big + mids, size=24))  # favourites turn up more than once
+    loop_len = 2 * math.pi * RL
     for n, name in enumerate(order):
         w, h = rects[name]['size']
-        for _ in range(20):
-            aa = (party_a + 0.3 + (n + gr.uniform(-0.4, 0.4)) / len(order) * (2 * math.pi - 0.6)) % (2 * math.pi)
-            side = gr.choice([-1, 1])
+        bigpiece = name.startswith(('tu_', 'pc_', 'rl_', 'fx_'))
+        scale = float(gr.uniform(0.7, 1.35) if bigpiece else gr.uniform(0.8, 1.2) if not name.startswith('mk_') else gr.uniform(0.85, 1.1))
+        w, h = w * scale, h * scale
+        rot_ = float(gr.normal(0, 0.035 if bigpiece else 0.06))
+        allow = 0.45 if gr.random() < 0.12 else 0.08   # the odd piece is happy to go over another
+        best = None
+        for attempt in range(40):
+            aa = (party_a + 0.3 + (n + gr.uniform(-0.6, 0.6)) / len(order) * (2 * math.pi - 0.6)) % (2 * math.pi)
+            side = int(gr.choice([-1, 1]))
             if side == 1 and door_keepout(aa, w):
                 continue
-            break
-        if name.startswith(('tu_', 'pc_', 'rl_')):
-            y = h / 2 + gr.uniform(0.35, 0.7)
-        elif name.startswith(('mk_', 'ex_')):
-            y = gr.uniform(1.15, 1.7)
-        else:
-            y = gr.uniform(1.4, 2.6)
-        tunnel_decal(name, aa, side, min(y, 3.0), eps=0.011 + 0.003 * (n % 4))
+            if bigpiece:
+                y = h / 2 + gr.uniform(0.2, 1.1)
+            elif name.startswith(('mk_', 'ex_')):
+                y = gr.uniform(0.9, 2.1)
+            else:
+                y = gr.uniform(1.1, 2.9)
+            y = min(y, 3.05 - h / 2)
+            ov = min(overlap(side, aa * RL, y, w / 2, h / 2), overlap(side, aa * RL + loop_len, y, w / 2, h / 2),
+                     overlap(side, aa * RL - loop_len, y, w / 2, h / 2))
+            if best is None or ov < best[0]:
+                best = (ov, aa, side, y)
+            if ov <= allow:
+                break
+        ov, aa, side, y = best
+        if ov > allow + 0.25:
+            continue                     # nowhere decent left for it
+        occupied[side].append((aa * RL, y, w / 2, h / 2))
+        tunnel_decal(name, aa, side, y, scale=scale, eps=0.010 + 0.0016 * (n % 7), rot=rot_)
     for k in range(5):
         tunnel_decal(f'st_ch{k}', 0.6 + k * 1.2, -1, 1.25)
     # rooms: a few pieces on random walls (not the party room, which has its own plan)
@@ -566,7 +629,8 @@ with W.using('decals', density=0.6):
                 wall = gr.choice(['S', 'W', 'E'] if i != CONTROL else ['S'])
                 span = (X1 - X0) if wall == 'S' else (Z1 - Z0)
                 along = gr.uniform(-span / 2 + w / 2 + 0.2, max(-span / 2 + w / 2 + 0.25, span / 2 - w / 2 - 0.2))
-                room_wall_decal(name, wall, along, float(gr.uniform(1.2, 2.2)), eps=0.012 + 0.003 * j)
+                room_wall_decal(name, wall, along, float(gr.uniform(0.9, 2.3)), scale=float(gr.uniform(0.8, 1.2)),
+                                eps=0.012 + 0.002 * j, rot=float(gr.normal(0, 0.06)))
             if i == BATHROOM:  # tags on the stall partitions and doors
                 for j, z in enumerate((-2.2, -1.2, -0.2)):
                     name = gr.choice(cat('mk_', 'ex_', 'tag_'))
@@ -606,9 +670,13 @@ def grime(Pp, N):
 
 
 # ------------------------------------------------------------------- meta
-W.meta = {'name': 'world', 'ambient': [0.035, 0.035, 0.045], 'fog': {'color': '#060607', 'near': 14, 'far': 62},
+W.meta.update({'name': 'world', 'ambient': [0.035, 0.035, 0.045], 'fog': {'color': '#060607', 'near': 14, 'far': 62},
           'bore': {'loop': RL, 'radius': RT, 'centre': CY, 'floorHalf': XF, 'passage': VD, 'passageTop': VTOP, 'roomCeiling': CEIL},
-          'loop': {'radius': RL, 'doors': [{'angle': round(a, 5), 'room': room_numbers[i]} for i, a in enumerate(door_angles)]}}
+          'loop': {'radius': RL, 'doors': [{'angle': round(a, 5), 'room': room_numbers[i]} for i, a in enumerate(door_angles)]},
+          # every piece on the graffiti pages, for the spray cans (room numbers and buffs left out)
+          'graffiti': [{'name': n, 'page': r['page'], 'uv': [round(float(x), 5) for x in r['uv']],
+                        'w': round(float(r['size'][0]), 3), 'h': round(float(r['size'][1]), 3)}
+                       for n, r in rects.items() if not n.startswith(('st_', 'buff_'))]})
 
 
 def write_items():

@@ -122,38 +122,85 @@ class Props:
         W = self.W
         with W.frame((x, 0, z), yaw, -1.3 if folded else 0.0, 0.0):
             for sx in (-0.2, 0.2):
-                self.tube((sx, 0, -0.2), (sx, 0.9, 0.18), 0.012, color)
-                self.tube((sx, 0, 0.2), (sx, 0.45, -0.16), 0.012, color)
-            self.rbox((0, 0.46, -0.02), (0.42, 0.03, 0.4), color, ch=0.01)
-            self.rbox((0, 0.78, 0.14), (0.4, 0.18, 0.025), color, ch=0.008, pitch=-0.15)
+                self.tube((sx, 0.02, -0.2), (sx, 0.9, 0.18), 0.012, color, sides=8)
+                self.tube((sx, 0.02, 0.2), (sx, 0.45, -0.16), 0.012, color, sides=8)
+                for fz in (-0.2, 0.2):
+                    self.cyl((sx, 0.0, fz), 0.016, 0.025, 'black', sides=8)             # rubber feet
+                self.cyl((sx - 0.012, 0.3, 0.0), 0.009, 0.024, 'steel', axis='x', sides=6)  # pivot rivet
+            self.tube((-0.2, 0.08, 0.17), (0.2, 0.08, 0.17), 0.009, color, sides=6)      # foot rail
+            self.tube((-0.2, 0.42, -0.14), (0.2, 0.42, -0.14), 0.009, color, sides=6)
+            self.rbox((0, 0.46, -0.02), (0.42, 0.03, 0.4), color, ch=0.012)
+            self.rbox((0, 0.445, -0.02), (0.38, 0.012, 0.36), 'charcoal', ch=0.004)     # pressed underside
+            self.rbox((0, 0.78, 0.14), (0.4, 0.18, 0.025), color, ch=0.01, pitch=-0.15)
+            self.rbox((0, 0.78, 0.153), (0.34, 0.12, 0.004), 'slate', ch=0.002, pitch=-0.15)
         if not folded:
             W.collider_circle((x, 0, z), 0.27, 0, 0.9)
 
     # ------------------------------------------------------------- furniture
+    def drawer(self, center, w, h, mat, yaw=0.0, pull='steel', out=0.0, label=True):
+        """A drawer front set into a carcass face at `center` (facing local -z of the frame): a small
+        gap all round, a recessed pull and a label holder."""
+        R = rot(yaw)
+        c = np.asarray(center, float) + R @ np.array([0, 0, -out])
+        self.W.box(c + R @ np.array([0, 0, -0.006]), (w - 0.008, h - 0.008, 0.014), mat, yaw=yaw)
+        if out > 0:   # the drawer box behind the front
+            self.box(c + R @ np.array([0, -0.02, out / 2]), (w - 0.04, h - 0.06, out), 'lightgrey', yaw=yaw)
+        self.box(c + R @ np.array([0, h * 0.12, -0.016]), (min(0.14, w * 0.4), 0.022, 0.008), 'charcoal', yaw=yaw)   # pull recess
+        self.box(c + R @ np.array([0, h * 0.12 - 0.006, -0.02]), (min(0.13, w * 0.37), 0.008, 0.012), pull, yaw=yaw)
+        if label and h > 0.15:
+            self.box(c + R @ np.array([0, h * 0.3, -0.0145]), (0.08, 0.035, 0.002), 'steel', yaw=yaw)
+            self.box(c + R @ np.array([0, h * 0.3, -0.0158]), (0.07, 0.026, 0.001), 'paper', yaw=yaw)
+
     def desk(self, x, z, yaw, r, clutter=True):
+        """A steel 'tanker' office desk: chamfered top with a rubber edge band, two drawer pedestals
+        on recessed plinths, a centre drawer and a modesty panel."""
         W, metal = self.W, self.M['metal_grey']
+        fronts = self.M['metal_beige'] if r.random() < 0.4 else metal
         with W.frame((x, 0, z), yaw):
-            W.box((0, 0.75, 0), (1.5, 0.04, 0.75), metal)
+            self.rbox((0, 0.752, 0), (1.52, 0.035, 0.77), ch=0.008, mat=metal)
+            W.box((0, 0.772, 0), (1.44, 0.006, 0.7), self.M['props'], world_uv=False, uv_const=self.sw('charcoal'))  # lino top
+            for sx in (-1, 1):
+                self.box((sx * 0.763, 0.752, 0), (0.008, 0.032, 0.77), 'black')
+            self.box((0, 0.752, -0.388), (1.52, 0.032, 0.008), 'black')
             for dx in (-0.55, 0.55):
-                W.box((dx, 0.37, 0), (0.42, 0.72, 0.72), metal)
-                for y in (0.6, 0.38, 0.16):
-                    self.box((dx, y, -0.362), (0.38, 0.18, 0.006), 'lightgrey')
-                    self.box((dx, y + 0.04, -0.37), (0.12, 0.02, 0.012), 'steel')
+                W.box((dx, 0.39, 0.0), (0.42, 0.67, 0.7), metal)
+                W.box((dx, 0.03, 0.03), (0.38, 0.06, 0.62), self.M['props'], world_uv=False, uv_const=self.sw('black'))   # toe kick
+                for i, (y, hh) in enumerate([(0.62, 0.17), (0.43, 0.19), (0.19, 0.27)]):
+                    out = 0.22 if (clutter and r.random() < 0.12) else 0.0
+                    self.drawer((dx, y, -0.352), 0.38, hh, fronts, out=out)
+            self.drawer((0, 0.69, -0.35), 0.64, 0.08, fronts, label=False)
+            W.box((0, 0.42, 0.33), (0.68, 0.5, 0.02), metal)          # modesty panel
+            for dx in (-0.73, 0.73):
+                for dz in (-0.33, 0.33):
+                    self.cyl((dx * 0.98, 0.0, dz), 0.012, 0.012, 'black', sides=6)   # glides
             if clutter:
                 if r.random() < 0.6:
-                    self.crt((r.uniform(-0.4, 0.4), 0.77, 0.05), r.uniform(-0.3, 0.3) + math.pi, on=False)
+                    self.crt((r.uniform(-0.4, 0.4), 0.775, 0.05), r.uniform(-0.3, 0.3) + math.pi, on=False)
                 for _ in range(r.integers(1, 4)):
-                    self.box((r.uniform(-0.6, 0.6), 0.775, r.uniform(-0.25, 0.25)), (0.22, 0.01, 0.3), 'paper',
+                    self.box((r.uniform(-0.6, 0.6), 0.778, r.uniform(-0.25, 0.25)), (0.22, 0.004, 0.3), 'paper',
                              yaw=r.uniform(0, 6.28))
+                if r.random() < 0.5:   # a mug, a stapler
+                    self.cyl((r.uniform(-0.6, 0.6), 0.775, r.uniform(-0.2, 0.2)), 0.04, 0.095, r.choice(['white', 'navy', 'red']), sides=12)
+                if r.random() < 0.4:
+                    self.rbox((r.uniform(-0.6, 0.6), 0.795, r.uniform(-0.2, 0.2)), (0.16, 0.04, 0.05), 'black', ch=0.01, yaw=r.uniform(0, 6))
         W.collider_box((x, 0, z), 0.76, 0.38, yaw, 0, 0.77)
 
     def crt(self, base, yaw, on=False, screen_mat=None, color='beige'):
-        """Boxy CRT monitor sitting at `base` (bottom centre), facing local -z."""
+        """A boxy CRT monitor at `base` (bottom centre), facing local -z: tapered back with vents,
+        an inset bezel round a slightly domed screen, a tilt-swivel foot, a power button and LED."""
         with self.W.frame(base, yaw):
-            self.rbox((0, 0.2, 0.02), (0.4, 0.36, 0.36), color, ch=0.03)
-            self.rbox((0, 0.18, 0.2), (0.3, 0.27, 0.12), color, ch=0.03)
-            self.box((0, 0.015, 0.05), (0.26, 0.03, 0.22), color)
-            q = [(-0.15, 0.08, -0.161), (0.15, 0.08, -0.161), (0.15, 0.32, -0.161), (-0.15, 0.32, -0.161)]
+            self.cyl((0, 0.0, 0.05), 0.12, 0.02, color, sides=14)                       # swivel foot
+            self.cyl((0, 0.02, 0.05), 0.06, 0.03, color, sides=10)
+            self.rbox((0, 0.2, 0.0), (0.4, 0.34, 0.06), color, ch=0.02)                 # bezel frame
+            self.hull([(-0.19, 0.04, 0.03), (0.19, 0.04, 0.03), (-0.19, 0.36, 0.03), (0.19, 0.36, 0.03),
+                       (-0.13, 0.09, 0.32), (0.13, 0.09, 0.32), (-0.13, 0.31, 0.32), (0.13, 0.31, 0.32)], color)   # tube housing
+            for k_ in range(6):                                                         # vent slots on top
+                self.box((-0.1 + k_ * 0.04, 0.3, 0.22 - k_ * 0.0), (0.012, 0.004, 0.12), 'charcoal', pitch=-0.18)
+            self.box((0, 0.2, -0.031), (0.33, 0.27, 0.004), 'charcoal')                 # inner bezel shadow
+            self.box((0.15, 0.045, -0.03), (0.02, 0.012, 0.006), 'charcoal')            # power button
+            self.box((0.12, 0.045, -0.031), (0.008, 0.008, 0.004), 'ledgreen' if on else 'charcoal')
+            self.box((-0.13, 0.045, -0.031), (0.06, 0.008, 0.002), 'steel')             # badge
+            q = [(-0.15, 0.08, -0.034), (0.15, 0.08, -0.034), (0.15, 0.32, -0.034), (-0.15, 0.32, -0.034)]
             q = orient(q, (0, 0.2, -1))
             if screen_mat is not None:
                 # seen from the front (-z), +x is the viewer's left
@@ -162,35 +209,56 @@ class Props:
                 self.W.face(q, self.M['props'], uv=np.tile(self.sw('glass'), (4, 1)))
 
     def cabinet(self, x, z, yaw, drawer_out=False):
+        """A four-drawer filing cabinet with a folded top lip, plinth, label frames and pulls."""
         W = self.W
-        W.box((x, 0.66, z), (0.7, 1.32, 0.52), self.M['metal_grey'], yaw=yaw, collide=True)
+        metal = self.M['metal_grey']
+        W.box((x, 0.68, z), (0.7, 1.3, 0.52), metal, yaw=yaw, collide=True)
         R = rot(yaw)
-        for i, y in enumerate((1.12, 0.8, 0.48, 0.16)):
-            out = 0.3 if drawer_out and i == 1 else 0.0
-            p = np.array([x, y, z]) + R @ np.array([0, 0, 0.265 + out / 2])
-            self.box(p, (0.62, 0.28, 0.012 + out), 'lightgrey', yaw=yaw)
+        P = lambda d: np.array([x, 0, z]) + R @ np.asarray(d, float)
+        self.rbox(P((0, 1.34, 0)), (0.72, 0.025, 0.54), ch=0.006, mat=metal, yaw=yaw)
+        self.box(P((0, 0.025, 0.0)), (0.66, 0.05, 0.48), 'black', yaw=yaw)
+        for i, y in enumerate((1.14, 0.83, 0.52, 0.21)):
+            out = 0.32 if drawer_out and i == 1 else 0.0
+            with W.frame(P((0, 0, 0)), yaw):
+                self.drawer((0, y, 0.265), 0.64, 0.3, self.M['metal_beige'], yaw=math.pi, out=out)
 
     def shelving(self, x, z, yaw, r):
+        """Boltless steel shelving: angle-iron posts, lipped shelves, X bracing at the back and
+        whatever got left on it."""
         W = self.W
         R = rot(yaw)
+        P = lambda d: np.array([x, 0, z]) + R @ np.asarray(d, float)
         for dx in (-0.6, 0.6):
             for dz in (-0.22, 0.22):
-                self.box(np.array([x, 1.0, z]) + R @ np.array([dx, 0, dz]), (0.04, 2.0, 0.04), 'steel', yaw=yaw)
+                sx, sz = -np.sign(dx), -np.sign(dz)
+                self.box(P((dx, 1.0, dz + sz * 0.012)), (0.035, 2.0, 0.008), 'steel', yaw=yaw)     # angle iron:
+                self.box(P((dx + sx * 0.012, 1.0, dz)), (0.008, 2.0, 0.035), 'steel', yaw=yaw)    # two flanges
+                self.box(P((dx, 0.004, dz)), (0.06, 0.008, 0.06), 'steel', yaw=yaw)               # foot plate
         for y in (0.1, 0.7, 1.3, 1.9):
-            W.box((x, y, z), (1.24, 0.03, 0.48), self.M['metal_galv'], yaw=yaw)
-            for k in range(r.integers(0, 4)):
-                p = np.array([x, y + 0.17, z]) + R @ np.array([r.uniform(-0.4, 0.4), 0, 0])
-                W.box(p, (r.uniform(0.25, 0.4), 0.3, 0.35), self.M['cardboard'], yaw=yaw + r.uniform(-0.15, 0.15),
-                      world_uv=False)
+            W.box(P((0, y, 0)), (1.24, 0.012, 0.46), self.M['metal_galv'], yaw=yaw)
+            for dz in (-0.235, 0.235):
+                W.box(P((0, y - 0.015, dz)), (1.24, 0.035, 0.01), self.M['metal_galv'], yaw=yaw)  # folded lips
+            for k_ in range(r.integers(0, 4)):
+                bx = r.uniform(-0.42, 0.42)
+                bw, bh, bd = r.uniform(0.25, 0.4), r.uniform(0.18, 0.32), r.uniform(0.28, 0.38)
+                byaw = yaw + r.uniform(-0.15, 0.15)
+                c = P((bx, y + 0.006 + bh / 2, 0))
+                W.box(c, (bw, bh, bd), self.M['cardboard'], yaw=byaw, world_uv=False)
+                self.box(c + np.array([0, bh / 2 + 0.001, 0]), (0.05, 0.002, bd + 0.002), 'tan', yaw=byaw)   # tape
+        for side in (-1, 1):                                                                       # X bracing
+            a0, a1 = P((-0.6, 0.1, 0.235)), P((0.6, 1.9, 0.235))
+            if side < 0: a0, a1 = P((-0.6, 1.9, 0.235)), P((0.6, 0.1, 0.235))
+            self.tube(a0, a1, 0.004, 'steel', sides=4, caps=False)
         W.collider_box((x, 0, z), 0.64, 0.26, yaw, 0, 2)
 
     def bottle(self, x, z, color, lying=False, yaw=0.0, y=0.0):
         if lying:
-            self.cyl((x, y + 0.035, z), 0.035, 0.18, color, axis='x', yaw=yaw, sides=7)
+            self.cyl((x, y + 0.035, z), 0.035, 0.17, color, axis='x', yaw=yaw, sides=10)
             return
-        self.cyl((x, y, z), 0.035, 0.17, color, sides=7)
-        self.cyl((x, y + 0.17, z), 0.035, 0.06, color, sides=7, top=0.013)
-        self.cyl((x, y + 0.23, z), 0.013, 0.04, color, sides=5)
+        self.cyl((x, y, z), 0.035, 0.17, color, sides=10)
+        self.cyl((x, y + 0.17, z), 0.035, 0.06, color, sides=10, top=0.013)
+        self.cyl((x, y + 0.23, z), 0.013, 0.04, color, sides=8)
+        self.box((x, y + 0.09, z - 0.034), (0.05, 0.07, 0.002), 'paper')     # label
 
     # ----------------------------------------------------------------- debris
     def debris(self, r, x, z, kind=None, y=0.0):
@@ -283,28 +351,42 @@ class Props:
                 self.box(((x0 + x1) / 2, CEIL + 0.45, (z0 + z1) / 2), (x1 - x0, 0.9, z1 - z0), 'black', faces='-y+x-x+z-z')
 
     def door(self, door_x, opened, leaf_mat):
-        """Steel frame in the wall opening and a leaf hinged on its left jamb, swinging into the room."""
+        """Steel frame in the wall opening and a leaf hinged on its left jamb. Unless the room is
+        locked (opened == 0) the leaf is its own mesh that swings in the game when people walk into it."""
         W, Z0, T_W, DOOR_W, DOOR_H = self.W, self.Z0, self.T_W, self.DOOR_W, self.DOOR_H
         metal = self.M['metal_grey']
         dl, dr = door_x - DOOR_W / 2, door_x + DOOR_W / 2
         fz = Z0 - T_W / 2
-        for (c, s) in [((dl - 0.04, DOOR_H / 2, fz), (0.08, DOOR_H, T_W + 0.04)), ((dr + 0.04, DOOR_H / 2, fz), (0.08, DOOR_H, T_W + 0.04)),
-                       ((door_x, DOOR_H + 0.04, fz), (DOOR_W + 0.16, 0.08, T_W + 0.04))]:
+        # the frame: two jambs and a head, which also line the opening (no separate reveal faces to fight with)
+        for (c, s) in [((dl - 0.04, DOOR_H / 2, fz), (0.08, DOOR_H + 0.08, T_W + 0.04)),
+                       ((dr + 0.04, DOOR_H / 2, fz), (0.08, DOOR_H + 0.08, T_W + 0.04)),
+                       ((door_x, DOOR_H + 0.04, fz), (DOOR_W, 0.08, T_W + 0.04))]:
             W.box(c, s, metal)
-        mid = (door_x, DOOR_H / 2, Z0 - T_W / 2)
-        W.face(orient([(dl, 0, Z0 - T_W), (dl, 0, Z0), (dl, DOOR_H, Z0), (dl, DOOR_H, Z0 - T_W)], mid), metal)
-        W.face(orient([(dr, 0, Z0), (dr, 0, Z0 - T_W), (dr, DOOR_H, Z0 - T_W), (dr, DOOR_H, Z0)], mid), metal)
-        W.face(orient([(dl, DOOR_H, Z0 - T_W), (dl, DOOR_H, Z0), (dr, DOOR_H, Z0), (dr, DOOR_H, Z0 - T_W)], mid), metal)
         hinge = np.array([dl + 0.02, 0, Z0 + 0.03])
         lw = DOOR_W - 0.04
         yaw = -opened
         R = rot(yaw)
-        centre = hinge + R @ np.array([lw / 2, DOOR_H / 2 - 0.01, 0.025])
-        W.box(centre, (lw, DOOR_H - 0.02, 0.05), leaf_mat, yaw=yaw, collide=True)
-        for off, size, col in [((0, 0.25, 0.028), (0.36, 0.6, 0.004), 'glass'), ((0, -1.08, 0.028), (lw - 0.1, 0.28, 0.006), 'steel'),
-                               ((-0.42, -0.2, 0.06), (0.2, 0.035, 0.035), 'steel')]:
-            p = hinge + R @ (np.array([lw / 2, DOOR_H / 2, 0]) + np.array(off))
-            self.box(p, size, col, yaw=yaw)
+        swing = opened > 0
+        k = len(W.meta.setdefault('doors', []))
+        with W.using(f'door{k}' if swing else None):
+            centre = hinge + R @ np.array([lw / 2, DOOR_H / 2 - 0.01, 0.025])
+            W.box(centre, (lw, DOOR_H - 0.03, 0.05), leaf_mat, yaw=yaw, collide=not swing)
+            for off, size, col in [((0, 0.25, 0.0285), (0.36, 0.6, 0.004), 'glass'), ((0, 0.25, -0.0285), (0.36, 0.6, 0.004), 'glass'),
+                                   ((0, -1.08, 0.0285), (lw - 0.1, 0.28, 0.004), 'steel'),
+                                   ((-0.38, -0.18, 0.055), (0.03, 0.03, 0.06), 'steel'), ((-0.38, -0.18, 0.09), (0.14, 0.03, 0.03), 'steel'),
+                                   ((-0.38, -0.18, -0.055), (0.03, 0.03, 0.06), 'steel'), ((-0.38, -0.18, -0.09), (0.14, 0.03, 0.03), 'steel'),
+                                   ((-0.38, -0.18, 0.027), (0.06, 0.13, 0.006), 'steel'), ((-0.38, -0.18, -0.027), (0.06, 0.13, 0.006), 'steel')]:
+                p = hinge + R @ (np.array([lw / 2, DOOR_H / 2, 0]) + np.array(off))
+                self.box(p, size, col, yaw=yaw)
+            for hy in (0.25, DOOR_H - 0.3):     # hinge knuckles
+                self.cyl(hinge + np.array([-0.01, hy, -0.005]), 0.012, 0.1, 'steel')
+        if swing:
+            h = W.T(hinge)
+            to = lambda d: (lambda v: math.atan2(-v[2], v[0]))(W.T(hinge + d) - h)
+            baked, closed = to(R @ np.array([1.0, 0, 0])), to(np.array([1.0, 0, 0]))
+            centre_off = math.atan2(math.sin(closed - baked), math.cos(closed - baked))
+            W.meta['doors'].append({'index': k, 'hinge': [round(float(h[0]), 3), round(float(h[2]), 3)],
+                                    'yaw': round(baked, 4), 'closed': round(centre_off, 4), 'width': round(lw, 3), 'thick': 0.05})
 
     def shell(self, wall, door_x, opened, holes=(), exit_live=False, door_mat=None, floor_mat=None, ceil_mat=None,
               baseboard='rubber'):

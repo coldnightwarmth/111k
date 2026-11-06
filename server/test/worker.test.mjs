@@ -145,3 +145,69 @@ test('items go home when the last player leaves', async () => {
   assert.equal(store.get('items')[spawn.id].holder, null);
   assert.equal(store.get('items')[spawn.id].x, spawn.x);
 });
+
+test('looks and names: shared on change, names only in chat', async () => {
+  const {room, sockets} = makeRoom();
+  await join(room, S1); await join(room, S2);
+  const [a, b] = sockets;
+  const idA = a.messages()[0].id;
+  await room.webSocketMessage(a, JSON.stringify({type: 'pose', pose}));
+  await room.webSocketMessage(a, JSON.stringify({type: 'look', look: {character: 'drilady', hat: 'ladycrown', bad: {x: 1}, 'no way': 'x'}, name: '  mein <3 '}));
+  const look = b.messages().find(m => m.type === 'look');
+  assert.deepEqual(look, {type: 'look', id: idA, look: {character: 'drilady', hat: 'ladycrown'}});
+  await room.webSocketMessage(a, JSON.stringify({type: 'chat', text: 'yo'}));
+  assert.equal(b.messages().find(m => m.type === 'chat').name, 'mein 3');
+  // a late joiner gets the look in the snapshot
+  await join(room, '33333333-3333-4333-8333-333333333333');
+  const c = sockets[2];
+  assert.equal(c.messages().find(m => m.type === 'state').players.find(p => p.id === idA).look.hat, 'ladycrown');
+});
+
+test('paintball and spray: holder checks, marks kept and sent to newcomers, hits drop items', async () => {
+  const {ITEM_SPAWNS} = await import('../../src/world-items.js');
+  const {room, sockets, ctx} = makeRoom();
+  const store = new Map();
+  ctx.storage.get = async k => store.get(k);
+  ctx.storage.put = async (k, v) => { store.set(k, structuredClone(v)); };
+  await join(room, S1); await join(room, S2);
+  const [a, b] = sockets;
+  const idA = a.messages()[0].id, idB = b.messages()[0].id;
+  const gun = ITEM_SPAWNS.find(s => s.type === 'paintball'), torch = ITEM_SPAWNS.find(s => s.type === 'flashlight');
+  const can = ITEM_SPAWNS.find(s => s.type === 'spray');
+  const shot = {type: 'shoot', o: [gun.x, 1.2, gun.z], v: [-30, 1, 0], c: 0xff00ff, s: 77, t: .3, hit: {p: [gun.x - 9, 1.2, gun.z], n: [1, 0, 0]}};
+  // not holding the marker: ignored
+  await room.webSocketMessage(a, JSON.stringify({type: 'pose', pose: {...pose, x: gun.x, z: gun.z}}));
+  await room.webSocketMessage(a, JSON.stringify(shot));
+  assert.equal(b.messages().filter(m => m.type === 'shot').length, 0);
+  await room.webSocketMessage(a, JSON.stringify({type: 'pickup', id: gun.id}));
+  await room.webSocketMessage(a, JSON.stringify(shot));
+  const got = b.messages().find(m => m.type === 'shot');
+  assert.equal(got.from, idA); assert.deepEqual(got.hit.n, [1, 0, 0]);
+  assert.equal(room.marks.splats.length, 1);
+  // rate limited
+  await room.webSocketMessage(a, JSON.stringify(shot));
+  assert.equal(b.messages().filter(m => m.type === 'shot').length, 1);
+  // b holds the torch; a paints b: b drops it, and the mark goes on b, not the wall
+  await room.webSocketMessage(b, JSON.stringify({type: 'pose', pose: {...pose, x: torch.x, z: torch.z}}));
+  await room.webSocketMessage(b, JSON.stringify({type: 'pickup', id: torch.id}));
+  await new Promise(r => setTimeout(r, 200));
+  await room.webSocketMessage(a, JSON.stringify({...shot, target: idB, local: {p: [0, 1, .2], n: [0, 0, 1]}}));
+  const hit = b.messages().filter(m => m.type === 'shot').at(-1);
+  assert.equal(hit.target, idB); assert.equal(hit.hit, null);
+  assert.equal(b.messages().filter(m => m.type === 'item').at(-1).item.holder, null);
+  assert.equal(room.marks.splats.length, 1);
+  // spray: needs a can, near the wall
+  await room.webSocketMessage(b, JSON.stringify({type: 'pose', pose: {...pose, x: can.x, z: can.z}}));
+  await room.webSocketMessage(b, JSON.stringify({type: 'pickup', id: can.id}));
+  const tag = {type: 'spray', p: [can.x + 1, 1.5, can.z], n: [-1, 0, 0], up: [0, 1, 0], piece: 'tag_111k_big', size: 1.1};
+  await room.webSocketMessage(b, JSON.stringify(tag));
+  assert.equal(a.messages().filter(m => m.type === 'spray').length, 1);
+  await room.webSocketMessage(b, JSON.stringify({...tag, p: [can.x + 20, 1.5, can.z]}));
+  assert.equal(room.marks.sprays.length, 1);
+  // newcomers get every mark
+  await join(room, '33333333-3333-4333-8333-333333333333');
+  const marks = sockets[2].messages().find(m => m.type === 'marks');
+  assert.equal(marks.splats.length, 1); assert.equal(marks.sprays.length, 1);
+  await new Promise(r => setTimeout(r, 4200));
+  assert.equal(store.get('marks').sprays.length, 1);
+});
