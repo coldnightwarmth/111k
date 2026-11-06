@@ -163,7 +163,7 @@ test('looks and names: shared on change, names only in chat', async () => {
   assert.equal(c.messages().find(m => m.type === 'state').players.find(p => p.id === idA).look.hat, 'ladycrown');
 });
 
-test('paintball and spray: holder checks, marks kept and sent to newcomers, hits drop items', async () => {
+test('paintball and spray: holder checks, marks kept and sent to newcomers, hits keep items', async () => {
   const {ITEM_SPAWNS} = await import('../../src/world-items.js');
   const {room, sockets, ctx} = makeRoom();
   const store = new Map();
@@ -187,15 +187,16 @@ test('paintball and spray: holder checks, marks kept and sent to newcomers, hits
   // rate limited
   await room.webSocketMessage(a, JSON.stringify(shot));
   assert.equal(b.messages().filter(m => m.type === 'shot').length, 1);
-  // b holds the torch; a paints b: b drops it, and the mark goes on b, not the wall
+  // b holds the torch; a paints b: b keeps it (just gets knocked back), and the mark goes on b, not the wall
   await room.webSocketMessage(b, JSON.stringify({type: 'pose', pose: {...pose, x: torch.x, z: torch.z}}));
   await room.webSocketMessage(b, JSON.stringify({type: 'pickup', id: torch.id}));
   await new Promise(r => setTimeout(r, 200));
   await room.webSocketMessage(a, JSON.stringify({...shot, target: idB, local: {p: [0, 1, .2], n: [0, 0, 1]}}));
   const hit = b.messages().filter(m => m.type === 'shot').at(-1);
   assert.equal(hit.target, idB); assert.equal(hit.hit, null);
-  assert.equal(b.messages().filter(m => m.type === 'item').at(-1).item.holder, null);
+  assert.equal(room.items[torch.id].holder, b.messages()[0].id);
   assert.equal(room.marks.splats.length, 1);
+  await room.webSocketMessage(b, JSON.stringify({type: 'drop', id: torch.id, x: torch.x, z: torch.z}));
   // spray: needs a can, near the wall
   await room.webSocketMessage(b, JSON.stringify({type: 'pose', pose: {...pose, x: can.x, z: can.z}}));
   await room.webSocketMessage(b, JSON.stringify({type: 'pickup', id: can.id}));

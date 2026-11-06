@@ -63,7 +63,7 @@ export function createWorldHits(level, doors = []) {
       if (toWorld) { if (p.sphere.center.distanceTo(center) > p.sphere.radius + radius) continue; sphere.center.copy(center).applyMatrix4(p.inv); }
       else { if (lp.center.distanceTo(center) > lp.radius + radius) continue; sphere.center.copy(center); }
       sphere.radius = radius;
-      const pos = p.g.attributes.position, uv1 = p.g.attributes.uv1, idx = p.g.index;
+      const pos = p.g.attributes.position, uv1 = p.g.attributes.uv1, idx = p.g.index, nor = p.g.attributes.normal;
       p.bvh.shapecast({
         intersectsBounds: box => box.intersectsSphere(sphere),
         intersectsTriangle: (t, i) => {
@@ -72,6 +72,9 @@ export function createWorldHits(level, doors = []) {
           out.push({
             p: v.map(j => { const q = new THREE.Vector3().fromBufferAttribute(pos, j); return toWorld ? q.applyMatrix4(p.mesh.matrixWorld) : q; }),
             uv: v.map(j => uv1 ? new THREE.Vector2(uv1.getX(j), uv1.getY(j)) : new THREE.Vector2()),
+            // which way the surface faces (its own normals, so it doesn't depend on winding)
+            n: nor ? (() => { const q = new THREE.Vector3(); for (const j of v) q.x += nor.getX(j), q.y += nor.getY(j), q.z += nor.getZ(j);
+              q.normalize(); return toWorld ? q.transformDirection(p.mesh.matrixWorld) : q; })() : null,
           });
           return false;
         },
@@ -133,31 +136,77 @@ function clipPolygon(poly, axis, limit, sign) {
   return out;
 }
 
-export function cutDecal(hits, {point, normal, up, width, height, depth = .18, minFacing = .25}) {
-  const z = normal.clone().normalize();
-  const y = up.clone().addScaledVector(z, -up.dot(z)).normalize();
+// Paint is thrown along `dir` (or straight at the surface when there's no direction): every
+// surface facing back up that line within the decal's box takes paint, so it wraps round the
+// corner it can reach and lands on whatever's around a small object, but never on faces turned
+// away (backs, undersides). The box is cut into a grid and each corner checks whether something
+// nearer the thrower is in the way, so objects leave a soft-edged paint shadow behind them.
+export function cutDecal(hits, {point, normal, up, width, height, dir = null, front = .15, back = .3, grid = 4}) {
+  const z = dir ? dir.clone().negate().normalize() : normal.clone().normalize();
+  const y = up.clone().addScaledVector(z, -up.dot(z));
+  if (y.lengthSq() < 1e-6) y.set(0, 1, 0).addScaledVector(z, -z.y);
+  y.normalize();
   const x = new THREE.Vector3().crossVectors(y, z);
   const hx = width / 2, hy = height / 2;
-  const tris = hits.gather(point, Math.hypot(hx, hy, depth));
-  const verts = [];
+  const tris = hits.gather(point, Math.hypot(hx, hy, Math.max(front, back)));
   const local = p => { _v.copy(p).sub(point); return new THREE.Vector3(_v.dot(x), _v.dot(y), _v.dot(z)); };
   const tn = new THREE.Vector3(), e1 = new THREE.Vector3(), e2 = new THREE.Vector3();
+  // 1. the faces that see the thrower, clipped to the box
+  const faces = [];
   for (const t of tris) {
-    tn.crossVectors(e1.subVectors(t.p[1], t.p[0]), e2.subVectors(t.p[2], t.p[0])).normalize();
-    if (Math.abs(tn.dot(z)) < minFacing) continue;          // walls seen edge-on would smear the image
+    let n = t.n;
+    if (!n) { n = tn.crossVectors(e1.subVectors(t.p[1], t.p[0]), e2.subVectors(t.p[2], t.p[0])).normalize().clone(); if (n.dot(z) < 0) n.negate(); }
+    const facing = n.dot(z);
+    if (facing < .03) continue;                               // edge-on or turned away: no paint
     let poly = t.p.map((p, k) => ({l: local(p), uv: t.uv[k]}));
-    for (const [axis, lim] of [['x', hx], ['y', hy], ['z', depth]]) {
-      poly = clipPolygon(poly, axis, lim, 1); if (poly.length < 3) break;
-      poly = clipPolygon(poly, axis, lim, -1); if (poly.length < 3) break;
+    for (const [axis, lo, hi] of [['x', hx, hx], ['y', hy, hy], ['z', back, front]]) {
+      poly = clipPolygon(poly, axis, hi, 1); if (poly.length < 3) break;
+      poly = clipPolygon(poly, axis, lo, -1); if (poly.length < 3) break;
     }
-    if (poly.length < 3) continue;
-    for (let k = 1; k < poly.length - 1; k++) for (const q of [poly[0], poly[k], poly[k + 1]]) verts.push(q);
+    if (poly.length >= 3) faces.push({poly, n, facing});
   }
-  // back to world space, nudged off the surface, with the decal's own uv
-  return verts.map(q => ({
-    p: point.clone().addScaledVector(x, q.l.x).addScaledVector(y, q.l.y).addScaledVector(z, q.l.z).addScaledVector(normal, .004),
-    u: q.l.x / width + .5, v: q.l.y / height + .5, uv1: q.uv,
-  }));
+  // 2. what's nearer the thrower casts a paint shadow: occluders as flat triangles in the box's frame
+  const occ = [];
+  for (const f of faces) for (let k = 1; k < f.poly.length - 1; k++) {
+    const a = f.poly[0].l, b = f.poly[k].l, c = f.poly[k + 1].l;
+    occ.push({a, b, c, minX: Math.min(a.x, b.x, c.x), maxX: Math.max(a.x, b.x, c.x), minY: Math.min(a.y, b.y, c.y), maxY: Math.max(a.y, b.y, c.y),
+      maxZ: Math.max(a.z, b.z, c.z), d: (b.y - c.y) * (a.x - c.x) + (c.x - b.x) * (a.y - c.y)});
+  }
+  const lit = l => {
+    for (const o of occ) {
+      if (o.maxZ < l.z + .03 || l.x < o.minX || l.x > o.maxX || l.y < o.minY || l.y > o.maxY || Math.abs(o.d) < 1e-9) continue;
+      const w1 = ((o.b.y - o.c.y) * (l.x - o.c.x) + (o.c.x - o.b.x) * (l.y - o.c.y)) / o.d;
+      const w2 = ((o.c.y - o.a.y) * (l.x - o.c.x) + (o.a.x - o.c.x) * (l.y - o.c.y)) / o.d;
+      const w3 = 1 - w1 - w2;
+      if (w1 < -1e-4 || w2 < -1e-4 || w3 < -1e-4) continue;
+      if (w1 * o.a.z + w2 * o.b.z + w3 * o.c.z > l.z + .03) return 0;   // something in front of it
+    }
+    return 1;
+  };
+  // 3. each face cut into grid cells, so shadows and the fade at grazing angles follow the surface
+  const verts = [], cw = width / grid, ch = height / grid;
+  const fade = f => Math.min(1, (f - .03) / .3);
+  for (const f of faces) {
+    const k0 = fade(f.facing);
+    for (let gx = 0; gx < grid; gx++) for (let gy = 0; gy < grid; gy++) {
+      const x0 = -hx + gx * cw, y0 = -hy + gy * ch;
+      let poly = f.poly;
+      poly = clipPolygon(poly, 'x', -x0, -1); if (poly.length < 3) continue;
+      poly = clipPolygon(poly, 'x', x0 + cw, 1); if (poly.length < 3) continue;
+      poly = clipPolygon(poly, 'y', -y0, -1); if (poly.length < 3) continue;
+      poly = clipPolygon(poly, 'y', y0 + ch, 1); if (poly.length < 3) continue;
+      const ks = poly.map(q => k0 * lit(q.l));
+      if (ks.every(k => k === 0)) continue;
+      for (let k = 1; k < poly.length - 1; k++) for (const i of [0, k, k + 1]) {
+        const q = poly[i];
+        verts.push({
+          p: point.clone().addScaledVector(x, q.l.x).addScaledVector(y, q.l.y).addScaledVector(z, q.l.z).addScaledVector(f.n, .004),
+          u: q.l.x / width + .5, v: q.l.y / height + .5, uv1: q.uv, k: ks[i],
+        });
+      }
+    }
+  }
+  return verts;
 }
 
 // --------------------------------------------------- growable decal batches
@@ -193,7 +242,7 @@ export function createBatch(material, capacity = 30000) {
     for (let i = 0; i < m.count; i++) {
       const o = at + i, q = m.verts[i];
       a.pos.set([q.p.x, q.p.y, q.p.z], o * 3); a.uv.set([q.u, q.v], o * 2); a.uv1.set([q.uv1.x, q.uv1.y], o * 2);
-      a.col.set([m.rgb[0], m.rgb[1], m.rgb[2], Math.round(255 * (m.alpha ?? 1))], o * 4);
+      a.col.set([m.rgb[0], m.rgb[1], m.rgb[2], Math.round(255 * (m.alpha ?? 1) * (q.k ?? 1))], o * 4);
     }
   }
   function repack(extra = 0) {
@@ -218,8 +267,7 @@ export function createBatch(material, capacity = 30000) {
     setAlpha(m, alpha) {
       if (m.dead || !m.count) return;
       m.alpha = alpha;
-      const v = Math.round(255 * alpha);
-      for (let i = 0; i < m.count; i++) a.col[(m.start + i) * 4 + 3] = v;
+      for (let i = 0; i < m.count; i++) a.col[(m.start + i) * 4 + 3] = Math.round(255 * alpha * (m.verts[i].k ?? 1));
       const attr = geo.attributes.color; attr.addUpdateRange(m.start * 4, m.count * 4); attr.needsUpdate = true;
     },
     remove(m) {

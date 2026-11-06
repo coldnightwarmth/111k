@@ -271,7 +271,7 @@ export function handleMessage(player, data, now, room = {items: {}, players: () 
       if (room.marks.splats.length > MAX_SPLATS) room.marks.splats.splice(0, room.marks.splats.length - MAX_SPLATS);
       marksChanged = true;
     }
-    if (target) { const dropped = releaseItems(items, target); out.push(...dropped); itemsChanged = dropped.length > 0; }
+    // a paintball knocks you back (on your own screen) but you keep hold of what you've got
     return {out, changed: true, marksChanged, itemsChanged};
   }
   if (m.type === 'spray') {

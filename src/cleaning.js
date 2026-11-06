@@ -19,14 +19,19 @@ function glowMaterial(map) {
 
 export function createCleaning({level, scene, hits}) {
   // ------------------------------------------------ the level's own graffiti
-  // Each page of baked graffiti is one mesh; split it into pieces by which triangles touch.
-  const baked = new Map();                 // id -> {mesh, tris}
-  const parts = [];                        // {mesh, bvh, owner: Int32Array tri -> piece index, pieces: [id]}
+  // Each page of baked graffiti is one mesh per chunk of the level; split it into pieces by which
+  // triangles touch, then join up the parts of one piece that a chunk or seam cut apart: same
+  // piece of the atlas, close together.
+  const atlas = level.meta.graffiti || [];
+  const pieceAt = (page, u, v) => atlas.find(p => `graffiti_${p.page}` === page && u >= Math.min(p.uv[0], p.uv[2]) - 1e-4 && u <= Math.max(p.uv[0], p.uv[2]) + 1e-4
+    && v >= Math.min(p.uv[1], p.uv[3]) - 1e-4 && v <= Math.max(p.uv[1], p.uv[3]) + 1e-4);
+  const comps = [];                        // {mesh, tris, center, page, piece}
+  const parts = [];                        // {mesh, bvh, owner: Int32Array tri -> component, inv}
   for (const mesh of level.meshes) {
     if (!/^graffiti_/.test(mesh.material?.name || '') || !mesh.geometry.index) continue;
     const g = mesh.geometry;
     const bvh = new MeshBVH(g, {maxLeafTris: 8});          // (reorders the index: triangles are read after)
-    const idx = g.index, pos = g.attributes.position, triCount = idx.count / 3;
+    const idx = g.index, pos = g.attributes.position, tex = g.attributes.uv, triCount = idx.count / 3;
     const parent = Int32Array.from({length: triCount}, (_, i) => i);
     const find = i => { while (parent[i] !== i) { parent[i] = parent[parent[i]]; i = parent[i]; } return i; };
     const byPoint = new Map();
@@ -39,18 +44,39 @@ export function createCleaning({level, scene, hits}) {
     const groups = new Map();
     for (let t = 0; t < triCount; t++) { const r = find(t); if (!groups.has(r)) groups.set(r, []); groups.get(r).push(t); }
     mesh.updateMatrixWorld();
-    const owner = new Int32Array(triCount), pieces = [], c = new THREE.Vector3(), v = new THREE.Vector3();
+    const owner = new Int32Array(triCount), c = new THREE.Vector3(), v = new THREE.Vector3();
     for (const tris of groups.values()) {
-      c.set(0, 0, 0);
-      for (const t of tris) for (let k = 0; k < 3; k++) c.add(v.fromBufferAttribute(pos, idx.getX(t * 3 + k)));
-      c.divideScalar(tris.length * 3).applyMatrix4(mesh.matrixWorld);
-      const id = `${mesh.material.name}:${c.x.toFixed(2)},${c.y.toFixed(2)},${c.z.toFixed(2)}`;
-      if (baked.has(id)) { baked.get(id).tris.push(...tris); for (const t of tris) owner[t] = pieces.indexOf(id); continue; }
-      for (const t of tris) owner[t] = pieces.length;
-      pieces.push(id);
-      baked.set(id, {mesh, tris});
+      c.set(0, 0, 0); let u = 0, w = 0;
+      for (const t of tris) for (let k = 0; k < 3; k++) { const vi = idx.getX(t * 3 + k); c.add(v.fromBufferAttribute(pos, vi)); if (tex) { u += tex.getX(vi); w += tex.getY(vi); } }
+      const n = tris.length * 3;
+      c.divideScalar(n).applyMatrix4(mesh.matrixWorld);
+      for (const t of tris) owner[t] = comps.length;
+      comps.push({mesh, tris, center: c.clone(), page: mesh.material.name, piece: tex ? pieceAt(mesh.material.name, u / n, w / n) : null, weight: tris.length});
     }
-    parts.push({mesh, bvh, owner, pieces, inv: mesh.matrixWorld.clone().invert()});
+    parts.push({mesh, bvh, owner, inv: mesh.matrixWorld.clone().invert()});
+  }
+  // join the parts of each placed piece
+  const root = comps.map((_, i) => i);
+  const top = i => { while (root[i] !== i) { root[i] = root[root[i]]; i = root[i]; } return i; };
+  const byPiece = new Map();
+  comps.forEach((c, i) => { if (!c.piece) return; const key = `${c.page}|${c.piece.name}`; if (!byPiece.has(key)) byPiece.set(key, []); byPiece.get(key).push(i); });
+  for (const list of byPiece.values()) {
+    const reach = Math.max(comps[list[0]].piece.w, comps[list[0]].piece.h) * 1.05;
+    for (let a = 0; a < list.length; a++) for (let b = a + 1; b < list.length; b++)
+      if (comps[list[a]].center.distanceTo(comps[list[b]].center) < reach) root[top(list[a])] = top(list[b]);
+  }
+  const baked = new Map();                 // id -> {parts: [{mesh, tris}]}
+  const compId = new Array(comps.length);
+  const sets = new Map();
+  comps.forEach((c, i) => { const r = top(i); if (!sets.has(r)) sets.set(r, []); sets.get(r).push(i); });
+  for (const members of sets.values()) {
+    const c = new THREE.Vector3(); let wsum = 0;
+    for (const i of members) { c.addScaledVector(comps[i].center, comps[i].weight); wsum += comps[i].weight; }
+    c.divideScalar(wsum);
+    const id = `${comps[members[0]].page}:${c.x.toFixed(2)},${c.y.toFixed(2)},${c.z.toFixed(2)}`;
+    const entry = baked.get(id) || {parts: []};
+    for (const i of members) { entry.parts.push({mesh: comps[i].mesh, tris: comps[i].tris}); compId[i] = id; }
+    baked.set(id, entry);
   }
   const erased = new Set();
 
@@ -65,7 +91,7 @@ export function createCleaning({level, scene, hits}) {
     for (const p of parts) {
       ray.set(origin, dir).applyMatrix4(p.inv);
       for (const h of p.bvh.raycast(ray, THREE.DoubleSide)) {
-        const id = p.pieces[p.owner[h.faceIndex]];
+        const id = compId[p.owner[h.faceIndex]];
         if (erased.has(id)) continue;
         const d = h.point.applyMatrix4(p.mesh.matrixWorld).distanceTo(origin);
         if (d < limit && (!best || d < best.distance)) best = {kind: 'baked', id, distance: d};
@@ -102,14 +128,15 @@ export function createCleaning({level, scene, hits}) {
     const position = [], uv = [];
     let map = null, parent = scene;
     if (target.kind === 'baked') {
-      const {mesh, tris} = baked.get(target.id);
-      const g = mesh.geometry, pos = g.attributes.position, tex = g.attributes.uv, idx = g.index;
-      for (const t of tris) for (let k = 0; k < 3; k++) {
-        const vi = idx.getX(t * 3 + k);
-        a.fromBufferAttribute(pos, vi).applyMatrix4(mesh.matrixWorld);
-        position.push(a.x, a.y, a.z); uv.push(tex.getX(vi), tex.getY(vi));
+      for (const {mesh, tris} of baked.get(target.id).parts) {
+        const g = mesh.geometry, pos = g.attributes.position, tex = g.attributes.uv, idx = g.index;
+        for (const t of tris) for (let k = 0; k < 3; k++) {
+          const vi = idx.getX(t * 3 + k);
+          a.fromBufferAttribute(pos, vi).applyMatrix4(mesh.matrixWorld);
+          position.push(a.x, a.y, a.z); uv.push(tex.getX(vi), tex.getY(vi));
+        }
+        map = mesh.material.map;
       }
-      map = mesh.material.map;
     } else {
       const mk = target.mark;
       for (const q of mk.verts) { position.push(q.p.x, q.p.y, q.p.z); uv.push(q.u, q.v); }
@@ -132,9 +159,11 @@ export function createCleaning({level, scene, hits}) {
     eraseBaked(id) {
       if (erased.has(id) || !baked.has(id)) return;
       erased.add(id);
-      const {mesh, tris} = baked.get(id), idx = mesh.geometry.index;
-      for (const t of tris) { const v = idx.getX(t * 3); idx.setX(t * 3 + 1, v); idx.setX(t * 3 + 2, v); }
-      idx.needsUpdate = true;
+      for (const {mesh, tris} of baked.get(id).parts) {
+        const idx = mesh.geometry.index;
+        for (const t of tris) { const v = idx.getX(t * 3); idx.setX(t * 3 + 1, v); idx.setX(t * 3 + 2, v); }
+        idx.needsUpdate = true;
+      }
       if (glowKey === `baked|${id}`) clearGlow();
     },
     forget(kind, id) { if (glowKey === `${kind}|${id}`) clearGlow(); },

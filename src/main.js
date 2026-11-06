@@ -241,7 +241,9 @@ async function start() {
     const up = Math.abs(normal.y) > .9 ? new THREE.Vector3(Math.cos(s.s), 0, Math.sin(s.s)) : new THREE.Vector3(0, 1, 0);
     up.applyAxisAngle(normal, (s.s % 628) / 100);
     // doors are thin: cut shallow so the paint stays on the face that was hit
-    const verts = cutDecal(onDoor ? onDoor.surface : hits, {point, normal, up, width: size, height: size, depth: onDoor ? .025 : .12});
+    // thrown along the ball's flight: wraps the corner it can reach, lands round small things, never behind
+    const verts = cutDecal(onDoor ? onDoor.surface : hits, {point, normal, up, width: size, height: size,
+      dir: s.v ? new THREE.Vector3(...s.v) : null, front: .12, back: onDoor ? .03 : .35, grid: 3});
     const [cu, cv] = splatCell(s.s);
     for (const q of verts) { q.u = cu + q.u / 4; q.v = cv + q.v / 2; }
     const m = batch.add(verts, rgbOf(s.c));
@@ -263,16 +265,21 @@ async function start() {
     }
     return doorPages.get(key);
   }
+  // the patch a tag covers: cut from whatever it lands on (a door's own surface for a door)
+  function sprayVerts(s, piece, onDoor, grid) {
+    const point = new THREE.Vector3(...s.p), normal = new THREE.Vector3(...s.n), up = new THREE.Vector3(...s.up);
+    const verts = cutDecal(onDoor || hits, {point, normal, up, width: s.size, height: s.size * piece.h / piece.w,
+      dir: s.v ? new THREE.Vector3(...s.v) : null, front: .15, back: onDoor ? .03 : .5, grid});
+    const [u0, v0, u1, v1] = piece.uv;
+    for (const q of verts) { q.u = u0 + q.u * (u1 - u0); q.v = v0 + q.v * (v1 - v0); }
+    return verts;
+  }
   function addSpray(s, fresh = false) {
     const piece = pieceByName.get(s.piece);
     if (!piece) return;
     const onDoor = s.d !== undefined ? hits.door(s.d) : null;
     if (s.d !== undefined && !onDoor) return;
-    const point = new THREE.Vector3(...s.p), normal = new THREE.Vector3(...s.n), up = new THREE.Vector3(...s.up);
-    const w = s.size, h = s.size * piece.h / piece.w;
-    const verts = cutDecal(onDoor || hits, {point, normal, up, width: w, height: h, depth: onDoor ? .025 : .15, minFacing: .45});
-    const [u0, v0, u1, v1] = piece.uv;
-    for (const q of verts) { q.u = u0 + q.u * (u1 - u0); q.v = v0 + q.v * (v1 - v0); }
+    const verts = sprayVerts(s, piece, onDoor, 6);
     const batch = onDoor ? doorPageBatch(s.d, piece.page) : pageBatch(piece.page);
     const m = batch.add(verts, [255, 255, 255], fresh ? 0 : 1);
     sprayMarks.push({batch, m, kind: 'spray', id: `${s.piece}@${s.p.join(',')}`, verts: m.verts});
@@ -364,7 +371,7 @@ async function start() {
       const next = simulate(o, v, t), seg = next.clone().sub(prev), len = seg.length(), dir = seg.clone().divideScalar(len);
       let best = null;
       const h = hits.raycast(prev, dir, len, true);
-      if (h) best = {t: t - step + step * h.distance / len, point: h.point, normal: h.normal, d: h.distance, door: h.door, local: h.local};
+      if (h) best = {t: t - step + step * h.distance / len, point: h.point, normal: h.normal, d: h.distance, door: h.door, local: h.local, mesh: h.mesh};
       for (const p of [...peers.values(), {id: network.id, last: {x: player.x, z: player.z}, avatar: me}]) {
         if (p.id === ignore || !p.last || !p.avatar) continue;
         // a capsule around each body: 0.28 m wide, feet to head
@@ -509,8 +516,14 @@ async function start() {
       const ln = land.point.clone().sub(new THREE.Vector3(a.root.position.x, land.point.y, a.root.position.z)).normalize()
         .applyQuaternion(a.root.quaternion.clone().invert());
       msg.local = {p: lp.toArray().map(r3), n: ln.toArray().map(r3)};
-    } else if (land.door !== undefined) msg.hit = {p: land.local.point.toArray().map(r3), n: land.local.normal.toArray().map(r3), d: land.door};
-    else if (land.normal) msg.hit = {p: land.point.toArray().map(r3), n: land.normal.toArray().map(r3)};
+    } else {
+      // which way the ball was flying when it hit (in the door's space for a door)
+      const fly = new THREE.Vector3(v.x, v.y - GRAVITY * land.t, v.z).normalize();
+      if (land.door !== undefined) {
+        fly.transformDirection(land.mesh.matrixWorld.clone().invert());
+        msg.hit = {p: land.local.point.toArray().map(r3), n: land.local.normal.toArray().map(r3), d: land.door, v: fly.toArray().map(r3)};
+      } else if (land.normal) msg.hit = {p: land.point.toArray().map(r3), n: land.normal.toArray().map(r3), v: fly.toArray().map(r3)};
+    }
     items.kick(gun.state.id);
     network.send(msg);
   }
@@ -598,30 +611,77 @@ async function start() {
     const dot = document.createElement('i'); dot.style.setProperty('--paint', c === RANDOM_PAINT ? RAINBOW : hex(c));
     paintLabel.replaceChildren(dot, document.createTextNode(isTouch ? 'tap paint to change' : 'esc: change paint'));
   }
-  function spray() {
-    const now = performance.now(), can = held();
-    if (!can || !chosenPiece || now - lastSpray < SPRAY_INTERVAL_MS) return;
+  // the next tag's little twist and size are rolled ahead, so the preview shows exactly what you'll get
+  let nextTilt = 0, nextScale = 1;
+  const rollSpray = () => { nextTilt = (Math.random() * 2 - 1) * 3 * Math.PI / 180; nextScale = .9 + Math.random() * .2; };
+  rollSpray();
+  // what a click would spray right now, as the message to send (null if there's no wall in reach)
+  function planSpray() {
     const piece = pieceByName.get(chosenPiece);
+    if (!piece) return null;
     const aim = aimPoint(SPRAY_RANGE + 3, true);
-    if (!aim.hit || Math.hypot(aim.point.x - player.x, aim.point.z - player.z) > SPRAY_RANGE) { items.shake(can.state.id); return; }
-    lastSpray = now;
+    if (!aim.hit || Math.hypot(aim.point.x - player.x, aim.point.z - player.z) > SPRAY_RANGE) return null;
     const n = aim.hit.normal;
     // upright on walls; on floors and ceilings, readable from where you stand
     const up = Math.abs(n.y) < .7 ? new THREE.Vector3(0, 1, 0).addScaledVector(n, -n.y).normalize()
       : new THREE.Vector3(aim.dir.x, 0, aim.dir.z).normalize().multiplyScalar(n.y > 0 ? 1 : -1);
-    const tilt = (Math.random() * 2 - 1) * 3 * Math.PI / 180;   // up to 3° either way
-    up.applyAxisAngle(n, tilt);
+    up.applyAxisAngle(n, nextTilt);                           // up to 3° either way
     const big = Math.max(piece.w, piece.h);
-    const size = Math.max(.35, Math.min(piece.w * Math.min(1, 1.5 / big), 2.2)) * (.9 + Math.random() * .2);
-    items.shake(can.state.id);
+    const size = Math.max(.35, Math.min(piece.w * Math.min(1, 1.5 / big), 2.2)) * nextScale;
+    // sprayed partly along your aim (so it wraps the corner you can see) and partly straight on (so the piece reads)
+    const fly = aim.dir.clone().normalize().add(n.clone().negate()).normalize();
     const msg = {type: 'spray', p: aim.point.toArray().map(r3), n: n.toArray().map(r3), up: up.toArray().map(r3), piece: chosenPiece,
-      size: Math.round(size * 100) / 100};
+      size: Math.round(size * 100) / 100, v: fly.toArray().map(r3)};
     if (aim.hit.door !== undefined) {   // on a door: send it in the door's own space so it stays put as the door swings
       const inv = aim.hit.mesh.matrixWorld.clone().invert();
       Object.assign(msg, {p: aim.hit.local.point.toArray().map(r3), n: aim.hit.local.normal.toArray().map(r3),
-        up: up.clone().transformDirection(inv).toArray().map(r3), d: aim.hit.door});
+        up: up.clone().transformDirection(inv).toArray().map(r3), d: aim.hit.door, v: fly.clone().transformDirection(inv).toArray().map(r3)});
     }
+    return msg;
+  }
+  function spray() {
+    const now = performance.now(), can = held();
+    if (!can || !chosenPiece || now - lastSpray < SPRAY_INTERVAL_MS) return;
+    camera.updateMatrixWorld();
+    const msg = planSpray();
+    items.shake(can.state.id);
+    if (!msg) return;
+    lastSpray = now;
     network.send(msg);
+    rollSpray();
+    previewKey = '';
+  }
+
+  // a faint ghost of the tag where a click would put it
+  let preview = null, previewKey = '', previewAt = 0;
+  function clearPreview() {
+    if (preview) { preview.removeFromParent(); preview.geometry.dispose(); preview.material.dispose(); preview = null; }
+    previewKey = '';
+  }
+  function updatePreview(now, show) {
+    if (!show) { if (preview) clearPreview(); return; }
+    if (now - previewAt < 80) return;
+    previewAt = now;
+    camera.updateMatrixWorld();
+    const s = planSpray(), piece = s && pieceByName.get(s.piece);
+    if (!s) { clearPreview(); return; }
+    const key = `${s.piece}|${s.d ?? ''}|${s.p}|${s.n}|${s.up}|${s.v}|${s.size}`;
+    if (key === previewKey) return;
+    const onDoor = s.d !== undefined ? hits.door(s.d) : null;
+    const verts = sprayVerts(s, piece, onDoor, 4);
+    clearPreview(); previewKey = key;
+    if (!verts.length) return;
+    const position = [], uv = [], color = [];
+    for (const q of verts) { position.push(q.p.x, q.p.y, q.p.z); uv.push(q.u, q.v); color.push(1, 1, 1, q.k ?? 1); }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(position, 3));
+    geo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+    geo.setAttribute('color', new THREE.Float32BufferAttribute(color, 4));
+    const map = level.materials.get(`graffiti_${piece.page}`)?.map || null;
+    preview = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({map, vertexColors: true, transparent: true, opacity: .38,
+      depthWrite: false, toneMapped: false, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -6, polygonOffsetUnits: -6}));
+    preview.renderOrder = 7; preview.frustumCulled = false;
+    (onDoor ? onDoor.mesh : scene).add(preview);
   }
 
   // ----------------------------------------------------------- network
@@ -713,7 +773,12 @@ async function start() {
           if (m.target && m.local) {
             const local = {...m.local, c: m.c, s: m.s};
             const end = simulate(o, v, m.t);
-            if (m.target === network.id) { paintAvatar(me, local); paintAvatar(meView, local); shake = Math.max(shake, .5); }
+            if (m.target === network.id) {
+              paintAvatar(me, local); paintAvatar(meView, local); shake = Math.max(shake, .6);
+              // knocked back along the ball's flight (you keep whatever you're holding)
+              const fly = Math.hypot(v.x, v.z) || 1;
+              player.kx += v.x / fly * 3.6; player.kz += v.z / fly * 3.6;
+            }
             else {
               const p = peers.get(m.target);
               if (p?.avatar) paintAvatar(p.avatar, local); else p?.pendingPaint.push(local);
@@ -1031,6 +1096,7 @@ async function start() {
       cleanTarget = cleaning.pick(o, d, 3.2, [...splatMarks, ...sprayMarks]);
     }
     cleaning.highlight(cleanTarget);
+    updatePreview(now, h?.state.type === 'spray' && !!chosenPiece && !frozen && gallery.hidden);
     const pushable = !frozen && onButton();
     machine.highlight(pushable);
     machine.update(dt);

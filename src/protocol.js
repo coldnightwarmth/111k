@@ -113,6 +113,8 @@ export function cleanSplat(s) {
   const p = vec(s.p, 500), n = unit(s.n), c = int(s.c, 0, 0xffffff), seed = int(s.s, 0, 0xffffff);
   if (!p || !n || c === null || seed === null) return null;
   const out = {p, n, c, s: seed};
+  const v = s.v !== undefined ? unit(s.v) : null;                 // which way the paint was flying
+  if (v) out.v = v;
   if (s.d !== undefined && s.d !== null) {           // on a swinging door: p and n are in that door's hinge space
     const d = int(s.d, 0, 999);
     if (d === null) return null;
@@ -129,6 +131,8 @@ export function cleanSpray(s) {
   const size = Number.isFinite(s.size) ? round(Math.max(.2, Math.min(2.4, s.size)), 2) : null;
   if (!p || !n || !up || !piece || size === null) return null;
   const out = {p, n, up, piece, size};
+  const v = s.v !== undefined ? unit(s.v) : null;                 // which way it was sprayed
+  if (v) out.v = v;
   if (s.d !== undefined && s.d !== null) {           // on a swinging door: in that door's hinge space
     const d = int(s.d, 0, 999);
     if (d === null) return null;
