@@ -5,8 +5,14 @@ const POSE_RETRY_MS = 100;
 const HEARTBEAT_MS = 25000;
 const PONG_TIMEOUT_MS = 15000;
 
-export function connectRoom({url, onState, onPose, onLeave, onChat, onStatus, onItem, onPunch}) {
-  const session = crypto.randomUUID();
+export function connectRoom({url, onState, onPose, onLeave, onChat, onStatus, onItem, onPunch, onMessage}) {
+  // the session lives as long as the tab: a refresh reconnects as the same player
+  let session = null;
+  try { session = sessionStorage.getItem('111k:session'); } catch {}
+  if (!/^[a-f0-9-]{36}$/.test(session || '')) {
+    session = crypto.randomUUID();
+    try { sessionStorage.setItem('111k:session', session); } catch {}
+  }
   let id = null, socket, closed = false, delay = 1000, offset = 0, synchronized = false;
   let reconnectTimer, poseTimer, pongTimer, queuedPose = null, lastActivity = 0;
 
@@ -73,6 +79,7 @@ export function connectRoom({url, onState, onPose, onLeave, onChat, onStatus, on
       else if (m.type === 'chat') onChat(m);
       else if (m.type === 'item') onItem?.(m.item);
       else if (m.type === 'punch') onPunch?.(m);
+      else onMessage?.(m);
     };
     current.onclose = () => disconnect(current);
     current.onerror = () => disconnect(current);

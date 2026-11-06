@@ -11,7 +11,13 @@ export const ROOMS = ['office'];
 export const PICKUP_RANGE = 2.6;     // metres from a player's feet to an item they can grab
 export const PUNCH_RANGE = 2.0;      // server-side check (clients aim at 1.6)
 export const PUNCH_COOLDOWN_MS = 420;
-export const PUNCH_DURATION = .45;
+export const PUNCH_DURATION = .5;
+export const SHOT_INTERVAL_MS = 160;   // paintball rate of fire
+export const SPRAY_INTERVAL_MS = 700;
+export const SPRAY_RANGE = 3.2;        // metres from a player to the wall they tag
+export const MAX_SPLATS = 400;         // paint marks the room remembers (oldest go first)
+export const MAX_SPRAYS = 150;
+export const ITEM_TYPES = ['flashlight', 'paintball', 'spray'];
 
 // Emotes map to Pose_<id> clips in the avatar model.
 export const EMOTES = Object.freeze([
@@ -44,6 +50,7 @@ export function sanitizePose(p) {
     x: round(x), y: round(y), z: round(z), yaw: round(yaw), pitch: round(pitch), room,
     crouch: Number.isFinite(p.crouch) ? round(Math.max(0, Math.min(1, p.crouch))) : 0,
     jumpTime: Number.isFinite(p.jumpTime) ? round(Math.max(-1, Math.min(1.1, p.jumpTime))) : -1,
+    jumpPower: Number.isFinite(p.jumpPower) ? round(Math.max(.5, Math.min(1.5, p.jumpPower)), 2) : 1,
     emote, emoteTime: emote ? round(normalizeEmoteTime(p.emoteTime)) : 0,
     typing: p.typing === true,
     punchTime: Number.isFinite(p.punchTime) ? round(Math.max(-1, Math.min(PUNCH_DURATION, p.punchTime))) : -1,
@@ -52,7 +59,7 @@ export function sanitizePose(p) {
 
 export function samePose(a, b) {
   if (!a || !b) return false;
-  for (const k of ['x', 'y', 'z', 'yaw', 'pitch', 'room', 'crouch', 'jumpTime', 'emote', 'emoteTime', 'typing', 'punchTime'])
+  for (const k of ['x', 'y', 'z', 'yaw', 'pitch', 'room', 'crouch', 'jumpTime', 'jumpPower', 'emote', 'emoteTime', 'typing', 'punchTime'])
     if (a[k] !== b[k]) return false;
   return true;
 }
@@ -64,6 +71,49 @@ export function sanitizeChat(text) {
 
 // Held items (flashlights): shared room state. Positions are where they lie when nobody holds them.
 export function cleanItem(it) {
-  return {id: it.id, type: it.type, x: round(it.x), y: round(it.y), z: round(it.z), yaw: round(it.yaw),
+  return {id: it.id, type: ITEM_TYPES.includes(it.type) ? it.type : 'flashlight', x: round(it.x), y: round(it.y), z: round(it.z), yaw: round(it.yaw),
     holder: it.holder || null, on: it.on === true};
+}
+
+// Names only ever show in the chat log.
+export function sanitizeName(name) {
+  if (typeof name !== 'string') return '';
+  return name.replace(/[\u0000-\u001f\u007f\u2028\u2029<>]/g, '').replace(/\s+/g, ' ').trim().slice(0, 24);
+}
+
+// Avatar looks: a flat object of short trait ids. Clients normalize it against
+// the cards.art catalogs; the server only checks its shape.
+export function sanitizeLook(look) {
+  if (!look || typeof look !== 'object' || Array.isArray(look)) return null;
+  const out = {};
+  let n = 0;
+  for (const [k, v] of Object.entries(look)) {
+    if (++n > 24) break;
+    if (!/^[a-zA-Z]{1,16}$/.test(k) || typeof v !== 'string' || !/^[#a-zA-Z0-9_-]{1,40}$/.test(v)) continue;
+    out[k] = v;
+  }
+  return Object.keys(out).length ? out : null;
+}
+
+const vec = (v, lim) => Array.isArray(v) && v.length === 3 && v.every(x => Number.isFinite(x) && Math.abs(x) <= lim)
+  ? v.map(x => round(x)) : null;
+const unit = v => { const a = vec(v, 1.01); if (!a) return null; const l = Math.hypot(...a); return l > .9 && l < 1.1 ? a : null; };
+const int = (v, lo, hi) => (Number.isInteger(v) && v >= lo && v <= hi ? v : null);
+
+// A paint mark on the level: where, which way the surface faces, colour and shape.
+export function cleanSplat(s) {
+  if (!s || typeof s !== 'object') return null;
+  const p = vec(s.p, 500), n = unit(s.n), c = int(s.c, 0, 0xffffff), seed = int(s.s, 0, 0xffffff);
+  if (!p || !n || c === null || seed === null) return null;
+  return {p, n, c, s: seed};
+}
+
+// A sprayed graffiti piece: which piece, where, facing, its up direction and size.
+export function cleanSpray(s) {
+  if (!s || typeof s !== 'object') return null;
+  const p = vec(s.p, 500), n = unit(s.n), up = unit(s.up);
+  const piece = typeof s.piece === 'string' && /^[a-zA-Z0-9_.-]{1,48}$/.test(s.piece) ? s.piece : null;
+  const size = Number.isFinite(s.size) ? round(Math.max(.2, Math.min(2.4, s.size)), 2) : null;
+  if (!p || !n || !up || !piece || size === null) return null;
+  return {p, n, up, piece, size};
 }

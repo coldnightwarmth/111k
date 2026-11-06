@@ -48,10 +48,14 @@ export function createChatUI({onSend, onOpenChange}) {
     get open() { return open; },
     get typing() { return open && input.value.trim().length > 0; },
     setOpen,
-    record(text, {own = false, system = false, hue = 0} = {}) {
+    record(text, {own = false, system = false, hue = 0, name = null} = {}) {
       const line = document.createElement('div');
       line.className = 'line' + (own ? ' own' : '') + (system ? ' system' : '');
-      line.textContent = text;
+      if (name !== null) {
+        const who = document.createElement('b'); who.className = 'who';
+        who.textContent = (name || 'anon') + ':';
+        line.append(who, ' ' + text);
+      } else line.textContent = text;
       line.style.setProperty('--hue', hue);
       log.append(line);
       while (log.children.length > 60) log.firstChild.remove();

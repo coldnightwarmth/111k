@@ -2,7 +2,7 @@
 // One Durable Object instance ("public-v1") holds every socket. Hibernating
 // WebSockets plus automatic ping/pong mean an idle room costs nothing.
 import {INACTIVE_MS, MAX_PLAYERS} from '../src/protocol.js';
-import {handleMessage, newPlayer, snapshot, freshItems, validItems, releaseItems} from './room.js';
+import {handleMessage, newPlayer, snapshot, freshItems, validItems, releaseItems, validMarks, marksMessage} from './room.js';
 
 function allowedOrigins(env) {
   const list = (env.ALLOWED_ORIGINS || '').split(',').map(s => s.trim()).filter(Boolean);
@@ -27,6 +27,8 @@ export class Room {
   constructor(ctx) {
     this.ctx = ctx;
     this.items = null;
+    this.marks = null;
+    this.marksTimer = null;
     ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair('ping', 'pong'));
   }
   // held items are the room's only shared state; they survive hibernation in storage
@@ -35,6 +37,15 @@ export class Room {
     return this.items;
   }
   async saveItems() { await this.ctx.storage.put?.('items', this.items); }
+  // paint marks change often; write them at most every few seconds
+  async loadMarks() {
+    if (!this.marks) this.marks = validMarks(await this.ctx.storage.get?.('marks'));
+    return this.marks;
+  }
+  saveMarksSoon() {
+    if (this.marksTimer) return;
+    this.marksTimer = setTimeout(() => { this.marksTimer = null; this.ctx.storage.put?.('marks', this.marks); }, 4000);
+  }
   sockets() { return this.ctx.getWebSockets(); }
   players() { return this.sockets().map(ws => ws.deserializeAttachment()).filter(Boolean); }
   send(ws, msg) { try { ws.send(typeof msg === 'string' ? msg : JSON.stringify(msg)); } catch {} }
@@ -58,6 +69,7 @@ export class Room {
     server.serializeAttachment(newPlayer(id, now));
     this.send(server, {type: 'welcome', id, now});
     this.send(server, snapshot(this.players(), now, await this.loadItems()));
+    this.send(server, marksMessage(await this.loadMarks()));
     await this.scheduleAlarm();
     return new Response(null, {status: 101, webSocket: client});
   }
@@ -66,12 +78,13 @@ export class Room {
     const player = ws.deserializeAttachment();
     if (!player) return;
     const now = Date.now();
-    const items = await this.loadItems();
-    const result = handleMessage(player, data, now, {items, players: () => this.players()});
+    const items = await this.loadItems(), marks = await this.loadMarks();
+    const result = handleMessage(player, data, now, {items, marks, players: () => this.players()});
     if (result.close) { ws.close(1009, result.close); return; }
     if (result.changed) ws.serializeAttachment(player);
     for (const {to, msg} of result.out) to === 'all' ? this.broadcast(msg) : this.send(ws, msg);
     if (result.itemsChanged) await this.saveItems();
+    if (result.marksChanged) this.saveMarksSoon();
     if (result.returning) { this.broadcast(snapshot(this.players(), now, items)); await this.scheduleAlarm(); }
   }
 

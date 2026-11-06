@@ -20,7 +20,7 @@ export const lighting = {
 
 const LIGHTMAP_LINE = 'reflectedLight.indirectDiffuse += lightMapTexel.rgb * lightMapIntensity * RECIPROCAL_PI;';
 
-function hookShader(material) {
+export function hookShader(material) {
   material.onBeforeCompile = shader => {
     Object.assign(shader.uniforms, lighting);
     shader.vertexShader = shader.vertexShader

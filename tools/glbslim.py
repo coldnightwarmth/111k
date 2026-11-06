@@ -110,16 +110,28 @@ def main():
     nodes = g.get('nodes', [])
     keep_re = re.compile(a.keep_regex) if a.keep_regex else None
     drop_re = re.compile(a.drop_regex) if a.drop_regex else None
-
-    # ---- nodes -------------------------------------------------------------
     dropped = set()
-    def drop_tree(i):
-        dropped.add(i)
-        for c in nodes[i].get('children', []): drop_tree(c)
     for i, n in enumerate(nodes):
         name = n.get('name', '')
         if drop_re and drop_re.search(name) and not (keep_re and keep_re.search(name)):
-            drop_tree(i)
+            dropped |= subtree(nodes, i)
+    data, info = subset(g, binary, dropped, max_tex=a.max_tex, webp=a.webp, quantize=not a.no_quantize)
+    open(a.dst, 'wb').write(data)
+    print(f'{a.src} -> {a.dst}: {len(data)/1e6:.2f} MB, {info}')
+
+
+def subtree(nodes, i):
+    out = {i}
+    for c in nodes[i].get('children', []): out |= subtree(nodes, c)
+    return out
+
+
+def subset(g, binary, dropped, max_tex=2048, webp=88, quantize=True, animations=True):
+    """Write a GLB holding everything in `g` except the node indices in `dropped`
+    (and whatever only they used). Returns (bytes, summary)."""
+    nodes = g.get('nodes', [])
+    class A: pass
+    a = A(); a.max_tex, a.webp, a.no_quantize = max_tex, webp, not quantize
     joints = {j for s in g.get('skins', []) for j in s['joints']}
     assert not (dropped & joints), 'refusing to drop skeleton bones'
     node_map = {}
@@ -273,8 +285,8 @@ def main():
         out_nodes.append(n)
     # animations
     anims = []
-    for an in g.get('animations', []):
-        chans = [c for c in an['channels'] if c['target'].get('node') in node_map]
+    for an in (g.get('animations', []) if animations else []):
+        chans = [dict(c, target=dict(c['target'])) for c in an['channels'] if c['target'].get('node') in node_map]
         if not chans: continue
         used = sorted({c['sampler'] for c in chans})
         smap = {s: k for k, s in enumerate(used)}
@@ -308,11 +320,9 @@ def main():
     js = json.dumps(out, separators=(',', ':')).encode()
     js += b' ' * ((-len(js)) % 4)
     total = 12 + 8 + len(js) + 8 + len(binbytes)
-    with open(a.dst, 'wb') as f:
-        f.write(struct.pack('<III', 0x46546C67, 2, total))
-        f.write(struct.pack('<II', len(js), 0x4E4F534A)); f.write(js)
-        f.write(struct.pack('<II', len(binbytes), 0x004E4942)); f.write(binbytes)
-    print(f'{a.src} -> {a.dst}: {total/1e6:.2f} MB, nodes {len(out_nodes)}, meshes {len(meshes)}, materials {len(materials)}, images {len(images)}')
+    data = (struct.pack('<III', 0x46546C67, 2, total) + struct.pack('<II', len(js), 0x4E4F534A) + js
+            + struct.pack('<II', len(binbytes), 0x004E4942) + binbytes)
+    return data, f'nodes {len(out_nodes)}, meshes {len(meshes)}, materials {len(materials)}, images {len(images)}'
 
 
 if __name__ == '__main__':

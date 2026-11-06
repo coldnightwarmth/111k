@@ -4,11 +4,13 @@
 // Object being evicted between messages. The only shared state is the held
 // items, which the caller keeps (Durable Object storage in production).
 import {CHAT_INTERVAL_MS, CHAT_TTL_MS, POSE_INTERVAL_MS, PICKUP_RANGE, PUNCH_RANGE, PUNCH_COOLDOWN_MS,
-  sanitizeChat, sanitizePose, samePose, cleanItem} from '../src/protocol.js';
+  SHOT_INTERVAL_MS, SPRAY_INTERVAL_MS, SPRAY_RANGE, MAX_SPLATS, MAX_SPRAYS,
+  sanitizeChat, sanitizePose, samePose, cleanItem, sanitizeLook, sanitizeName, cleanSplat, cleanSpray} from '../src/protocol.js';
 import {ITEM_SPAWNS} from '../src/world-items.js';
 
 export function newPlayer(id, now) {
-  return {id, pose: null, lastPose: 0, lastChat: 0, lastActive: now, lastPunch: 0, inactive: false};
+  return {id, pose: null, lastPose: 0, lastChat: 0, lastActive: now, lastPunch: 0, lastShot: 0, lastSpray: 0,
+    inactive: false, look: null, name: ''};
 }
 
 // Items start where the level put them; a stored set from an older level is replaced.
@@ -22,9 +24,18 @@ export function validItems(stored) {
 }
 
 export function snapshot(players, now, items = {}) {
-  return {type: 'state', now, players: players.filter(p => p && !p.inactive && p.pose).map(p => ({id: p.id, pose: p.pose})),
+  return {type: 'state', now, players: players.filter(p => p && !p.inactive && p.pose).map(p => ({id: p.id, pose: p.pose, look: p.look})),
     items: Object.values(items)};
 }
+
+// Paint and sprayed pieces stay on the walls; the oldest go when there are too many.
+export function freshMarks() { return {splats: [], sprays: []}; }
+export function validMarks(stored) {
+  if (!stored || !Array.isArray(stored.splats) || !Array.isArray(stored.sprays)) return freshMarks();
+  return {splats: stored.splats.map(cleanSplat).filter(Boolean).slice(-MAX_SPLATS),
+    sprays: stored.sprays.map(cleanSpray).filter(Boolean).slice(-MAX_SPRAYS)};
+}
+export const marksMessage = marks => ({type: 'marks', splats: marks.splats, sprays: marks.sprays});
 
 const flat = (a, b) => Math.hypot(a.x - b.x, a.z - b.z);
 
@@ -74,8 +85,15 @@ export function handleMessage(player, data, now, room = {items: {}, players: () 
     if (!text) return {out, changed: false};
     player.lastChat = now; player.lastActive = now;
     const returning = player.inactive; player.inactive = false;
-    out.push({to: 'all', msg: {type: 'chat', id: player.id, text, time: now, expiresAt: now + CHAT_TTL_MS}});
+    out.push({to: 'all', msg: {type: 'chat', id: player.id, name: player.name || '', text, time: now, expiresAt: now + CHAT_TTL_MS}});
     return {out, changed: true, returning};
+  }
+  if (m.type === 'look') {
+    const look = sanitizeLook(m.look);
+    if (!look) return {out, changed: false};
+    player.look = look; player.name = sanitizeName(m.name);
+    out.push({to: 'all', msg: {type: 'look', id: player.id, look}});
+    return {out, changed: true};
   }
   if (m.type === 'activity') {
     const returning = player.inactive;
@@ -121,6 +139,45 @@ export function handleMessage(player, data, now, room = {items: {}, players: () 
     const dropped = releaseItems(items, target);
     out.push(...dropped);
     return {out, changed: true, itemsChanged: dropped.length > 0};
+  }
+  if (m.type === 'shoot') {
+    const gun = Object.values(items).find(it => it.holder === player.id && it.type === 'paintball');
+    if (!gun || !player.pose || now - player.lastShot < SHOT_INTERVAL_MS) return {out, changed: false};
+    const o = cleanSplat({p: m.o, n: [0, 1, 0], c: 0, s: 0})?.p, v = Array.isArray(m.v) && m.v.length === 3 && m.v.every(Number.isFinite) ? m.v.map(x => Math.round(x * 100) / 100) : null;
+    const c = Number.isInteger(m.c) && m.c >= 0 && m.c <= 0xffffff ? m.c : null, s = Number.isInteger(m.s) && m.s >= 0 && m.s <= 0xffffff ? m.s : 0;
+    if (!o || !v || c === null || Math.hypot(o[0] - player.pose.x, o[2] - player.pose.z) > 3 || Math.hypot(...v) > 80) return {out, changed: false};
+    player.lastShot = now; player.lastActive = now;
+    const hit = m.hit ? cleanSplat({...m.hit, c, s}) : null;
+    let target = null, local = null;
+    if (typeof m.target === 'string' && m.target !== player.id) {
+      target = room.players().find(p => p && p.id === m.target && p.pose && !p.inactive) || null;
+      local = target ? cleanSplat({...(m.local || {}), c, s}) : null;
+      if (target && Math.hypot(target.pose.x - player.pose.x, target.pose.z - player.pose.z) > 70) target = null;
+    }
+    const t = Number.isFinite(m.t) ? Math.round(Math.max(0, Math.min(2.5, m.t)) * 1000) / 1000 : 1;
+    out.push({to: 'all', msg: {type: 'shot', from: player.id, o, v, c, s, t, hit: target ? null : hit, target: target?.id || '',
+      local: target ? local : null, time: now}});
+    let marksChanged = false, itemsChanged = false;
+    if (hit && !target && room.marks) {
+      room.marks.splats.push(hit);
+      if (room.marks.splats.length > MAX_SPLATS) room.marks.splats.splice(0, room.marks.splats.length - MAX_SPLATS);
+      marksChanged = true;
+    }
+    if (target) { const dropped = releaseItems(items, target); out.push(...dropped); itemsChanged = dropped.length > 0; }
+    return {out, changed: true, marksChanged, itemsChanged};
+  }
+  if (m.type === 'spray') {
+    const can = Object.values(items).find(it => it.holder === player.id && it.type === 'spray');
+    const mark = cleanSpray(m);
+    if (!can || !mark || !player.pose || now - player.lastSpray < SPRAY_INTERVAL_MS) return {out, changed: false};
+    if (Math.hypot(mark.p[0] - player.pose.x, mark.p[2] - player.pose.z) > SPRAY_RANGE + 1) return {out, changed: false};
+    player.lastSpray = now; player.lastActive = now;
+    out.push({to: 'all', msg: {type: 'spray', from: player.id, mark, time: now}});
+    if (room.marks) {
+      room.marks.sprays.push(mark);
+      if (room.marks.sprays.length > MAX_SPRAYS) room.marks.sprays.splice(0, room.marks.sprays.length - MAX_SPRAYS);
+    }
+    return {out, changed: true, marksChanged: !!room.marks};
   }
   return {out, changed: false};
 }

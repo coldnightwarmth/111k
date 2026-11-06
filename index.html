@@ -11,7 +11,6 @@
   <script type="importmap">{"imports": {"three": "./vendor/three/three.module.min.js"}}</script>
   <link rel="modulepreload" href="vendor/three/three.module.min.js">
   <link rel="preload" href="assets/env/world.glb" as="fetch" crossorigin>
-  <link rel="preload" href="assets/avatars/drifella-default.glb" as="fetch" crossorigin>
 </head>
 <body>
   <canvas id="view" aria-label="3D hangout space"></canvas>
@@ -23,9 +22,10 @@
     <span id="online">…</span>
   </header>
 
-  <p id="hint">click to look around · <kbd>WASD</kbd> move · <kbd>shift</kbd> run · <kbd>space</kbd> jump · <kbd>C</kbd> crouch · <kbd>enter</kbd> chat · <kbd>E</kbd> emotes · <kbd>V</kbd> view · <kbd>click</kbd> punch</p>
+  <p id="hint">click to look around · <kbd>WASD</kbd> move · <kbd>shift</kbd> run · <kbd>space</kbd> jump · <kbd>C</kbd> crouch · <kbd>enter</kbd> chat · <kbd>E</kbd> emotes · <kbd>V</kbd> view · <kbd>click</kbd> punch / use · <kbd>right click</kbd> drop</p>
   <p id="prompt" aria-live="polite"></p>
   <p id="emoteLabel" hidden></p>
+  <p id="tagLabel" hidden></p>
 
   <section id="chat">
     <div class="log" role="log" aria-live="polite" aria-label="chat"></div>
@@ -33,6 +33,7 @@
   </section>
 
   <nav id="emotes" hidden aria-label="emotes"></nav>
+  <aside id="gallery" hidden aria-label="pieces to spray"><h2>pick a piece</h2><div class="list"></div><p>click a piece, then click back in to spray</p></aside>
 
   <div id="touch">
     <div id="stick" aria-label="move"><i></i></div>
@@ -44,9 +45,11 @@
       <button id="btnJump" type="button" aria-label="jump">jump</button>
       <button id="btnAct" type="button" aria-label="use">punch</button>
       <button id="btnDrop" type="button" aria-label="drop">drop</button>
+      <button id="btnGallery" type="button" aria-label="choose a piece">tags</button>
     </div>
   </div>
 
+  <div id="picker" hidden></div>
   <div id="loading"><p>going down…</p></div>
   <script type="module" src="src/main.js"></script>
 </body>

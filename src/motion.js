@@ -1,30 +1,62 @@
 // Locomotion constants and helpers shared by the local player and remote peers.
 // Ported from the cards.art showroom so movement feels the same.
-export const EYE_HEIGHT = 1.65;
-export const CROUCH_DEPTH = .29;
+export const EYE_HEIGHT = 1.45;
+export const CROUCH_DEPTH = .26;
 export const JUMP_DURATION = 1.1;
 export const JUMP_TAKEOFF = .14;
 export const JUMP_FLIGHT = 2 / 3;
+export const MAX_HOP_POWER = 1.42;
+const LANDED = JUMP_TAKEOFF + JUMP_FLIGHT;
+const HOP_WINDOW = .13;        // press this close to touchdown (either side) for a clean hop
 const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
 
-export function jumpHeight(time) {
+export function jumpHeight(time, power = 1) {
   const flight = time - JUMP_TAKEOFF;
-  return flight > 0 && flight < JUMP_FLIGHT ? 4 * flight - 6 * flight * flight : 0;
+  return flight > 0 && flight < JUMP_FLIGHT ? (power || 1) * (4 * flight - 6 * flight * flight) : 0;
 }
 
+// Jumps can chain the moment you touch down. Pressing right at touchdown (or
+// just before it: the press is remembered) skips the wind-up and each clean
+// hop goes a little higher and carries a little more speed.
 export function createVerticalMovement() {
-  let crouch = 0, jumpTime = -1;
+  let crouch = 0, jumpTime = -1, power = 1, chain = 0, queued = -1, grounded = 0, hopped = false;
+  function launch(clean) {
+    chain = clean ? Math.min(chain + 1, 6) : 0;
+    power = clean ? Math.min(MAX_HOP_POWER, 1 + .07 * chain) : 1;
+    jumpTime = clean ? JUMP_TAKEOFF : 0;     // a clean hop leaves straight away
+    grounded = 0; queued = -1; hopped = clean;
+  }
   return {
-    get pose() { return {crouch, jumpTime}; },
-    jump() { if (jumpTime >= 0) return false; jumpTime = 0; return true; },
+    get pose() { return {crouch, jumpTime, jumpPower: power}; },
+    get chain() { return chain; },
+    // horizontal speed multiplier earned by chaining clean hops
+    get boost() { return 1 + .085 * chain; },
+    // true once per clean hop, so the caller can add a forward shove
+    takeHop() { const h = hopped; hopped = false; return h; },
+    jump() {
+      if (jumpTime < 0) { launch(false); return true; }
+      if (jumpTime >= LANDED) { launch(jumpTime - LANDED < HOP_WINDOW); return true; }
+      if (jumpTime >= LANDED - HOP_WINDOW) { queued = jumpTime; return true; }
+      return false;
+    },
+    // a hit: a small involuntary hop that breaks any chain
+    bump() { if (jumpTime < 0 || jumpTime >= LANDED) { chain = 0; power = .8; jumpTime = JUMP_TAKEOFF; grounded = 0; } },
     update(dt, duck) {
       dt = clamp(dt, 0, .1);
-      if (jumpTime >= 0) { jumpTime += dt; if (jumpTime >= JUMP_DURATION) jumpTime = -1; }
+      if (jumpTime >= 0) {
+        jumpTime += dt;
+        if (queued >= 0 && jumpTime >= LANDED) launch(true);
+        else if (jumpTime >= JUMP_DURATION) jumpTime = -1;
+      }
+      if (jumpTime < 0 || jumpTime >= LANDED) {
+        grounded += dt;
+        if (grounded > .3 && chain) chain = 0;   // standing around ends the run
+      }
       crouch += ((duck && jumpTime < 0 ? 1 : 0) - crouch) * (1 - Math.exp(-dt * 12));
-      const anticipation = jumpTime >= 0 && jumpTime < JUMP_TAKEOFF ? .075 * Math.sin(Math.PI * jumpTime / JUMP_TAKEOFF) : 0;
-      const landing = jumpTime > JUMP_TAKEOFF + JUMP_FLIGHT
-        ? .10 * Math.sin(Math.PI * (jumpTime - JUMP_TAKEOFF - JUMP_FLIGHT) / (JUMP_DURATION - JUMP_TAKEOFF - JUMP_FLIGHT)) : 0;
-      return EYE_HEIGHT + jumpHeight(jumpTime) - crouch * CROUCH_DEPTH - anticipation - landing;
+      const anticipation = jumpTime >= 0 && jumpTime < JUMP_TAKEOFF ? .07 * Math.sin(Math.PI * jumpTime / JUMP_TAKEOFF) : 0;
+      const landing = jumpTime > LANDED
+        ? .09 * Math.sin(Math.PI * (jumpTime - LANDED) / (JUMP_DURATION - LANDED)) : 0;
+      return EYE_HEIGHT + jumpHeight(jumpTime, power) - crouch * CROUCH_DEPTH - anticipation - landing;
     },
   };
 }
@@ -58,6 +90,7 @@ export function createPoseBuffer({delay = 85, maxPrediction = 80} = {}) {
       for (const key of ['x', 'y', 'z', 'pitch']) result[key] = a.pose[key] + (b.pose[key] - a.pose[key]) * t;
       result.crouch = (a.pose.crouch || 0) + ((b.pose.crouch || 0) - (a.pose.crouch || 0)) * Math.min(t, 1);
       result.jumpTime = b.pose.jumpTime ?? -1;
+      result.jumpPower = b.pose.jumpPower || 1;
       // Do not blend unrelated emotes or interpolate backward when one restarts.
       if (b.pose.emote && a.pose.emote === b.pose.emote && b.pose.emoteTime >= a.pose.emoteTime)
         result.emoteTime = Math.min(2, a.pose.emoteTime + (b.pose.emoteTime - a.pose.emoteTime) * t);

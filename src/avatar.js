@@ -1,20 +1,42 @@
-// Player characters: the default Drifella from cards.art (compressed), with
-// the same animation blending as the showroom (walk/crouch/jump/emotes).
+// Player characters: Drifellas and Driladies from cards.art, assembled from a
+// small base (rig, body, animations) plus one compressed file per worn trait.
+// The look logic (which parts show, finishes, head scales) is cards.art's own.
 import * as THREE from 'three';
 import {GLTFLoader} from '../vendor/three/GLTFLoader.js';
-import {EMOTES, normalizeEmote, normalizeEmoteTime, PUNCH_DURATION} from './protocol.js';
+import {MeshoptDecoder} from '../vendor/three/meshopt_decoder.module.js';
+import {createAvatarAppearance} from './cards/drifmaker-avatar.mjs';
+import {normalizeAppearance, characterId} from './cards/drifmaker-config.mjs';
+import {partsFor} from './looks.js';
+import {normalizeEmote, normalizeEmoteTime, PUNCH_DURATION} from './protocol.js';
 import {jumpHeight} from './motion.js';
 
-const AVATAR_URL = new URL('../assets/avatars/drifella-default.glb', import.meta.url).href;
-export const AVATAR_SCALE = .75;
-let asset;
-export function loadAvatarAsset() {
-  asset ??= new GLTFLoader().loadAsync(AVATAR_URL).catch(error => { asset = undefined; throw error; });
-  return asset;
+export const AVATAR_SCALE = .66;
+const ROOT = new URL('../assets/avatars/', import.meta.url).href;
+const loader = new GLTFLoader().setMeshoptDecoder(MeshoptDecoder);
+const cache = new Map();
+const once = (key, make) => {
+  if (!cache.has(key)) cache.set(key, make().catch(error => { cache.delete(key); throw error; }));
+  return cache.get(key);
+};
+const character = name => once(name, async () => {
+  const [index, base, extra] = await Promise.all([
+    fetch(`${ROOT}${name}/index.json`).then(r => { if (!r.ok) throw Error(`avatar index ${r.status}`); return r.json(); }),
+    loader.loadAsync(`${ROOT}${name}/base.glb`),
+    loader.loadAsync(`${ROOT}moves.glb`).catch(() => null),   // clips made for 111k (the punch)
+  ]);
+  const clips = [...base.animations, ...(extra?.animations || [])];
+  return {index, scene: base.scene, clips};
+});
+const part = (name, file) => once(`${name}/${file}`, () => loader.loadAsync(`${ROOT}${name}/${file}`));
+
+// Download everything a look needs (used to warm up the picker and peers).
+export async function preloadLook(look) {
+  const name = characterId(look), c = await character(name);
+  await Promise.all(partsFor(look, c.index).map(p => part(name, c.index.parts[p].file)));
 }
 
 // Geometry and textures are shared; each visitor owns their bones.
-function cloneAvatar(source) {
+function cloneRig(source) {
   const clone = source.clone(true), lookup = new Map(), skeletons = new Map();
   (function pair(a, b) { lookup.set(a, b); for (let i = 0; i < a.children.length; i++) pair(a.children[i], b.children[i]); })(source, clone);
   source.traverse(original => {
@@ -29,6 +51,25 @@ function cloneAvatar(source) {
     mesh.frustumCulled = false;
   });
   return clone;
+}
+
+// A trait file carries its own copy of the rig; rebind its meshes to ours by bone name.
+function attachPart(model, gltf, name, parentName) {
+  const src = gltf.scene.getObjectByName(name);
+  if (!src) return;
+  const bones = new Map();
+  model.traverse(o => { if (o.isBone) bones.set(o.name, o); });
+  const copy = src.clone(true);
+  const pairs = [];
+  (function pair(a, b) { pairs.push([a, b]); for (let i = 0; i < a.children.length; i++) pair(a.children[i], b.children[i]); })(src, copy);
+  for (const [a, b] of pairs) {
+    if (!a.isSkinnedMesh) continue;
+    const skeleton = new THREE.Skeleton(a.skeleton.bones.map(bone => bones.get(bone.name) || bone), a.skeleton.boneInverses);
+    b.bind(skeleton, a.bindMatrix);
+    b.frustumCulled = false;
+  }
+  const parent = (parentName && model.getObjectByName(parentName.replace(/[\s.:/[\]]/g, ''))) || model.children[0] || model;
+  parent.add(copy);
 }
 
 // Apply camera aim to the head after the clip mixer, restoring the untouched
@@ -53,76 +94,87 @@ function createLookPose(model) {
   };
 }
 
-export async function createAvatar() {
-  const gltf = await loadAvatarAsset();
-  const model = cloneAvatar(gltf.scene);
+export async function createAvatar(look) {
+  look = normalizeAppearance(look);
+  const name = characterId(look), c = await character(name);
+  const needed = partsFor(look, c.index);
+  const parts = await Promise.all(needed.map(p => part(name, c.index.parts[p].file)));
+  const model = cloneRig(c.scene);
+  needed.forEach((p, i) => attachPart(model, parts[i], p, c.index.parts[p].parent));
+  const wardrobe = createAvatarAppearance(model, look);
+  wardrobe.setAppearance(look);
+  model.traverse(o => { if (o.isMesh) o.frustumCulled = false; });
   model.scale.setScalar(AVATAR_SCALE); model.rotation.y = Math.PI;
   const root = new THREE.Group(); root.name = 'avatar'; root.add(model);
   const mixer = new THREE.AnimationMixer(model);
-  const actions = new Map(gltf.animations.map(clip => [clip.name, mixer.clipAction(clip)]));
+  const actions = new Map(c.clips.map(clip => [clip.name, mixer.clipAction(clip)]));
   // holding something swaps each locomotion clip for its right-hand-holding twin
   const HOLD = {Neutral: 'Hold_Right', Walk: 'Walk_Hold_Right', Crouch: 'Crouch_Hold_Right', Crouch_Walk: 'Crouch_Walk_Hold_Right',
     Jump: 'Jump_Hold_Right'};
   const holdNames = new Set(Object.values(HOLD));
-  for (const [name, action] of actions) {
+  for (const [clip, action] of actions) {
     action.play().setEffectiveWeight(0);
-    if (name.startsWith('Jump') || name.startsWith('Pose_')) action.paused = true;
+    if (clip.startsWith('Jump') || clip.startsWith('Pose_') || clip === 'Punch') action.paused = true;
   }
-  const look = createLookPose(model);
+  const look_ = createLookPose(model);
   const socket = model.getObjectByName('CardSocketR') || model.getObjectByName('CardSocket.R');  // the loader strips the dot
-  const punch = actions.get('Pose_powerpunch');
-  let moving = false, speed = 0, walkBlend = 0, holdBlend = 0;
+  const punch = actions.get('Punch'), fallbackPunch = actions.get('Pose_powerpunch');
+  const head = model.getObjectByName('Head');
+  let moving = false, speed = 0, walkBlend = 0, holdBlend = 0, hideHead = false;
 
   return {
-    root, model, socket, scale: AVATAR_SCALE, eye: 1.65, pitch: 0,
+    root, model, socket, look, scale: AVATAR_SCALE, eye: 1.45, pitch: 0,
     setVisible(v) { model.visible = v; },
-    // velocity: horizontal speed (m/s); motion: {crouch, jumpTime, emote, emoteTime, pitch}
+    // first person: keep the body (so you see your own punch) but fold the head away
+    setHeadless(v) { hideHead = v; },
+    // velocity: horizontal speed (m/s); motion: {crouch, jumpTime, jumpPower, emote, emoteTime, pitch, punchTime, holding}
     update(dt, velocity, motion = {}) {
-      look.restore();
-      model.position.y = jumpHeight(motion.jumpTime ?? -1);
+      look_.restore(); wardrobe.restoreHeadScale();
+      model.position.y = jumpHeight(motion.jumpTime ?? -1, motion.jumpPower);
       const emote = normalizeEmote(motion.emote);
-      if (emote) {
-        const name = `Pose_${emote}`, chosen = actions.get(name);
+      const pt = motion.punchTime ?? -1, punching = pt >= 0 && pt <= PUNCH_DURATION;
+      if (emote && !punching) {
+        const clip = `Pose_${emote}`, chosen = actions.get(clip);
         if (chosen) {
-          for (const [key, action] of actions) action.setEffectiveWeight(key === name ? 1 : 0);
+          for (const [key, action] of actions) action.setEffectiveWeight(key === clip ? 1 : 0);
           chosen.time = Math.min(normalizeEmoteTime(motion.emoteTime), chosen.getClip().duration);
-          mixer.update(0);
+          mixer.update(0); wardrobe.applyHeadScale(); this.fold();
           return;
         }
       }
       holdBlend += ((motion.holding ? 1 : 0) - holdBlend) * (1 - Math.exp(-dt * 12));
-      speed += (Math.min(velocity, 5) - speed) * (1 - Math.exp(-dt * 14));
+      speed += (Math.min(velocity, 6) - speed) * (1 - Math.exp(-dt * 14));
       moving = speed > (moving ? .045 : .10);
       walkBlend += ((moving ? 1 : 0) - walkBlend) * (1 - Math.exp(-dt * 16));
       const crouch = THREE.MathUtils.clamp(motion.crouch || 0, 0, 1), time = motion.jumpTime ?? -1;
       const airborne = time >= 0 && time <= 1.1;
       const jumpWeight = airborne ? Math.min(1, time / .06, (1.1 - time) / .1) : 0;
-      // a punch is a quick in-and-out blend toward the power-punch pose
-      const pt = motion.punchTime ?? -1;
-      const punchWeight = pt >= 0 && pt <= PUNCH_DURATION ? Math.sin(Math.PI * Math.min(1, pt / PUNCH_DURATION)) ** .7 : 0;
-      for (const [name, action] of actions) {
-        if (name.startsWith('Pose_')) {
-          action.setEffectiveWeight(action === punch ? punchWeight : 0);
-          if (action === punch) action.time = Math.min(.2, action.getClip().duration);
-          continue;
-        }
-        const base = holdNames.has(name) ? Object.keys(HOLD).find(k => HOLD[k] === name) : name;
-        const hw = holdNames.has(name) ? holdBlend : HOLD[name] && actions.has(HOLD[name]) ? 1 - holdBlend : 1;
-        if (base.startsWith('Jump')) { action.time = THREE.MathUtils.clamp(time, 0, 1.1); action.setEffectiveWeight(jumpWeight * hw * (1 - punchWeight)); continue; }
+      // the punch: a full-body clip, snapped in and eased back out
+      const k = punching ? pt / PUNCH_DURATION : 1;
+      const punchWeight = punching ? Math.min(1, k / .08, (1 - k) / .3) : 0;
+      if (punch) { punch.time = k * punch.getClip().duration; punch.setEffectiveWeight(punchWeight); }
+      else if (fallbackPunch) { fallbackPunch.time = .2; fallbackPunch.setEffectiveWeight(punchWeight * Math.sin(Math.PI * k)); }
+      for (const [clip, action] of actions) {
+        if (clip.startsWith('Pose_') || clip === 'Punch') { if (action !== fallbackPunch || punch) action.setEffectiveWeight(action === punch ? punchWeight : 0); continue; }
+        const base = holdNames.has(clip) ? Object.keys(HOLD).find(n => HOLD[n] === clip) : clip;
+        const hw = holdNames.has(clip) ? holdBlend : HOLD[clip] && actions.has(HOLD[clip]) ? 1 - holdBlend : 1;
+        const legsOnly = punching ? .35 : 1;   // the punch owns the upper body; keep a little of the stride
+        if (base.startsWith('Jump')) { action.time = THREE.MathUtils.clamp(time, 0, 1.1); action.setEffectiveWeight(jumpWeight * hw * (1 - punchWeight * (1 - legsOnly))); continue; }
         const duck = base.startsWith('Crouch'), walk = base.includes('Walk');
-        action.setEffectiveWeight((1 - punchWeight) * hw * (1 - jumpWeight) * (duck ? crouch : 1 - crouch) * (walk ? walkBlend : 1 - walkBlend));
-        action.setEffectiveTimeScale(walk ? THREE.MathUtils.clamp(speed / (duck ? .65 : .85), .55, 1.8) : 1);
+        action.setEffectiveWeight((1 - punchWeight * (1 - legsOnly)) * hw * (1 - jumpWeight) * (duck ? crouch : 1 - crouch) * (walk ? walkBlend : 1 - walkBlend));
+        action.setEffectiveTimeScale(walk ? THREE.MathUtils.clamp(speed / (duck ? .65 : .85), .55, 2.2) : 1);
       }
       mixer.update(dt);
-      look.apply(dt, motion.pitch || 0);
+      wardrobe.applyHeadScale();
+      look_.apply(dt, motion.pitch || 0);
+      this.fold();
     },
+    fold() { if (head && hideHead) head.scale.setScalar(1e-3); },
     dispose() {
-      mixer.stopAllAction(); mixer.uncacheRoot(model);
+      mixer.stopAllAction(); mixer.uncacheRoot(model); wardrobe.dispose();
       const skeletons = new Set(); model.traverse(o => { if (o.isSkinnedMesh) skeletons.add(o.skeleton); });
       for (const s of skeletons) s.dispose();
       root.removeFromParent();
     },
   };
 }
-
-export {EMOTES};

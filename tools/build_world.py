@@ -505,6 +505,13 @@ with W.using('props', density=1.0):
         Pr.debris(deb_r, p[0], p[2])
 
 ITEMS.append({'type': 'flashlight', **{k: round(float(v), 3) for k, v in zip('xyz', at(DARK - 0.42, -1.3, 0.03))}, 'yaw': 1.1})
+# spray cans, dropped along the walls all the way round
+can_r = np.random.default_rng(71)
+for k in range(10):
+    a = 2 * math.pi * (k + 0.35 + can_r.uniform(-0.15, 0.15)) / 10
+    x = can_r.choice([-1, 1]) * can_r.uniform(1.9, 2.35)
+    ITEMS.append({'type': 'spray', **{c: round(float(v), 3) for c, v in zip('xyz', at(a, x, 0.03))},
+                  'yaw': round(float(can_r.uniform(0, 6.28)), 3)})
 
 # ------------------------------------------------------ graffiti placement
 with W.using('decals', density=0.6):
@@ -605,7 +612,10 @@ W.meta = {'name': 'world', 'ambient': [0.035, 0.035, 0.045], 'fog': {'color': '#
 
 
 def write_items():
-    items = [{'id': f'fl{k + 1}', **it} for k, it in enumerate(ITEMS)]
+    prefix, count, items = {'flashlight': 'fl', 'paintball': 'pb', 'spray': 'sp'}, {}, []
+    for it in ITEMS:
+        count[it['type']] = count.get(it['type'], 0) + 1
+        items.append({'id': f"{prefix[it['type']]}{count[it['type']]}", **it})
     with open(os.path.join(HERE, '..', 'src', 'world-items.js'), 'w') as f:
         f.write('// Written by tools/build_world.py: where held items start. Shared by the client and the server.\n')
         f.write(f'export const ITEM_SPAWNS = Object.freeze({json.dumps(items)});\n')

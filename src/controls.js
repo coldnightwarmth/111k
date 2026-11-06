@@ -1,7 +1,7 @@
 // Keyboard + mouse (pointer lock) and touch (joystick + drag to look) input.
-export function createControls({canvas, isTouch, onToggleView, onJump, onChat, onEmotes, onCrouchToggle, onLockChange, onPrimary, onSecondary, onUse}) {
+export function createControls({canvas, isTouch, onToggleView, onJump, onChat, onEmotes, onCrouchToggle, onLockChange, onPrimary, onSecondary, onUse, onGallery}) {
   const keys = new Set();
-  const state = {yaw: 0, pitch: 0, moveX: 0, moveZ: 0, run: false, crouch: false, locked: false, touch: isTouch};
+  const state = {yaw: 0, pitch: 0, moveX: 0, moveZ: 0, run: false, crouch: false, locked: false, touch: isTouch, firing: false};
   const PITCH = 1.35;
   let touchCrouch = false;
 
@@ -23,13 +23,14 @@ export function createControls({canvas, isTouch, onToggleView, onJump, onChat, o
   // while the mouse is captured: left click acts (punch / grab / torch on-off), right click drops
   document.addEventListener('mousedown', e => {
     if (!state.locked) return;
-    if (e.button === 0) onPrimary?.();
+    if (e.button === 0) { state.firing = true; onPrimary?.(); }
     else if (e.button === 2) onSecondary?.();
   });
+  document.addEventListener('mouseup', e => { if (e.button === 0) state.firing = false; });
   document.addEventListener('contextmenu', e => { if (state.locked || e.target === canvas) e.preventDefault(); });
   document.addEventListener('pointerlockchange', () => {
     state.locked = document.pointerLockElement === canvas;
-    if (!state.locked) keys.clear();
+    if (!state.locked) { keys.clear(); state.firing = false; }
     onLockChange?.(state.locked);
   });
   document.addEventListener('mousemove', e => {
@@ -78,7 +79,9 @@ export function createControls({canvas, isTouch, onToggleView, onJump, onChat, o
   tap('btnChat', onChat);
   tap('btnEmote', onEmotes);
   tap('btnView', onToggleView);
-  tap('btnAct', () => onPrimary?.());
+  tap('btnAct', () => { state.firing = true; onPrimary?.(); });
+  for (const t of ['pointerup', 'pointercancel', 'pointerleave']) document.getElementById('btnAct').addEventListener(t, () => { state.firing = false; });
+  tap('btnGallery', () => onGallery?.());
   tap('btnDrop', () => onSecondary?.());
 
   return {
