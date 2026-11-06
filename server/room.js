@@ -7,6 +7,7 @@ import {CHAT_INTERVAL_MS, CHAT_TTL_MS, POSE_INTERVAL_MS, PICKUP_RANGE, PUNCH_RAN
   SHOT_INTERVAL_MS, SPRAY_INTERVAL_MS, SPRAY_RANGE, MAX_SPLATS, MAX_SPRAYS, SPLAT_LIFE_MS,
   sanitizeChat, sanitizePose, samePose, cleanItem, sanitizeLook, sanitizeName, cleanSplat, cleanSpray} from '../src/protocol.js';
 import {ITEM_SPAWNS} from '../src/world-items.js';
+import {RACE_LAPS, RACE_TIMEOUT_MS, BUTTON, BUTTON_RANGE, MACHINE, LAP_ZONE, LAP_SLACK, loopAngle, freshRace, publicRace} from '../src/race.js';
 
 export function newPlayer(id, now) {
   return {id, pose: null, lastPose: 0, lastChat: 0, lastActive: now, lastPunch: 0, lastShot: 0, lastSpray: 0,
@@ -60,6 +61,25 @@ function dropAt(item, pose, dx = 0, dz = 0, y = null) {
   item.yaw = pose.yaw || 0;
 }
 
+// The runner's way round the loop: unwrapped angle since the start. A lap counts back at the
+// machine after a full turn; the first lap can go either way, later ones must keep to it.
+function trackRunner(r, player, now, out) {
+  if (r.state !== 'running' || player.id !== r.runner || r.laps <= 0) return false;
+  const a = loopAngle(player.pose.x, player.pose.z);
+  let d = a - (r.lastA ?? a);
+  d = Math.atan2(Math.sin(d), Math.cos(d));
+  if (Math.abs(d) < .6) r.progress = (r.progress || 0) + d;   // a bigger jump is a teleport (respawn): it earns nothing
+  r.lastA = a;
+  if (flat(player.pose, MACHINE) > LAP_ZONE) return false;
+  const done = RACE_LAPS - r.laps, need = 2 * Math.PI * (done + 1) - LAP_SLACK;
+  const along = done === 0 ? Math.abs(r.progress) : r.dir * r.progress;
+  if (along < need) return false;
+  if (done === 0) r.dir = Math.sign(r.progress);
+  r.laps--;
+  out.push({to: 'all', msg: {type: 'race', race: publicRace(r, now), event: 'lap', by: player.id, byName: player.name || ''}});
+  return true;
+}
+
 // Drop whatever this player holds (they left, went idle, or got punched).
 export function releaseItems(items, player) {
   const out = [];
@@ -91,7 +111,8 @@ export function handleMessage(player, data, now, room = {items: {}, players: () 
     if (moved) { player.lastActive = now; player.inactive = false; }
     if (player.inactive) return {out, changed: true};
     out.push({to: 'all', msg: {type: 'pose', id: player.id, pose, time: now}});
-    return {out, changed: true, returning};
+    const raceChanged = room.race ? trackRunner(room.race, player, now, out) : false;
+    return {out, changed: true, returning, raceChanged};
   }
   if (m.type === 'chat') {
     if (now - player.lastChat < CHAT_INTERVAL_MS) return {out, changed: false};
@@ -113,6 +134,29 @@ export function handleMessage(player, data, now, room = {items: {}, players: () 
     const returning = player.inactive;
     player.lastActive = now; player.inactive = false;
     return {out, changed: true, returning};
+  }
+
+  // ---------------------------------------------------------- lap timer
+  if (m.type === 'button') {
+    if (!player.pose || player.inactive || !room.race || now - (player.lastButton || 0) < 400) return {out, changed: false};
+    if (flat(player.pose, BUTTON) > BUTTON_RANGE) return {out, changed: false};
+    player.lastButton = now; player.lastActive = now;
+    const r = room.race;
+    let event = null;
+    if (r.state === 'running') {
+      if (player.id === r.runner) event = r.laps <= 0 ? 'finish' : 'cancel';
+      else {
+        // someone else can only call it off if the runner's gone or it's dragged on too long
+        const runnerHere = room.players().some(p => p && p.id === r.runner && !p.inactive);
+        if (!runnerHere || now - r.startedAt > RACE_TIMEOUT_MS) event = 'cancel';
+      }
+    } else event = 'start';
+    if (!event) { out.push({to: 'self', msg: {type: 'race', race: publicRace(r, now), busy: true, by: player.id}}); return {out, changed: true}; }
+    if (event === 'start') Object.assign(r, freshRace(), {state: 'running', runner: player.id, name: player.name || '', startedAt: now,
+      progress: 0, lastA: loopAngle(player.pose.x, player.pose.z), dir: 0});
+    else Object.assign(r, {state: event === 'finish' ? 'done' : 'cancelled', time: now - r.startedAt, endedAt: now});
+    out.push({to: 'all', msg: {type: 'race', race: publicRace(r, now), event, by: player.id, byName: player.name || ''}});
+    return {out, changed: true, raceChanged: true};
   }
 
   // ---------------------------------------------------------------- items

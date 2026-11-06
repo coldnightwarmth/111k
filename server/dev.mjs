@@ -8,6 +8,7 @@ import {readFile, stat} from 'node:fs/promises';
 import {extname, join, normalize, resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {INACTIVE_MS, IDLE_RESET_MS, MAX_PLAYERS} from '../src/protocol.js';
+import {freshRace, publicRace} from '../src/race.js';
 import {handleMessage, newPlayer, snapshot, freshItems, releaseItems, freshMarks, marksMessage, itemsAtSpawn} from './room.js';
 
 const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
@@ -43,6 +44,7 @@ function send(c, msg) { if (!c.closed) c.socket.write(frame(typeof msg === 'stri
 function broadcast(msg) { const data = JSON.stringify(msg); for (const c of clients) send(c, data); }
 const players = () => [...clients].map(c => c.player);
 let items = freshItems();
+const race = freshRace();
 const marks = freshMarks();
 
 server.on('upgrade', (req, socket) => {
@@ -62,6 +64,7 @@ server.on('upgrade', (req, socket) => {
   send(c, {type: 'welcome', id, now});
   send(c, snapshot(players(), now, items));
   send(c, marksMessage(marks));
+  send(c, {type: 'race', race: publicRace(race, now)});
   socket.on('data', chunk => { c.buffer = Buffer.concat([c.buffer, chunk]); parse(c); });
   socket.on('close', () => close(c));
   socket.on('error', () => close(c));
@@ -98,7 +101,7 @@ function parse(c) {
 function onText(c, text) {
   if (text === 'ping') { send(c, 'pong'); return; }
   const now = Date.now();
-  const result = handleMessage(c.player, text, now, {items, marks, players});
+  const result = handleMessage(c.player, text, now, {items, marks, race, players});
   if (result.close) { close(c); return; }
   for (const {to, msg} of result.out) to === 'all' ? broadcast(msg) : send(c, msg);
   if (result.returning) broadcast(snapshot(players(), now, items));

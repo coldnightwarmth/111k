@@ -8,6 +8,8 @@ import {connectRoom} from './net.js';
 import {createChatUI, createBubble} from './chat.js';
 import {createControls} from './controls.js';
 import {createItems, ITEM_NAMES, simulateFall} from './items.js';
+import {createMachine} from './machine.js';
+import {MACHINE_COLLIDER, BUTTON, BUTTON_RANGE, RACE_LAPS} from './race.js';
 import {createWorldHits, cutDecal, createBatch, markMaterial, splatAtlas, splatCell, PAINT_COLORS, PAINT_ROWS, RANDOM_PAINT, rgbOf} from './decals.js';
 import {createDoors} from './doors.js';
 import {pickAvatar} from './picker.js';
@@ -94,9 +96,12 @@ async function start() {
     camera.far = fog.far + 5; camera.updateProjectionMatrix();
   }
   const avatarLights = createAvatarLights(level.meta, scene);
+  level.meta.colliders.push(MACHINE_COLLIDER);   // the lap timer stands in the tunnel too
   const collider = createCollider(level.meta);
   const doors = createDoors(level, collider);
   const hits = createWorldHits(level, doors.doors);
+  const machine = createMachine(scene);
+  hits.addSolid(machine.root);
   const bore = level.meta.bore;
   // height of the ceiling over a point: the tunnel's vault, a door passage, or a room
   function ceilingAt(x, z) {
@@ -379,8 +384,16 @@ async function start() {
     if (t) { network.send({type: 'pickup', id: t.state.id}); return true; }
     return false;
   }
+  // the lap timer's button, if the crosshair is on it and it's in reach
+  function onButton() {
+    camera.updateMatrixWorld();
+    const o = camera.getWorldPosition(new THREE.Vector3()), d = camera.getWorldDirection(new THREE.Vector3());
+    const far = (thirdPerson ? camDist : 0) + 2.2;
+    return Math.hypot(player.x - BUTTON.x, player.z - BUTTON.z) < BUTTON_RANGE - .1 && machine.aimed(o, d, far) !== null;
+  }
   function primary() {
     if (chat.open || !emoteMenu.hidden) return;
+    if (onButton()) { machine.press(); network.send({type: 'button'}); return; }
     const h = held();
     if (h?.state.type === 'flashlight') { network.send({type: 'toggle', id: h.state.id, on: !h.state.on}); return; }
     if (h?.state.type === 'paintball') { shoot(); return; }
@@ -470,6 +483,7 @@ async function start() {
     network.send(msg);
   }
   const r3 = x => Math.round(x * 1000) / 1000;
+  const formatRace = ms => `${Math.floor(ms / 60000)}:${String(Math.floor(ms / 1000) % 60).padStart(2, '0')}.${String(Math.floor(ms / 10) % 100).padStart(2, '0')}`;
 
   // ------------------------------------------------------- spray pieces
   const gallery = $('gallery'), galleryList = gallery.querySelector('.list'), tagLabel = $('tagLabel');
@@ -668,6 +682,16 @@ async function start() {
             burst(end, new THREE.Vector3(0, 1, 0), m.c);
           }
         });
+      } else if (m.type === 'race') {
+        machine.setRace(m.race);
+        if (m.by && m.by !== network.id) machine.press();
+        const who = m.by === network.id ? 'you' : (m.byName || 'anon'), whose = m.by === network.id ? 'your' : `${m.byName || 'anon'}'s`;
+        const say = text => chat.record(text, {system: true});
+        if (m.busy) say(`${m.race.name || 'someone'} is mid-run: wait for them to finish (or for 3 minutes to pass)`);
+        else if (m.event === 'start') say(`${who} started a ${RACE_LAPS}-lap run`);
+        else if (m.event === 'lap') say(m.race.laps ? `${who}: lap ${RACE_LAPS - m.race.laps} done, ${m.race.laps} to go` : `${who}: last lap done, hit the button!`);
+        else if (m.event === 'finish') say(`${who} ran ${RACE_LAPS} laps in ${formatRace(m.race.time)}`);
+        else if (m.event === 'cancel') say(m.race.runner === m.by ? `${whose} run was called off` : `${who} called off ${m.race.name || 'anon'}'s run`);
       } else if (m.type === 'spray') {
         addSpray(m.mark, true);
         const p = peers.get(m.from);
@@ -914,10 +938,13 @@ async function start() {
 
     // held items and what you can do right now
     items.frame(frameArgs(dt));
-    const t = !h && !frozen ? lookTarget() : null;
+    const pushable = !frozen && onButton();
+    machine.highlight(pushable);
+    machine.update(dt);
+    const t = !h && !frozen && !pushable ? lookTarget() : null;
     items.highlight(t ? t.state.id : null);
     const type = h?.state.type;
-    const hint = isTouch ? '' : h ? (type === 'flashlight' ? `click: ${h.state.on ? 'turn off' : 'turn on'}  ·  right-click: drop`
+    const hint = isTouch ? '' : pushable ? 'click: push the button' : h ? (type === 'flashlight' ? `click: ${h.state.on ? 'turn off' : 'turn on'}  ·  right-click: drop`
       : type === 'paintball' ? 'click: fire  ·  right-click: drop' : 'click a wall: spray  ·  esc: pick a piece  ·  right-click: drop')
       : t ? `click: pick up ${ITEM_NAMES[t.state.type] || 'it'}` : '';
     if (prompt.textContent !== hint) prompt.textContent = hint;
@@ -926,7 +953,7 @@ async function start() {
     paintLabel.hidden = type !== 'paintball';
     const galleryLabel = type === 'paintball' ? 'paint' : 'tags';
     if (btnGallery.textContent !== galleryLabel) btnGallery.textContent = galleryLabel;
-    const act = h ? (type === 'flashlight' ? (h.state.on ? 'light off' : 'light on') : type === 'paintball' ? 'fire' : 'spray') : t ? 'grab' : 'punch';
+    const act = pushable ? 'push' : h ? (type === 'flashlight' ? (h.state.on ? 'light off' : 'light on') : type === 'paintball' ? 'fire' : 'spray') : t ? 'grab' : 'punch';
     if (btnAct.textContent !== act) btnAct.textContent = act;
     document.body.classList.toggle('can-grab', !!t);
     // first person: say which emote you're doing, since you can't see yourself

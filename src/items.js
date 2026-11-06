@@ -219,7 +219,7 @@ function outlineMaterial(width, opacity) {
   return m;
 }
 const OUTLINES = [outlineMaterial(.007, 1), outlineMaterial(.016, .35)];
-function addOutline(model) {
+export function addOutline(model) {
   const shells = new THREE.Group(); shells.visible = false;
   const meshes = [];
   model.traverse(o => { if (o.isMesh) meshes.push(o); });

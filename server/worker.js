@@ -2,6 +2,7 @@
 // One Durable Object instance ("public-v1") holds every socket. Hibernating
 // WebSockets plus automatic ping/pong mean an idle room costs nothing.
 import {INACTIVE_MS, IDLE_RESET_MS, MAX_PLAYERS} from '../src/protocol.js';
+import {freshRace, publicRace} from '../src/race.js';
 import {handleMessage, newPlayer, snapshot, freshItems, validItems, releaseItems, validMarks, marksMessage, itemsAtSpawn} from './room.js';
 
 function allowedOrigins(env) {
@@ -42,6 +43,12 @@ export class Room {
     if (!this.marks) this.marks = validMarks(await this.ctx.storage.get?.('marks'));
     return this.marks;
   }
+  // the lap timer's state (survives the room sleeping)
+  async loadRace() {
+    if (!this.race) { const r = await this.ctx.storage.get?.('race'); this.race = r && typeof r.state === 'string' ? r : freshRace(); }
+    return this.race;
+  }
+  async saveRace() { await this.ctx.storage.put?.('race', this.race); }
   saveMarksSoon() {
     if (this.marksTimer) return;
     this.marksTimer = setTimeout(() => { this.marksTimer = null; this.ctx.storage.put?.('marks', this.marks); }, 4000);
@@ -78,6 +85,7 @@ export class Room {
     this.send(server, {type: 'welcome', id, now});
     this.send(server, snapshot(this.players(), now, await this.loadItems()));
     this.send(server, marksMessage(await this.loadMarks()));
+    this.send(server, {type: 'race', race: publicRace(await this.loadRace(), now)});
     await this.scheduleAlarm();
     return new Response(null, {status: 101, webSocket: client});
   }
@@ -87,12 +95,14 @@ export class Room {
     if (!player) return;
     const now = Date.now();
     const items = await this.loadItems(), marks = await this.loadMarks();
-    const result = handleMessage(player, data, now, {items, marks, players: () => this.players()});
+    const race = await this.loadRace();
+    const result = handleMessage(player, data, now, {items, marks, race, players: () => this.players()});
     if (result.close) { ws.close(1009, result.close); return; }
     if (result.changed) ws.serializeAttachment(player);
     for (const {to, msg} of result.out) to === 'all' ? this.broadcast(msg) : this.send(ws, msg);
     if (result.itemsChanged) { await this.saveItems(); await this.scheduleAlarm(); }
     if (result.marksChanged) this.saveMarksSoon();
+    if (result.raceChanged) await this.saveRace();
     if (result.returning) { this.broadcast(snapshot(this.players(), now, items)); await this.scheduleAlarm(); }
   }
 

@@ -97,7 +97,18 @@ export function createWorldHits(level, doors = []) {
       return best;
     },
     // every level triangle within `radius` of a point: world positions + lightmap uvs
-    gather(center, radius) { return gatherFrom(parts, center, radius, true); },
+    gather(center, radius) { return gatherFrom(parts.filter(p => !p.solidOnly), center, radius, true); },
+    // something built at runtime (the lap timer) that stops balls, beams and drops but takes no paint
+    addSolid(object) {
+      object.updateMatrixWorld(true);
+      object.traverse(mesh => {
+        if (!mesh.isMesh || mesh.material.transparent || mesh.userData.noHit) return;
+        const g = mesh.geometry;
+        g.computeBoundingSphere();
+        parts.push({mesh, g, bvh: new MeshBVH(g, {maxLeafTris: 12}), inv: mesh.matrixWorld.clone().invert(),
+          sphere: g.boundingSphere.clone().applyMatrix4(mesh.matrixWorld), solidOnly: true});
+      });
+    },
     // the same for one door, in its hinge space (null if there's no such door)
     door(k) {
       const list = doorParts.get(k);

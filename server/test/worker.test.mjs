@@ -254,3 +254,50 @@ test('items: scattered flashlights start lit or not, and an idle room puts every
   assert.equal(room.items[torch.id].x, torch.x); assert.equal(room.items[torch.id].on, true);
   assert.ok(b.messages().some(m => m.type === 'item' && m.item.id === torch.id && m.item.holder === null));
 });
+
+test('lap timer: start, busy for others, laps either way then the same way, finish, cancel, takeover', async () => {
+  const {handleMessage, newPlayer} = await import('../room.js');
+  const R = await import('../../src/race.js');
+  const race = R.freshRace();
+  const a = newPlayer('aaa', 0), b = newPlayer('bbb', 0);
+  a.name = 'alice';
+  const players = [a, b];
+  const room = {items: {}, marks: null, race, players: () => players};
+  let now = 1_000_000;
+  const at = (ang, off = 1.5) => R.loopPoint(ang, off);
+  const pose = (p, where) => { now += 200; return handleMessage(p, JSON.stringify({type: 'pose', pose: {x: where.x, y: 1.45, z: where.z, yaw: 0, pitch: 0}}), now, room); };
+  const press = p => { now += 500; return handleMessage(p, JSON.stringify({type: 'button'}), now, room); };
+  const near = R.loopPoint(R.MACHINE_ANGLE, 2.1);
+  pose(a, near); pose(b, near);
+  let r = press(a);
+  assert.equal(race.state, 'running'); assert.equal(race.runner, 'aaa'); assert.equal(race.laps, 3);
+  assert.equal(r.out[0].msg.event, 'start');
+  // someone else can't stop it while the runner's here and inside 3 minutes
+  r = press(b);
+  assert.equal(race.state, 'running'); assert.ok(r.out[0].msg.busy);
+  // walk round the loop: angle decreasing (clockwise) for the first lap
+  const lap = dir => { for (let k = 1; k <= 64; k++) pose(a, at(R.MACHINE_ANGLE + dir * k * 2 * Math.PI / 64)); };
+  lap(-1);
+  assert.equal(race.laps, 2, 'first lap counts either way');
+  lap(1);                      // turning back: unwinds, earns nothing
+  assert.equal(race.laps, 2);
+  lap(-1); lap(-1);            // back to where lap 1 ended, then a real second lap
+  assert.equal(race.laps, 1);
+  lap(-1);
+  assert.equal(race.laps, 0);
+  r = press(a);
+  assert.equal(race.state, 'done'); assert.ok(race.time > 0); assert.equal(r.out[0].msg.event, 'finish');
+  // next run: the runner stops early -> cancelled
+  press(a); assert.equal(race.state, 'running');
+  press(a); assert.equal(race.state, 'cancelled');
+  // a run whose runner leaves can be called off by anyone
+  press(a); assert.equal(race.state, 'running');
+  a.inactive = true;
+  press(b); assert.equal(race.state, 'cancelled');
+  a.inactive = false;
+  // ...as can one that's gone on for over 3 minutes
+  press(a); now += R.RACE_TIMEOUT_MS + 1000;
+  press(b); assert.equal(race.state, 'cancelled');
+  // too far from the button: nothing happens
+  pose(b, at(R.MACHINE_ANGLE + 1)); press(b); assert.equal(race.state, 'cancelled');
+});
