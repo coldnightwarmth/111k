@@ -857,9 +857,10 @@ async function start() {
   if (voice.wantsMic && !voice.hasMic) voice.setMicOn(true);      // mic on from last time (or just switched on at the door)
   const bubbleLayer = $('bubbles'), micBtn = $('micBtn'), voiceDock = $('voiceDock');
   voiceDock.append(voicePanel(voice));
+  // the mic icon shows and hides the voice box (M, or the button in the box, turns the mic on and off)
   micBtn.addEventListener('click', () => {
-    if (isTouch) { voiceDock.classList.toggle('open'); return; }
-    voice.setMicOn(!voice.micOn);
+    const open = voiceDock.classList.toggle('open');
+    micBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
   });
   addEventListener('keydown', e => {
     if (e.code !== 'KeyM' || e.repeat || chat.open || e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement) return;
@@ -1039,6 +1040,7 @@ async function start() {
     // anyone the camera is inside (you, pressed against a wall; someone you walk through) ghosts entirely
     const camWorld = camera.getWorldPosition(new THREE.Vector3());
     if (thirdPerson) me.ghostFor(camWorld, dt);
+    me.ghostNear(thirdPerson); meView.ghostNear(false);
     // remote peers
     const serverNow = network.now();
     for (const p of peers.values()) {
@@ -1051,6 +1053,7 @@ async function start() {
       p.previous = s;
       p.avatar.root.position.set(s.x, s.g || 0, s.z); p.avatar.root.rotation.y = s.yaw;
       p.avatar.update(pdt, v, {...s, holding: !!items.heldBy(p.id)});
+      p.avatar.ghostNear(true);            // walking into someone dissolves them, first person too
       p.avatar.ghostFor(camWorld, pdt);
       doors.push(s.x, s.z, v * pdt * Math.sin(-s.yaw), 0, p.id);
       if (p.bubble && serverNow > p.bubbleExpires) { p.bubble.dispose(); p.bubble = null; }

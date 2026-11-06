@@ -214,13 +214,16 @@ body.touch #chat .log { max-height: min(30vh, calc(100vh - 260px)); }
 #micBtn[data-state="talking"] { color: #6dff92; border-color: #6dff92; box-shadow: 0 0 8px rgba(109, 255, 146, .45); }
 #voiceDock { position: fixed; top: calc(max(12px, env(safe-area-inset-top)) + 34px); left: max(12px, env(safe-area-inset-left)); z-index: 3;
   width: min(250px, 70vw); display: none; }
-body:not(.locked):not(.touch) #voiceDock, #voiceDock.open { display: block; }
+#voiceDock.open { display: block; }
 #picker:not([hidden]) ~ #voiceDock { display: none; }
 .voice-panel { padding: 10px 12px; background: rgba(10, 10, 11, .86); border: 1px solid var(--line); border-radius: 6px; font-size: 12px; color: var(--dim); }
 .voice-panel h2 { margin: 0 0 8px; font-size: 11px; font-weight: 600; letter-spacing: .18em; }
 .voice-panel .row { display: flex; align-items: center; gap: 8px; margin: 6px 0; }
 .voice-panel .row > span:first-child:not(:only-child) { width: 44px; flex: none; }
-.voice-panel .toggle { cursor: pointer; color: var(--ink, #e9e6dc); }
+.voice-panel .toggle { cursor: pointer; color: var(--ink, #e9e6dc); width: 100%; justify-content: space-between; padding: 5px 8px;
+  background: #141416; border: 1px solid var(--line); border-radius: 3px; font: inherit; text-align: left; }
+.voice-panel .toggle:hover { border-color: var(--dim); }
+.voice-panel.enabled .toggle { border-color: #6dff92; }
 .voice-panel select, .voice-panel input[type=range] { flex: 1; min-width: 0; }
 .voice-panel select { background: #141416; color: inherit; border: 1px solid var(--line); border-radius: 3px; padding: 3px 4px; font: inherit; }
 .voice-panel .more { display: none; }

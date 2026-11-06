@@ -106,7 +106,8 @@ export async function createAvatar(look) {
   wardrobe.setAppearance(look);
   // seen from a camera pressed up close (third person against a wall), you dissolve rather than clip
   // the camera inside any part of this avatar ghosts all of it (ghostAll), not just the nearby faces
-  const ghostOwn = {ghostAll: {value: 0}};
+  // and ghostOn: whether faces near the camera dither away (other people always; you only in third person)
+  const ghostOwn = {ghostAll: {value: 0}, ghostOn: {value: 0}};
   model.traverse(o => {
     if (!o.isMesh) return;
     if (Array.isArray(o.material)) o.material = o.material.map(m => m.isShaderMaterial ? m : ghostMaterial(m, ghostOwn));
@@ -198,6 +199,8 @@ export async function createAvatar(look) {
     },
     fold() { if (head && hideHead) head.scale.setScalar(1e-3); },
     // dissolve the whole avatar while the camera is inside it (eased in and out)
+    // dither away the faces close to the camera (instead of the near plane slicing through them)
+    ghostNear(on) { ghostOwn.ghostOn.value = on ? 1 : 0; },
     ghostFor(cameraPos, dt) {
       root.updateMatrixWorld(); camLocal.copy(cameraPos); root.worldToLocal(camLocal); camLocal.y -= model.position.y;
       const inside = model.visible !== false && root.visible && bodyBox.containsPoint(camLocal) ? 1 : 0;

@@ -262,7 +262,7 @@ export function voicePanel(voice) {
   el.className = 'voice-panel';
   el.innerHTML = `
     <h2>voice chat</h2>
-    <label class="row toggle"><input type="checkbox" class="on"><span>use my mic <kbd>M</kbd></span></label>
+    <button type="button" class="row toggle on"><span class="label">enable mic</span> <kbd>M</kbd></button>
     <div class="more">
       <label class="row"><span>mic</span><select class="mic"><option value="">default mic</option></select></label>
       <div class="meter" aria-hidden="true"><i></i></div>
@@ -280,12 +280,14 @@ export function voicePanel(voice) {
     mic.value = voice.deviceId && list.some(d => d.deviceId === voice.deviceId) ? voice.deviceId : (list[0]?.deviceId || '');
   }
   function sync() {
-    on.checked = voice.micOn; vol.value = voice.volume;
+    on.querySelector('.label').textContent = voice.micOn ? 'disable mic' : 'enable mic';
+    on.setAttribute('aria-pressed', voice.micOn ? 'true' : 'false');
+    vol.value = voice.volume;
     el.classList.toggle('enabled', voice.micOn);
     note.textContent = voice.error;              // only when something's wrong with the mic
     note.hidden = !voice.error;
   }
-  on.addEventListener('change', async () => { await voice.setMicOn(on.checked); fillDevices(); });
+  on.addEventListener('click', async () => { await voice.setMicOn(!voice.micOn); fillDevices(); });
   mic.addEventListener('change', () => voice.setDevice(mic.value));
   vol.addEventListener('input', () => voice.setVolume(Number(vol.value)));
   voice.onChange(sync);
