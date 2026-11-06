@@ -12,6 +12,7 @@ import {createMachine} from './machine.js';
 import {createShelves, SHELF_COLLIDERS} from './shelves.js';
 import {createCleaning} from './cleaning.js';
 import {MACHINE_COLLIDER, BUTTON, BUTTON_RANGE, RACE_LAPS} from './race.js';
+import {createMimic} from './mimic.js';
 import {createWorldHits, cutDecal, createBatch, markMaterial, splatAtlas, splatCell, PAINT_COLORS, PAINT_ROWS, RANDOM_PAINT, rgbOf} from './decals.js';
 import {createDoors} from './doors.js';
 import {pickAvatar} from './picker.js';
@@ -108,6 +109,8 @@ async function start() {
   hits.addSolid(machine.root);
   hits.addSolid(createShelves(THREE, scene));
   const cleaning = createCleaning({level, scene, hits});
+  const mimic = createMimic(level, scene);   // the control room's ring board: occupied rooms light up
+  let mimicAt = 0;
   const bore = level.meta.bore;
   // height of the ceiling over a point: the tunnel's vault, a door passage, or a room
   function ceilingAt(x, z) {
@@ -1096,6 +1099,10 @@ async function start() {
       cleanTarget = cleaning.pick(o, d, 3.2, [...splatMarks, ...sprayMarks]);
     }
     cleaning.highlight(cleanTarget);
+    if (now - mimicAt > 250) {
+      mimicAt = now;
+      mimic.update([{x: player.x, z: player.z}, ...[...peers.values()].filter(p => p.last).map(p => p.last)]);
+    }
     updatePreview(now, h?.state.type === 'spray' && !!chosenPiece && !frozen && gallery.hidden);
     const pushable = !frozen && onButton();
     machine.highlight(pushable);
@@ -1131,7 +1138,7 @@ async function start() {
   });
   document.body.classList.add('ready');
   window.__111k = {scene, camera, player, peers, network, renderer, items, controls, hits, doors, me, meView, vertical,
-    voice, cleaning, get cleanTarget() { return cleanTarget; }, splatMarks, sprayMarks, addSplat, doorBatches, setView: v => { thirdPerson = v; }, primary, secondary, shoot, spray, choosePiece, choosePaint, toggleGallery, get pieces() { return pieces; }};
+    voice, cleaning, mimic, get cleanTarget() { return cleanTarget; }, splatMarks, sprayMarks, addSplat, doorBatches, setView: v => { thirdPerson = v; }, primary, secondary, shoot, spray, choosePiece, choosePaint, toggleGallery, get pieces() { return pieces; }};
 }
 
 start().catch(err => {

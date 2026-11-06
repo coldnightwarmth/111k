@@ -106,8 +106,9 @@ def control_room(C, door_x, r, group=None):
         W.collider_box((P.X1 - 0.42, 0, z), 0.4, 0.31, math.pi / 2, 0, 2.0)
     # the mimic board on the west wall, with a lamp per bay
     bw, bh, by = 3.2, 1.6, 1.75
-    W.face([(P.X0 + 0.02, by - bh / 2, 1.6), (P.X0 + 0.02, by - bh / 2, -1.6), (P.X0 + 0.02, by + bh / 2, -1.6),
-            (P.X0 + 0.02, by + bh / 2, 1.6)], M['mimic'], uv=[(0, 1), (1, 1), (1, 0), (0, 0)])
+    fx = P.X0 + 0.024   # clear of the backing panel's face at +0.02, so the two never fight
+    W.face([(fx, by - bh / 2, 1.6), (fx, by - bh / 2, -1.6), (fx, by + bh / 2, -1.6),
+            (fx, by + bh / 2, 1.6)], M['mimic'], uv=[(0, 1), (1, 1), (1, 0), (0, 0)])
     P.box((P.X0 + 0.01, by, 0), (0.02, bh + 0.08, bw + 0.08), 'charcoal')
     for i in range(20):
         a = 2 * math.pi * i / 20
@@ -166,7 +167,7 @@ def bathroom(C, door_x, r, group=None):
             W.box((x_front - 0.7, 0.03, zc + 0.2), (0.66, 0.03, 1.55), part, yaw=0.3)
         # toilet
         tx = x_back - 0.45
-        with W.frame((tx, 0, zc), -math.pi / 2):
+        with W.frame((tx, 0, zc), math.pi / 2):      # tank against the back wall, bowl toward the stall door
             P.cyl((0, 0, 0.06), 0.12, 0.05, 'porcelain', sides=16)                               # foot
             P.cyl((0, 0.05, 0.04), 0.115, 0.22, 'porcelain', sides=16, top=0.16)                 # pedestal
             P.cyl((0, 0.27, 0.0), 0.16, 0.08, 'porcelain', sides=18, top=0.2)                    # bowl
