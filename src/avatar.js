@@ -114,11 +114,15 @@ export async function createAvatar(look) {
   const holdNames = new Set(Object.values(HOLD));
   for (const [clip, action] of actions) {
     action.play().setEffectiveWeight(0);
-    if (clip.startsWith('Jump') || clip.startsWith('Pose_') || clip === 'Punch') action.paused = true;
+    if (clip.startsWith('Jump') || clip.startsWith('Pose_') || clip.startsWith('Punch')) action.paused = true;
   }
   const look_ = createLookPose(model);
   const socket = model.getObjectByName('CardSocketR') || model.getObjectByName('CardSocket.R');  // the loader strips the dot
   const punch = actions.get('Punch'), fallbackPunch = actions.get('Pose_powerpunch');
+  const punches = [punch, actions.get('PunchL') || punch];   // right, left
+  // throwing the other hand mid-punch: the last one keeps playing out its recovery underneath
+  let lastPt = -1, lastHand = 0, tail = null;
+  const punchCurve = k => Math.max(0, Math.min(1, k / .08, (1 - k) / .3));
   const head = model.getObjectByName('Head');
   let moving = false, speed = 0, walkBlend = 0, holdBlend = 0, hideHead = false;
 
@@ -149,13 +153,24 @@ export async function createAvatar(look) {
       const crouch = THREE.MathUtils.clamp(motion.crouch || 0, 0, 1), time = motion.jumpTime ?? -1;
       const airborne = time >= 0 && time <= 1.1;
       const jumpWeight = airborne ? Math.min(1, time / .06, (1.1 - time) / .1) : 0;
-      // the punch: a full-body clip, snapped in and eased back out
+      // the punch: a full-body clip, snapped in and eased back out. Hands alternate in a combo.
+      const hand = motion.punchHand === 1 ? 1 : 0;
+      if (punching && lastPt >= 0 && hand !== lastHand) tail = {hand: lastHand, t: lastPt, age: 0};
+      lastPt = punching ? pt : -1; lastHand = hand;
+      if (tail) { tail.t += dt; tail.age += dt; if (tail.t > PUNCH_DURATION || tail.age > .25 || !punching) tail = null; }
       const k = punching ? pt / PUNCH_DURATION : 1;
-      const punchWeight = punching ? Math.min(1, k / .08, (1 - k) / .3) : 0;
-      if (punch) { punch.time = k * punch.getClip().duration; punch.setEffectiveWeight(punchWeight); }
-      else if (fallbackPunch) { fallbackPunch.time = .2; fallbackPunch.setEffectiveWeight(punchWeight * Math.sin(Math.PI * k)); }
+      const mainWeight = punching ? punchCurve(k) : 0;
+      // the old fist pulls back over a quarter second while the new one takes over
+      const tailWeight = tail ? punchCurve(tail.t / PUNCH_DURATION) * (1 - tail.age / .25) * (1 - mainWeight * .6) : 0;
+      const punchWeight = Math.min(1, mainWeight + tailWeight);
+      const weights = new Map();
+      if (punch) {
+        const main = punches[hand];
+        main.time = k * main.getClip().duration; weights.set(main, mainWeight);
+        if (tail && punches[tail.hand] !== main) { const a = punches[tail.hand]; a.time = tail.t / PUNCH_DURATION * a.getClip().duration; weights.set(a, tailWeight); }
+      } else if (fallbackPunch) { fallbackPunch.time = .2; weights.set(fallbackPunch, mainWeight * Math.sin(Math.PI * k)); }
       for (const [clip, action] of actions) {
-        if (clip.startsWith('Pose_') || clip === 'Punch') { if (action !== fallbackPunch || punch) action.setEffectiveWeight(action === punch ? punchWeight : 0); continue; }
+        if (clip.startsWith('Pose_') || clip.startsWith('Punch')) { action.setEffectiveWeight(weights.get(action) || 0); continue; }
         const base = holdNames.has(clip) ? Object.keys(HOLD).find(n => HOLD[n] === clip) : clip;
         const hw = holdNames.has(clip) ? holdBlend : HOLD[clip] && actions.has(HOLD[clip]) ? 1 - holdBlend : 1;
         const legsOnly = punching ? .35 : 1;   // the punch owns the upper body; keep a little of the stride

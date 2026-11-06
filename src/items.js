@@ -3,8 +3,9 @@
 // in other players' hands and in your own view, and feeds torch beams to the
 // level shader.
 import * as THREE from 'three';
-import {lighting, MAX_FLASHLIGHTS} from './level.js';
+import {lighting, MAX_FLASHLIGHTS, MAX_SPOTLIGHTS, FAN, FAN_TAN, FAN_RANGE, flashlightReach, beamFrame} from './level.js';
 import {EYE_HEIGHT} from './motion.js';
+import {PAINT_COLORS, RANDOM_PAINT} from './decals.js';
 
 const BEAM_COLOR = new THREE.Color(1, .93, .8);
 export const ITEM_NAMES = {flashlight: 'flashlight', paintball: 'paintball marker', spray: 'spray can'};
@@ -31,35 +32,124 @@ function flashlightModel() {
   return g;
 }
 
-// A tournament-style paintball marker, muzzle down its local -z.
+// ----------------------------------------------------------------- the marker
+// Shapes drawn side-on (z forward/back, y up) and extruded across x, bevelled.
+function sideExtrude(points, width, bevel = .003, curveSegments = 6) {
+  const shape = new THREE.Shape();
+  points.forEach(([z, y, cz, cy], i) => {
+    if (i === 0) shape.moveTo(z, y);
+    else if (cz !== undefined) shape.quadraticCurveTo(cz, cy, z, y);
+    else shape.lineTo(z, y);
+  });
+  const geo = new THREE.ExtrudeGeometry(shape, {depth: width - 2 * bevel, bevelEnabled: bevel > 0, bevelThickness: bevel,
+    bevelSize: bevel, bevelOffset: -bevel, bevelSegments: 2, curveSegments});
+  geo.translate(0, 0, -(width - 2 * bevel) / 2);
+  geo.rotateY(-Math.PI / 2);          // shape x -> world z, extrusion -> world x
+  geo.computeVertexNormals();
+  return geo;
+}
+// A solid of revolution around the z axis from (radius, z) pairs.
+function lathe(profile, segments = 24) {
+  if (profile.at(-1)[1] < profile[0][1]) profile = [...profile].reverse();   // faces point outward when z runs back to front
+  const geo = new THREE.LatheGeometry(profile.map(([r, z]) => new THREE.Vector2(r, z)), segments);
+  geo.rotateX(Math.PI / 2);           // lathe y -> world z
+  return geo;
+}
+// knurled / ribbed bands around a z-axis part
+function rings(g, mat, r, z0, z1, n, y = 0, tube = .0016) {
+  for (let i = 0; i < n; i++) part(g, new THREE.TorusGeometry(r, tube, 5, 20), mat, [0, y, z0 + (z1 - z0) * (i + .5) / n]);
+}
+
+// A modern speedball marker, muzzle down its local -z, ~63 cm from muzzle to tank end.
+// The hopper's balls show the loaded paint (setPaint).
 function paintballModel() {
   const g = new THREE.Group();
-  const black = std(0x16171a, .45, .5), grey = std(0x3a3d44, .4, .6), metal = std(0x9aa0a8, .3, .85);
-  const accent = std(0xff2d8a, .4, .3, {emissive: 0x3a0015}), rubber = std(0x101010, .9, 0);
-  const smoke = std(0x9fd8ff, .15, 0, {transparent: true, opacity: .38, depthWrite: false});
   const X = [Math.PI / 2, 0, 0];
-  part(g, new THREE.BoxGeometry(.044, .075, .22), black, [0, 0, 0]);                       // body
-  part(g, new THREE.BoxGeometry(.046, .02, .2), accent, [0, .03, 0]);                     // top rail
-  part(g, new THREE.CylinderGeometry(.015, .015, .28, 14), metal, [0, .012, -.24], X);     // barrel
-  part(g, new THREE.CylinderGeometry(.019, .019, .05, 14), grey, [0, .012, -.13], X);      // barrel collar
-  for (let i = 0; i < 4; i++) part(g, new THREE.CylinderGeometry(.004, .004, .03, 6), black, [0, .028, -.28 - i * .03], [0, 0, Math.PI / 2]);  // ports
-  part(g, new THREE.BoxGeometry(.036, .11, .045), rubber, [0, -.085, .055], [-.25, 0, 0]);  // grip
-  part(g, new THREE.BoxGeometry(.03, .08, .035), rubber, [0, -.07, -.07], [-.1, 0, 0]);    // fore grip
-  part(g, new THREE.TorusGeometry(.024, .004, 4, 12, Math.PI), grey, [0, -.04, -.005], [0, Math.PI / 2, Math.PI]);   // trigger guard
-  part(g, new THREE.BoxGeometry(.006, .03, .006), metal, [0, -.05, -.005], [.3, 0, 0]);    // trigger
-  part(g, new THREE.CylinderGeometry(.034, .034, .19, 16), grey, [0, -.075, .18], X);      // air tank
-  part(g, new THREE.CylinderGeometry(.035, .035, .03, 16), accent, [0, -.075, .27], X);
-  const hopper = part(g, new THREE.SphereGeometry(.07, 16, 12), smoke, [0, .1, .015]);     // loader
-  hopper.scale.set(.8, .95, 1.25);
-  part(g, new THREE.CylinderGeometry(.018, .022, .05, 10), black, [0, .045, .0]);          // feed neck
-  const balls = new THREE.Group(); g.add(balls);
-  const cols = [0xff2d55, 0xffd60a, 0x32d74b, 0x0a84ff, 0xbf5af2, 0xff9f0a];
-  for (let i = 0; i < 9; i++) {
-    const b = part(balls, new THREE.SphereGeometry(.012, 8, 6), std(cols[i % cols.length], .3, 0),
-      [(i % 3 - 1) * .022, .08 + Math.floor(i / 3) * .022, ((i * 7) % 3 - 1) * .026]);
-    b.renderOrder = -1;
+  const ano = std(0x1b1d22, .32, .75);                      // black anodised aluminium
+  const accent = std(0xd8265f, .3, .7, {emissive: 0x1a0008});  // pink anodised parts
+  const steel = std(0xb8bdc4, .22, .95), dark = std(0x0b0b0c, .6, .3);
+  const rubber = std(0x151515, .92, 0), cover = std(0x23262b, .85, .05);
+  const smoke = std(0x2a3540, .08, 0, {transparent: true, opacity: .42, depthWrite: false, side: THREE.DoubleSide});
+  const glass = std(0xf2f0e6, .2, 0), needle = std(0xd02020, .4, .2);
+
+  // body: rounded back, flat top, raked front
+  part(g, sideExtrude([[.1, -.03], [.1, .016], [.08, .037, .1, .037], [-.095, .037], [-.12, .028, -.12, .037],
+    [-.12, -.008], [-.1, -.03, -.12, -.03], [.1, -.03]], .036, .004), ano);
+  part(g, sideExtrude([[.08, .037], [-.09, .037], [-.09, .041], [.08, .041]], .02, .0015), accent);       // top strip
+  part(g, sideExtrude([[.098, -.02], [.098, .012], [.086, .024, .098, .024], [.06, .024], [.06, -.02]], .0372, .0015), accent);   // back cap
+  for (const x of [-1, 1]) {
+    part(g, new THREE.CircleGeometry(.011, 20), accent, [x * .0186, .006, .03], [0, x * Math.PI / 2, 0]);  // eye covers
+    part(g, new THREE.CircleGeometry(.0065, 16), dark, [x * .0188, .006, .03], [0, x * Math.PI / 2, 0]);
+    for (const [z, y] of [[-.1, .02], [-.1, -.018], [.055, .028], [.055, -.022]])                         // screws
+      part(g, new THREE.CylinderGeometry(.0028, .0028, .002, 10), steel, [x * .0186, y, z], [0, 0, Math.PI / 2]);
+    for (let i = 0; i < 5; i++)                                                                           // milled slots
+      part(g, new THREE.BoxGeometry(.001, .006, .022), dark, [x * .0182, -.016, -.07 + i * .016]);
   }
-  g.userData = {tip: new THREE.Vector3(0, .012, -.39), ground: .045, groundRoll: Math.PI / 2};
+  // barrel: a ribbed back, a slim ported front, an open bore
+  part(g, lathe([[0, .0], [.019, 0], [.019, -.012], [.0175, -.016], [.0175, -.07], [.0185, -.075], [.0185, -.085], [.0165, -.09], [0, -.09]]),
+    steel, [0, .012, -.115]);
+  rings(g, ano, .0177, -.135, -.18, 6, .012, .0013);
+  part(g, lathe([[0, 0], [.0158, 0], [.0152, -.2], [.0168, -.204], [.0168, -.222], [.0118, -.224], [.0118, -.02], [0, -.02]], 28),
+    ano, [0, .012, -.205]);
+  for (let i = 0; i < 12; i++) {                                                                          // porting: a spiral of holes
+    const a = i * 2.1, z = -.33 - i * .007;
+    part(g, new THREE.CylinderGeometry(.0025, .0025, .004, 8), dark, [Math.cos(a) * .0152, .012 + Math.sin(a) * .0152, z], [0, 0, a + Math.PI / 2]);
+  }
+  part(g, new THREE.CircleGeometry(.0117, 20), dark, [0, .012, -.4275], [Math.PI, 0, 0]);                  // bore
+
+  // grip frame with wraparound rubber, trigger guard and blade
+  const gripPts = [[.022, -.029], [.034, -.128, .02, -.11], [.09, -.13, .062, -.142], [.09, -.12], [.072, -.029]];
+  part(g, sideExtrude(gripPts, .028, .003), ano);
+  part(g, sideExtrude([[.03, -.04], [.039, -.118, .03, -.105], [.08, -.122, .06, -.13], [.07, -.04]], .0335, .004), rubber);
+  for (let i = 0; i < 6; i++) part(g, new THREE.BoxGeometry(.035, .0025, .006), dark, [0, -.055 - i * .012, .068 - i * .0015]);   // stippling ribs
+  const guard = new THREE.CatmullRomCurve3([[0, -.03, .02], [0, -.07, .016], [0, -.078, -.01], [0, -.073, -.04], [0, -.03, -.05]].map(p => new THREE.Vector3(...p)));
+  part(g, new THREE.TubeGeometry(guard, 24, .0042, 8, false), ano);
+  part(g, sideExtrude([[-.004, -.03], [.004, -.03], [.006, -.05, .009, -.04], [-.001, -.064, .006, -.06], [-.006, -.06], [-.001, -.05, -.002, -.056], [-.004, -.03]], .008, .0015, 8), steel);
+  // foregrip with the air source adapter under it
+  part(g, sideExtrude([[-.05, -.029], [-.052, -.118], [-.06, -.128, -.052, -.128], [-.082, -.128], [-.09, -.118, -.09, -.128], [-.092, -.029]], .03, .003), ano);
+  for (let i = 0; i < 4; i++) part(g, new THREE.BoxGeometry(.031, .0045, .028), rubber, [0, -.05 - i * .018, -.071]);
+  const ty = -.172;
+  part(g, new THREE.CylinderGeometry(.015, .015, .022, 18), steel, [0, -.138, -.066]);                     // ASA
+  part(g, new THREE.CylinderGeometry(.007, .007, .02, 10), accent, [.017, -.137, -.066], [0, 0, Math.PI / 2]);   // on/off knob
+  // the tank runs back under the grip as a stock: regulator, gauge, bottle, cover
+  part(g, lathe([[0, -.088], [.022, -.088], [.026, -.083], [.026, -.04], [.022, -.036], [.022, -.025], [0, -.025]]), steel, [0, ty, 0]);
+  rings(g, dark, .0262, -.078, -.05, 5, ty, .0011);
+  part(g, new THREE.CylinderGeometry(.011, .011, .012, 20), steel, [.03, ty, -.06], [0, 0, Math.PI / 2]);   // gauge
+  part(g, new THREE.CircleGeometry(.0092, 20), glass, [.0362, ty, -.06], [0, Math.PI / 2, 0]);
+  part(g, new THREE.BoxGeometry(.0006, .007, .0012), needle, [.0366, ty + .002, -.06], [.6, 0, 0]);
+  part(g, lathe([[0, -.028], [.03, -.028], [.034, -.016], [.035, .004], [.035, .19], [.03, .218], [.018, .232], [0, .236]], 28), steel, [0, ty, 0]);
+  part(g, lathe([[.0362, .006], [.0362, .186]], 28), cover, [0, ty, 0]);
+  part(g, new THREE.CylinderGeometry(.0366, .0366, .012, 28, 1, true), accent, [0, ty, .168], X);          // cover stripes
+  part(g, new THREE.CylinderGeometry(.0366, .0366, .006, 28, 1, true), accent, [0, ty, .03], X);
+  // macroline from the ASA up into the front of the body
+  const hose = new THREE.CatmullRomCurve3([[0, -.125, -.08], [.0, -.11, -.11], [0, -.05, -.118], [0, -.015, -.112]].map(p => new THREE.Vector3(...p)));
+  part(g, new THREE.TubeGeometry(hose, 20, .0034, 8, false), dark);
+  // feed neck with a clamp, and the pod hopper on top
+  part(g, new THREE.CylinderGeometry(.0165, .0175, .03, 20), ano, [0, .052, -.02]);
+  part(g, new THREE.CylinderGeometry(.0195, .0195, .012, 20), accent, [0, .058, -.02]);
+  part(g, new THREE.BoxGeometry(.006, .006, .022), steel, [.022, .058, -.02]);                           // clamp lever
+  const shell = part(g, new THREE.SphereGeometry(1, 28, 18, 0, Math.PI * 2, Math.PI * .34, Math.PI * .66), smoke, [0, .118, .005]);
+  shell.scale.set(.052, .054, .098); shell.renderOrder = 2;
+  const lid = part(g, new THREE.SphereGeometry(1, 28, 10, 0, Math.PI * 2, 0, Math.PI * .36), ano, [0, .118, .005]);
+  lid.scale.set(.0525, .0545, .0985);
+  part(g, new THREE.TorusGeometry(1, .03, 6, 32), accent, [0, .118 + .054 * Math.cos(Math.PI * .36), .005], [Math.PI / 2, 0, 0])
+    .scale.set(.052 * Math.sin(Math.PI * .36), .098 * Math.sin(Math.PI * .36), .1);
+  part(g, new THREE.BoxGeometry(.018, .006, .03), accent, [0, .174, -.03], [-.15, 0, 0]);                  // lid latch
+  // the paint inside: balls settled into the bottom of the pod
+  const balls = [], ballGeo = new THREE.SphereGeometry(.0087, 12, 8);
+  for (let layer = 0; layer < 3; layer++) for (let i = 0; i < 11; i++) {
+    const a = i / 11 * Math.PI * 2 + layer * .5, rr = layer === 2 ? .45 : .72;
+    const b = part(g, ballGeo, std(0xffffff, .25, 0, {emissive: 0x000000}),
+      [Math.cos(a) * .052 * rr * .78, .085 + layer * .016, .005 + Math.sin(a) * .098 * rr * .8]);
+    b.renderOrder = 1; balls.push(b);
+  }
+  let shown = null;
+  const setPaint = (color, palette) => {
+    if (color === shown) return;
+    shown = color;
+    balls.forEach((b, i) => b.material.color.setHex(color < 0 ? palette[(i * 7 + 3) % palette.length] : color));
+  };
+  g.userData = {tip: new THREE.Vector3(0, .012, -.428), ground: .052, groundRoll: Math.PI / 2, setPaint};
   return g;
 }
 
@@ -81,12 +171,33 @@ function sprayModel(id) {
 }
 
 const MODELS = {flashlight: flashlightModel, paintball: paintballModel, spray: sprayModel};
+export const ITEM_MODELS = MODELS;   // for previews
 
-export function createItems({scene, camera}) {
+export function createItems({scene, camera, hits}) {
   const items = new Map();          // id -> {state, model, kick}
   const spots = [];                 // real spotlights so avatars catch the beams
   const lit = [];                   // switched-on flashlights this frame, nearest first
-  for (let i = 0; i < MAX_FLASHLIGHTS; i++) {
+  let myPaint = RANDOM_PAINT;       // the colour you've loaded into the marker
+  // how far each ray of a beam's fan gets before it hits the level (cached while the light holds still)
+  const fanRight = new THREE.Vector3(), fanUp = new THREE.Vector3(), fanDir = new THREE.Vector3();
+  let fanBudget = 0;                // fans re-cast this frame (moving lights beyond this reuse last frame's)
+  function reachOf(it, origin, dir) {
+    const key = `${origin.x.toFixed(2)},${origin.y.toFixed(2)},${origin.z.toFixed(2)},${dir.x.toFixed(3)},${dir.y.toFixed(3)},${dir.z.toFixed(3)}`;
+    if (it.fanKey === key || (it.fan && fanBudget <= 0)) return it.fan;
+    fanBudget--;
+    it.fanKey = key; it.fan ??= new Uint8Array(FAN * FAN);
+    const fw = fanDir.copy(dir).normalize();
+    beamFrame(fw, fanRight, fanUp);
+    const ray = new THREE.Vector3();
+    for (let gy = 0; gy < FAN; gy++) for (let gx = 0; gx < FAN; gx++) {
+      const tu = (gx / (FAN - 1) * 2 - 1) * FAN_TAN, tv = (gy / (FAN - 1) * 2 - 1) * FAN_TAN;
+      ray.copy(fw).addScaledVector(fanRight, tu).addScaledVector(fanUp, tv).normalize();
+      const h = hits?.raycast(origin, ray, FAN_RANGE, true);
+      it.fan[gy * FAN + gx] = Math.round((h ? h.distance : FAN_RANGE) / FAN_RANGE * 255);
+    }
+    return it.fan;
+  }
+  for (let i = 0; i < MAX_SPOTLIGHTS; i++) {
     const s = new THREE.SpotLight(BEAM_COLOR, 0, 18, .52, .45, 1.6);
     scene.add(s, s.target);
     spots.push(s);
@@ -120,6 +231,7 @@ export function createItems({scene, camera}) {
     // recoil / shake for your own view model
     kick(id, amount = 1) { const it = items.get(id); if (it) it.kick = amount; },
     shake(id) { const it = items.get(id); if (it) it.shake = .5; },
+    setMyPaint(c) { myPaint = c; },
     // nearest free item within reach that you're roughly looking at
     // the item the crosshair is actually on: the camera's ray has to pass over it
     // (with a few centimetres to spare), it has to be within reach of your body,
@@ -145,6 +257,8 @@ export function createItems({scene, camera}) {
       let n = 0;
       for (const it of items.values()) {
         const s = it.state, m = it.model, u = m.userData;
+        // the hopper shows what's loaded: yours, the holder's choice, or a mix lying on the floor
+        if (u.setPaint) u.setPaint(s.holder === myId ? myPaint : s.holder ? (poseOf(s.holder)?.pc ?? RANDOM_PAINT) : RANDOM_PAINT, PAINT_COLORS);
         it.kick *= Math.exp(-dt * 14); it.shake = Math.max(0, it.shake - dt);
         let origin = null, dir = null;
         if (!(s.holder === myId && !thirdPerson) || s.type === 'flashlight') m.scale.setScalar(1);
@@ -164,8 +278,8 @@ export function createItems({scene, camera}) {
           it.sway += dt;
           const bob = Math.sin(it.sway * 1.7) * .004;
           if (s.type === 'paintball') {
-            m.scale.setScalar(.72);
-            m.position.set(.0, -.04 + bob + it.kick * .012, -.02 + it.kick * .05);
+            m.scale.setScalar(.64);
+            m.position.set(.0, -.05 + bob + it.kick * .012, -.02 + it.kick * .05);
             m.rotation.set(.04 + it.kick * .12, -.06, 0);
           } else if (s.type === 'spray') {
             const sh = it.shake > 0 ? Math.sin(it.sway * 70) * .006 : 0;
@@ -210,20 +324,29 @@ export function createItems({scene, camera}) {
           // only a few beams can be lit at once: yours first, then other people's, then the nearest on the floor
           const far = origin.distanceTo(camera.position);
           if (!s.holder && far > 30) continue;
-          lit.push({origin, dir, rank: s.holder === myId ? -1e6 : s.holder ? far - 1e3 : far});
+          lit.push({it, origin, dir, rank: s.holder === myId ? -1e6 : s.holder ? far - 1e3 : far});
         }
       }
       lit.sort((a, b) => a.rank - b.rank);
+      fanBudget = 2;
       for (const l of lit) {
         if (n >= MAX_FLASHLIGHTS) break;
         lighting.flPos.value[n].copy(l.origin);
         lighting.flDir.value[n].copy(l.dir).normalize();
         lighting.flOn.value[n] = 1;
-        spots[n].position.copy(l.origin); spots[n].target.position.copy(l.origin).add(l.dir); spots[n].intensity = 40;
+        const fan = reachOf(l.it, l.origin, l.dir);
+        flashlightReach.data.set(fan, n * FAN * FAN);
+        if (n < MAX_SPOTLIGHTS) {
+          // avatars catch the beam too, but not through the wall it's pointed at
+          spots[n].position.copy(l.origin); spots[n].target.position.copy(l.origin).add(l.dir); spots[n].intensity = 40;
+          spots[n].distance = Math.min(18, fan[(FAN * FAN - 1) / 2] / 255 * FAN_RANGE + 1);
+        }
         n++;
       }
+      flashlightReach.texture.needsUpdate = true;
       lit.length = 0;
-      for (let i = n; i < MAX_FLASHLIGHTS; i++) { lighting.flOn.value[i] = 0; spots[i].intensity = 0; }
+      for (let i = n; i < MAX_FLASHLIGHTS; i++) lighting.flOn.value[i] = 0;
+      for (let i = n; i < MAX_SPOTLIGHTS; i++) spots[i].intensity = 0;
     },
   };
 }

@@ -8,11 +8,11 @@ import {connectRoom} from './net.js';
 import {createChatUI, createBubble} from './chat.js';
 import {createControls} from './controls.js';
 import {createItems, ITEM_NAMES} from './items.js';
-import {createWorldHits, cutDecal, createBatch, markMaterial, splatAtlas, splatCell, PAINT_COLORS, rgbOf} from './decals.js';
+import {createWorldHits, cutDecal, createBatch, markMaterial, splatAtlas, splatCell, PAINT_COLORS, PAINT_ROWS, RANDOM_PAINT, rgbOf} from './decals.js';
 import {createDoors} from './doors.js';
 import {pickAvatar} from './picker.js';
 import {randomLook, cleanLook} from './looks.js';
-import {EMOTES, EMOTE_DURATION, PUNCH_COOLDOWN_MS, PUNCH_DURATION, SHOT_INTERVAL_MS, SPRAY_INTERVAL_MS, SPRAY_RANGE,
+import {EMOTES, EMOTE_DURATION, PUNCH_COOLDOWN_MS, PUNCH_DURATION, PUNCH_COMBO_MS, SHOT_INTERVAL_MS, SPRAY_INTERVAL_MS, SPRAY_RANGE,
   MAX_SPLATS, MAX_SPRAYS, SPLAT_LIFE_MS, sanitizePose, sanitizeName, cleanSplat, cleanSpray} from './protocol.js';
 
 const params = new URLSearchParams(location.search);
@@ -118,7 +118,7 @@ async function start() {
   const spawn = spawns[Math.floor(Math.random() * spawns.length)];
   const resumed = mine.resumed && Number.isFinite(mine.x) && Number.isFinite(mine.z);
   const player = {x: resumed ? mine.x : spawn.x, z: resumed ? mine.z : spawn.z, y: EYE_HEIGHT, vx: 0, vz: 0, kx: 0, kz: 0,
-    emote: '', emoteTime: 0, punchTime: -1,
+    emote: '', emoteTime: 0, punchTime: -1, punchHand: 0, impactIn: -1,
     ground: resumed && Number.isFinite(mine.g) ? mine.g : 0,   // height of whatever's under your feet (floor, pallet, desk)
     fall: 0, stepLag: 0};
   const vertical = createVerticalMovement();
@@ -141,8 +141,8 @@ async function start() {
     onLockChange: locked => {
       document.body.classList.toggle('locked', locked);
       if (locked) { toggleGallery(false); return; }
-      // Esc while holding a can opens the piece gallery
-      if (!menuRelease && heldType() === 'spray' && !chat.open && emoteMenu.hidden) toggleGallery(true);
+      // Esc while holding a can opens the piece gallery (or, holding the marker, the paint list)
+      if (!menuRelease && ['spray', 'paintball'].includes(heldType()) && !chat.open && emoteMenu.hidden) toggleGallery(true);
       menuRelease = false;
     },
     onPrimary: () => primary(),
@@ -216,6 +216,7 @@ async function start() {
   }
   const sprayMarks = [];
   const fades = [];   // freshly sprayed pieces fade in
+  const PUNCH_IMPACT = .2;   // seconds into the punch when the fist is all the way out (frame 6 of 15)
   const SPRAY_FADE_IN = .28, PAINT_FADE_MS = 4000, HOP_GRACE = .2;
   let lastPaintCheck = 0;
   function addSplat(s, fresh = false, age = 0) {
@@ -363,7 +364,7 @@ async function start() {
   }
 
   // ------------------------------------------------------------- items
-  const items = createItems({scene, camera});
+  const items = createItems({scene, camera, hits});
   const prompt = $('prompt'), btnAct = $('btnAct');
   const held = () => network.id ? items.heldBy(network.id) : null;
   const heldType = () => held()?.state.type || '';
@@ -397,7 +398,9 @@ async function start() {
   function punch() {
     const now = performance.now();
     if (now - lastPunch < PUNCH_COOLDOWN_MS) return;
-    lastPunch = now; player.punchTime = 0; player.emote = ''; shake = Math.max(shake, .25);
+    // keep clicking and the hands alternate, jab-cross; leave it a moment and the next starts from the right
+    player.punchHand = now - lastPunch < PUNCH_COMBO_MS ? 1 - player.punchHand : 0;
+    lastPunch = now; player.punchTime = 0; player.emote = '';
     // whoever is closest in front of you, within reach
     const yaw = controls.state.yaw, fx = -Math.sin(yaw), fz = -Math.cos(yaw);
     let best = null, bestD = 1.6;
@@ -429,7 +432,8 @@ async function start() {
     const v = dir.multiplyScalar(SPEED);
     v.y += .5 * GRAVITY * tFlight;
     v.x += (Math.random() - .5) * .5; v.y += (Math.random() - .5) * .5; v.z += (Math.random() - .5) * .5;
-    const color = PAINT_COLORS[Math.floor(Math.random() * PAINT_COLORS.length)], seed = Math.floor(Math.random() * 0xffffff);
+    const color = chosenPaint === RANDOM_PAINT ? PAINT_COLORS[Math.floor(Math.random() * PAINT_COLORS.length)] : chosenPaint;
+    const seed = Math.floor(Math.random() * 0xffffff);
     const land = trace(muzzle, v, network.id);
     const msg = {type: 'shoot', o: muzzle.toArray().map(r3), v: v.toArray().map(r3), c: color, s: seed, t: r3(land.t)};
     if (land.target) {
@@ -484,9 +488,48 @@ async function start() {
   }
   function toggleGallery(force) {
     const open = force ?? gallery.hidden;
-    if (open && !pieces.length) return;
-    if (open) { buildGallery(); gallery.querySelector('.chosen')?.scrollIntoView({block: 'nearest'}); }
+    const paint = heldType() === 'paintball';
+    if (open && !paint && !pieces.length) return;
+    if (open) {
+      gallery.dataset.mode = paint ? 'paint' : 'piece';
+      gallery.setAttribute('aria-label', paint ? 'paint to load' : 'pieces to spray');
+      gallery.querySelector('h2').textContent = paint ? 'pick a paint' : 'pick a piece';
+      gallery.querySelector(':scope > p').textContent = paint ? 'click a colour, then click back in to fire' : 'click a piece, then click back in to spray';
+      if (paint) buildPaints(); else buildGallery();
+      gallery.querySelector(paint ? '.paints .chosen' : '.list .chosen')?.scrollIntoView({block: 'nearest'});
+    }
     gallery.hidden = !open;
+  }
+
+  // ------------------------------------------------------- marker paint
+  const paintList = gallery.querySelector('.paints'), paintLabel = $('paintLabel'), btnGallery = $('btnGallery');
+  const hex = c => '#' + c.toString(16).padStart(6, '0');
+  const RAINBOW = `conic-gradient(${PAINT_ROWS.slice(0, 7).map(([, sh]) => hex(sh[1])).join(', ')}, ${hex(PAINT_ROWS[0][1][1])})`;
+  let chosenPaint = RANDOM_PAINT;
+  try { const v = Number(localStorage.getItem('111k:paint')); if (PAINT_COLORS.includes(v)) chosenPaint = v; } catch {}
+  function buildPaints() {
+    if (paintList.childElementCount) return;
+    const swatch = (c, label) => {
+      const b = document.createElement('button'); b.type = 'button'; b.title = label; b.dataset.paint = c;
+      b.style.setProperty('--paint', c === RANDOM_PAINT ? RAINBOW : hex(c));
+      b.addEventListener('click', () => choosePaint(c));
+      return b;
+    };
+    const random = swatch(RANDOM_PAINT, 'random'); random.classList.add('random'); random.textContent = 'random';
+    paintList.append(random);
+    for (const [name, shades] of PAINT_ROWS) {
+      const row = document.createElement('div'); row.className = 'row'; row.textContent = name;
+      paintList.append(row, ...shades.map((c, i) => swatch(c, name.includes(',') ? name.split(', ')[i] : `${['light', '', 'deep'][i]} ${name}`.trim())));
+    }
+    choosePaint(chosenPaint);
+  }
+  function choosePaint(c) {
+    chosenPaint = c;
+    try { localStorage.setItem('111k:paint', String(c)); } catch {}
+    items.setMyPaint(c);
+    for (const b of paintList.querySelectorAll('button')) b.classList.toggle('chosen', Number(b.dataset.paint) === c);
+    const dot = document.createElement('i'); dot.style.setProperty('--paint', c === RANDOM_PAINT ? RAINBOW : hex(c));
+    paintLabel.replaceChildren(dot, document.createTextNode(isTouch ? 'tap paint to change' : 'esc: change paint'));
   }
   function spray() {
     const now = performance.now(), can = held();
@@ -569,6 +612,8 @@ async function start() {
       if (before === network.id && it.holder !== network.id) toggleGallery(false);
     },
     onPunch: m => {
+      // your fist landed: the jolt comes as it connects, not when you swing
+      if (m.from === network.id) player.impactIn = Math.max(0, PUNCH_IMPACT - Math.max(0, player.punchTime));
       if (m.target === network.id) {
         // knocked back, a little hop, and the screen jolts
         player.kx += m.dir[0] * 7.5; player.kz += m.dir[1] * 7.5;
@@ -631,6 +676,7 @@ async function start() {
   loading.classList.add('done');
   $('hint').hidden = isTouch;
   choosePiece(chosenPiece);
+  choosePaint(chosenPaint);
 
   function project(pos, height) {
     bubbleAnchor.set(pos.x, height, pos.z).project(camera);
@@ -683,6 +729,7 @@ async function start() {
     if (velocity > .3) player.emote = '';
     if (player.emote) player.emoteTime = Math.min(EMOTE_DURATION, player.emoteTime + dt);
     if (player.punchTime >= 0) { player.punchTime += dt; if (player.punchTime > PUNCH_DURATION) player.punchTime = -1; }
+    if (player.impactIn >= 0) { player.impactIn -= dt; if (player.impactIn < 0) shake = Math.max(shake, .45); }
     const eye = vertical.update(dt, !frozen && input.crouch);
     // standing on things: step up onto low tops, land on higher ones from a jump, drop off edges
     {
@@ -704,8 +751,9 @@ async function start() {
     const h = held(), holding = !!h;
     if (h?.state.type === 'paintball' && input.firing && !frozen) shoot();
     document.body.classList.toggle('holding-spray', h?.state.type === 'spray');
+    document.body.classList.toggle('holding-paint', h?.state.type === 'paintball');
     const motion = {...vertical.pose, emote: player.emote, emoteTime: player.emoteTime, pitch: input.pitch,
-      punchTime: player.punchTime, holding};
+      punchTime: player.punchTime, punchHand: player.punchHand, holding};
 
     // local avatar
     me.root.position.set(player.x, player.ground + player.stepLag, player.z); me.root.rotation.y = input.yaw;
@@ -756,7 +804,7 @@ async function start() {
       meView.root.visible = player.punchTime >= 0;
       if (meView.root.visible) {
         meView.root.position.set(.0, -EYE_HEIGHT + .36, .3);
-        meView.update(dt, 0, {punchTime: player.punchTime, pitch: 0});
+        meView.update(dt, 0, {punchTime: player.punchTime, punchHand: player.punchHand, pitch: 0});
       }
     }
     firstFrame = false;
@@ -765,9 +813,9 @@ async function start() {
 
     // network: 15 Hz while something changes, then 3 settling packets
     if (now - sentAt >= 1000 / 15 && network.online) {
-      const pose = sanitizePose({x: player.x, y: player.y, z: player.z, g: player.ground, yaw: input.yaw, pitch: input.pitch, room: 'office',
+      const pose = sanitizePose({x: player.x, y: player.y, z: player.z, g: player.ground, pc: chosenPaint, yaw: input.yaw, pitch: input.pitch, room: 'office',
         crouch: motion.crouch, jumpTime: motion.jumpTime, jumpPower: motion.jumpPower, emote: player.emote, emoteTime: player.emoteTime,
-        typing: chat.typing, punchTime: player.punchTime});
+        typing: chat.typing, punchTime: player.punchTime, punchHand: player.punchHand});
       const key = JSON.stringify(pose);
       if (key !== lastSent) settle = 3;
       if (key !== lastSent || settle > 0) { network.sendPose(pose); if (key === lastSent) settle--; lastSent = key; }
@@ -852,6 +900,9 @@ async function start() {
     if (prompt.textContent !== hint) prompt.textContent = hint;
     document.body.classList.toggle('holding', !!h);
     tagLabel.hidden = type !== 'spray' || !chosenPiece;
+    paintLabel.hidden = type !== 'paintball';
+    const galleryLabel = type === 'paintball' ? 'paint' : 'tags';
+    if (btnGallery.textContent !== galleryLabel) btnGallery.textContent = galleryLabel;
     const act = h ? (type === 'flashlight' ? (h.state.on ? 'light off' : 'light on') : type === 'paintball' ? 'fire' : 'spray') : t ? 'grab' : 'punch';
     if (btnAct.textContent !== act) btnAct.textContent = act;
     document.body.classList.toggle('can-grab', !!t);
@@ -865,7 +916,7 @@ async function start() {
   });
   document.body.classList.add('ready');
   window.__111k = {scene, camera, player, peers, network, renderer, items, controls, hits, doors, me, meView, vertical,
-    splatMarks, addSplat, doorBatches, setView: v => { thirdPerson = v; }, primary, secondary, shoot, spray, choosePiece, toggleGallery, get pieces() { return pieces; }};
+    splatMarks, addSplat, doorBatches, setView: v => { thirdPerson = v; }, primary, secondary, shoot, spray, choosePiece, choosePaint, toggleGallery, get pieces() { return pieces; }};
 }
 
 start().catch(err => {

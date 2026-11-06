@@ -279,8 +279,19 @@ export function splatAtlas() {
 export const SPLAT_CELLS = 8;
 export const splatCell = seed => [(seed % 4) / 4, Math.floor((seed % 8) / 4) / 2];
 
-export const PAINT_COLORS = [0xff2d55, 0xff9f0a, 0xffd60a, 0x32d74b, 0x00c7be, 0x0a84ff, 0x5e5ce6, 0xbf5af2,
-  0xff375f, 0x64d2ff, 0xf5f5f0, 0x1d1d1f, 0xff6b00, 0x9dff00, 0xff00c8, 0x00ffa3];
+// Paint you can load: the rainbow in a light, a true and a deep shade, plus white, grey and black.
+export const PAINT_ROWS = [
+  ['red', [0xff8f8f, 0xe8232b, 0x8c0f16]],
+  ['orange', [0xffbd80, 0xff7a00, 0xa64600]],
+  ['yellow', [0xfff28f, 0xffd400, 0xa88c00]],
+  ['green', [0x94f094, 0x22c33a, 0x0d6b1f]],
+  ['blue', [0x92c8ff, 0x1e6fff, 0x0c308c]],
+  ['indigo', [0xaba6ff, 0x4b3cd6, 0x24196e]],
+  ['violet', [0xe2a6ff, 0xa83ce8, 0x5b1680]],
+  ['white, grey, black', [0xf5f5f0, 0x8a8a8e, 0x1a1a1c]],
+];
+export const PAINT_COLORS = PAINT_ROWS.flatMap(([, shades]) => shades);
+export const RANDOM_PAINT = -1;   // a different colour from the list for every ball
 export const rgbOf = c => {
   const col = new THREE.Color(c);   // sRGB hex -> working (linear) colour for vertex colours
   return [Math.round(col.r * 255), Math.round(col.g * 255), Math.round(col.b * 255)];

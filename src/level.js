@@ -6,7 +6,23 @@
 import * as THREE from 'three';
 import {GLTFLoader} from '../vendor/three/GLTFLoader.js';
 
-export const MAX_FLASHLIGHTS = 4;
+export const MAX_FLASHLIGHTS = 8;   // beams painted onto the level (cheap: done in the lightmap shader)
+export const MAX_SPOTLIGHTS = 4;    // of those, the nearest also get a real spotlight so avatars catch them (dearer)
+// What each beam can reach: a small fan of rays per flashlight, cast into the level on the
+// CPU; the shader cuts the beam off past whatever each ray hit, so light stops at walls.
+export const FAN = 7;               // rays across (and down) the cone
+export const FAN_TAN = .78;         // the fan spans tan(angle) -FAN_TAN..FAN_TAN (the cone edge is ~.75)
+export const FAN_RANGE = 25;        // metres; the reach map stores 0..1 of this
+const fanData = new Uint8Array(FAN * FAN * MAX_FLASHLIGHTS).fill(255);
+const fanTexture = new THREE.DataTexture(fanData, FAN, FAN * MAX_FLASHLIGHTS, THREE.RedFormat, THREE.UnsignedByteType);
+fanTexture.magFilter = fanTexture.minFilter = THREE.LinearFilter; fanTexture.needsUpdate = true;
+export const flashlightReach = {data: fanData, texture: fanTexture};
+// the beam's own frame, shared with the shader: right and up across the cone
+export function beamFrame(dir, right, up) {
+  const ref = Math.abs(dir.y) > .95 ? [1, 0, 0] : [0, 1, 0];
+  right.set(dir.y * ref[2] - dir.z * ref[1], dir.z * ref[0] - dir.x * ref[2], dir.x * ref[1] - dir.y * ref[0]).normalize();
+  up.crossVectors(right, dir);
+}
 
 // Shared by every level material: the game updates these each frame.
 export const lighting = {
@@ -16,6 +32,7 @@ export const lighting = {
   flPos: {value: Array.from({length: MAX_FLASHLIGHTS}, () => new THREE.Vector3())},
   flDir: {value: Array.from({length: MAX_FLASHLIGHTS}, () => new THREE.Vector3(0, 0, -1))},
   flOn: {value: new Array(MAX_FLASHLIGHTS).fill(0)},
+  flReach: {value: fanTexture},
 };
 
 const LIGHTMAP_LINE = 'reflectedLight.indirectDiffuse += lightMapTexel.rgb * lightMapIntensity * RECIPROCAL_PI;';
@@ -34,24 +51,38 @@ uniform vec4 flickerK;
 uniform vec3 flickerTint;
 uniform vec3 flPos[${MAX_FLASHLIGHTS}];
 uniform vec3 flDir[${MAX_FLASHLIGHTS}];
-uniform float flOn[${MAX_FLASHLIGHTS}];`)
+uniform float flOn[${MAX_FLASHLIGHTS}];
+uniform sampler2D flReach;`)
       .replace(LIGHTMAP_LINE, `
     vec3 baked = lightMapTexel.rgb;
     // dim the share of each texel's light that comes from lamp groups currently flickering off
     float off = dot(texture2D(flickerMap, vLightMapUv), vec4(1.0) - flickerK);
     baked *= max(vec3(1.0) - flickerTint * off, vec3(0.0));
     reflectedLight.indirectDiffuse += baked * lightMapIntensity * RECIPROCAL_PI;
-    // flashlights: a soft-edged cone with distance falloff, on the face normal
+    // flashlights: a soft-edged cone with distance falloff. Only the side of a surface you're
+    // looking at, and only if the light is on that side too; and only as far as the beam reaches
     vec3 faceN = normalize(cross(dFdx(vWorldPos), dFdy(vWorldPos)));
+    if (dot(faceN, cameraPosition - vWorldPos) < 0.0) faceN = -faceN;
     for (int i = 0; i < ${MAX_FLASHLIGHTS}; i++) {
       if (flOn[i] < 0.01) continue;
       vec3 toL = flPos[i] - vWorldPos;
       float d = length(toL);
       vec3 L = toL / max(d, 1e-4);
-      float cosA = dot(-L, flDir[i]);
+      vec3 fw = flDir[i];
+      float cosA = dot(-L, fw);
+      float facing = dot(faceN, L);
+      if (cosA < 0.8 || facing <= 0.0) continue;
       float cone = smoothstep(0.80, 0.93, cosA) * (0.65 + 0.35 * smoothstep(0.93, 0.99, cosA));
-      float facing = abs(dot(faceN, L));
-      reflectedLight.indirectDiffuse += vec3(1.0, 0.94, 0.82) * flOn[i] * cone * facing * 9.0 / (1.0 + d * d * 0.45);
+      // where this point sits in the beam's ray fan, and how far that ray got
+      vec3 ref = abs(fw.y) > 0.95 ? vec3(1.0, 0.0, 0.0) : vec3(0.0, 1.0, 0.0);
+      vec3 rt = normalize(cross(fw, ref)), up = cross(rt, fw);
+      vec3 toP = -toL;
+      float along = dot(toP, fw);
+      vec2 t = vec2(dot(toP, rt), dot(toP, up)) / along / ${FAN_TAN.toFixed(3)} * 0.5 + 0.5;
+      t = clamp(t, 0.0, 1.0) * ${(FAN - 1).toFixed(1)} + 0.5;
+      float reach = texture2D(flReach, vec2(t.x / ${FAN.toFixed(1)}, (float(i) * ${FAN.toFixed(1)} + t.y) / ${(FAN * MAX_FLASHLIGHTS).toFixed(1)})).r * ${FAN_RANGE.toFixed(1)};
+      float open = 1.0 - smoothstep(reach + 0.12, reach + 0.45, d);
+      reflectedLight.indirectDiffuse += vec3(1.0, 0.94, 0.82) * flOn[i] * cone * facing * open * 9.0 / (1.0 + d * d * 0.45);
     }`);
   };
   material.customProgramCacheKey = () => 'level-lit';

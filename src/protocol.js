@@ -13,6 +13,7 @@ export const PICKUP_RANGE = 2.6;     // metres from a player's feet to an item t
 export const PUNCH_RANGE = 2.0;      // server-side check (clients aim at 1.6)
 export const PUNCH_COOLDOWN_MS = 420;
 export const PUNCH_DURATION = .5;
+export const PUNCH_COMBO_MS = 800;   // punch again within this and the other hand throws
 export const SHOT_INTERVAL_MS = 160;   // paintball rate of fire
 export const SPRAY_INTERVAL_MS = 450;
 export const SPRAY_RANGE = 3.2;        // metres from a player to the wall they tag
@@ -51,18 +52,20 @@ export function sanitizePose(p) {
   return {
     x: round(x), y: round(y), z: round(z), yaw: round(yaw), pitch: round(pitch), room,
     g: Number.isFinite(p.g) ? round(Math.max(-2, Math.min(5, p.g))) : 0,     // height of the floor under their feet
+    pc: Number.isInteger(p.pc) && p.pc >= -1 && p.pc <= 0xffffff ? p.pc : -1,   // paint loaded in their marker (-1: a mix)
     crouch: Number.isFinite(p.crouch) ? round(Math.max(0, Math.min(1, p.crouch))) : 0,
     jumpTime: Number.isFinite(p.jumpTime) ? round(Math.max(-1, Math.min(1.1, p.jumpTime))) : -1,
     jumpPower: Number.isFinite(p.jumpPower) ? round(Math.max(.5, Math.min(1.5, p.jumpPower)), 2) : 1,
     emote, emoteTime: emote ? round(normalizeEmoteTime(p.emoteTime)) : 0,
     typing: p.typing === true,
     punchTime: Number.isFinite(p.punchTime) ? round(Math.max(-1, Math.min(PUNCH_DURATION, p.punchTime))) : -1,
+    punchHand: p.punchHand === 1 ? 1 : 0,        // which fist: combos alternate
   };
 }
 
 export function samePose(a, b) {
   if (!a || !b) return false;
-  for (const k of ['x', 'y', 'z', 'g', 'yaw', 'pitch', 'room', 'crouch', 'jumpTime', 'jumpPower', 'emote', 'emoteTime', 'typing', 'punchTime'])
+  for (const k of ['x', 'y', 'z', 'g', 'pc', 'yaw', 'pitch', 'room', 'crouch', 'jumpTime', 'jumpPower', 'emote', 'emoteTime', 'typing', 'punchTime', 'punchHand'])
     if (a[k] !== b[k]) return false;
   return true;
 }

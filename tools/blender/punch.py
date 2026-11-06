@@ -89,33 +89,74 @@ keys = [
     (15, {**legs, **guard_l, **guard_r, 'Pelvis': ('turn', 2), 'Chest': ('turn', 6), 'Head': ('turn', 0), 'drop': .03}),
 ]
 
-rig.animation_data_create()
-act = bpy.data.actions.new('Punch')
-rig.animation_data.action = act
-for frame, spec in keys:
-    pose(spec)
-    key(frame)
-# snappy timing: ease into the strike, then hold and settle
-for fc in getattr(act, 'fcurves', []):
-    for kp in fc.keyframe_points: kp.interpolation = 'BEZIER'
 
-# Export only the rig and this clip.
+
+def mirror(spec):
+    """The same move thrown with the other hand: swap sides, flip across the rig's x, turn the other way.
+    The legs keep their stance (left foot forward), so the two hands make a jab-cross pair."""
+    out = {}
+    for name, v in spec.items():
+        if name == 'drop': out[name] = v; continue
+        if name.startswith(('Thigh', 'Shin', 'Foot')): out[name] = v; continue
+        other = name[:-2] + ('.L' if name.endswith('.R') else '.R') if name.endswith(('.L', '.R')) else name
+        if v[0] == 'aim': out[other] = ('aim', Vector((-v[1].x, v[1].y, v[1].z)), *(-t for t in v[2:]))
+        elif v[0] == 'turn': out[other] = ('turn', -v[1])
+        elif v[0] == 'lean': out[other] = ('lean', -v[1], v[2])
+    return out
+
+
+rig.animation_data_create()
+clips = {}
+for name, spec_keys in (('Punch', keys), ('PunchL', [(f, mirror(sp)) for f, sp in keys])):
+    act = bpy.data.actions.new(name)
+    act.use_fake_user = True
+    rig.animation_data.action = act
+    for frame, spec in spec_keys:
+        pose(spec)
+        key(frame)
+    clips[name] = act
+
+# Export only the rig and these clips: one glb per clip, then merged (the exporter writes the active action)
+import json, struct, os
 for a in list(bpy.data.actions):
-    if a is not act: a.use_fake_user = False
+    if a not in clips.values(): bpy.data.actions.remove(a)
 bpy.ops.object.mode_set(mode='OBJECT')
 scene.frame_start, scene.frame_end = 0, 15
-bpy.ops.export_scene.gltf(filepath=OUT, export_format='GLB', use_selection=True, export_animations=True,
-                          export_animation_mode='ACTIVE_ACTIONS', export_force_sampling=True, export_frame_range=False,
-                          export_skins=False, export_morph=False, export_materials='NONE')
-print('wrote', OUT)
 
-# name the clip (the exporter calls an active action "Animation")
-import json, struct
-data = open(OUT, 'rb').read()
-n = struct.unpack('<I', data[12:16])[0]
-g = json.loads(data[20:20 + n])
-g['animations'][0]['name'] = 'Punch'
+
+def read_glb(path):
+    data = open(path, 'rb').read()
+    n = struct.unpack('<I', data[12:16])[0]
+    return json.loads(data[20:20 + n]), data[20 + n + 8:]
+
+
+parts = []
+for name, act in clips.items():
+    rig.animation_data.action = act
+    path = OUT + f'.{name}.glb'
+    bpy.ops.export_scene.gltf(filepath=path, export_format='GLB', use_selection=True, export_animations=True,
+                              export_animation_mode='ACTIVE_ACTIONS', export_force_sampling=True, export_frame_range=False,
+                              export_skins=False, export_morph=False, export_materials='NONE')
+    parts.append((name, *read_glb(path)))
+    os.remove(path)
+# the second clip's buffer data is appended to the first's; its accessors and views are re-indexed
+g, bin0 = parts[0][1], parts[0][2]
+g['animations'][0]['name'] = parts[0][0]
+for name, g2, bin2 in parts[1:]:
+    pad = (-len(bin0)) % 4
+    bin0 += b'\0' * pad
+    off, nv, na = len(bin0), len(g['bufferViews']), len(g['accessors'])
+    for bv in g2['bufferViews']: g['bufferViews'].append({**bv, 'byteOffset': bv.get('byteOffset', 0) + off})
+    for ac in g2['accessors']: g['accessors'].append({**ac, 'bufferView': ac['bufferView'] + nv})
+    anim = g2['animations'][0]; anim['name'] = name
+    for smp in anim['samplers']: smp['input'] += na; smp['output'] += na
+    # channels target nodes by index: both exports list the same rig nodes in the same order
+    g['animations'].append(anim)
+    bin0 += bin2
+g['buffers'][0]['byteLength'] = len(bin0)
+bin0 += b'\0' * ((-len(bin0)) % 4)
+rest = struct.pack('<II', len(bin0), 0x004E4942) + bin0
 js = json.dumps(g, separators=(',', ':')).encode()
 js += b' ' * ((-len(js)) % 4)
-rest = data[20 + n:]
+print('wrote', OUT, [a['name'] for a in g['animations']])
 open(OUT, 'wb').write(struct.pack('<III', 0x46546C67, 2, 12 + 8 + len(js) + len(rest)) + struct.pack('<II', len(js), 0x4E4F534A) + js + rest)
