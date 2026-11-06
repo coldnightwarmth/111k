@@ -3,7 +3,8 @@
 // in other players' hands and in your own view, and feeds torch beams to the
 // level shader.
 import * as THREE from 'three';
-import {lighting, MAX_FLASHLIGHTS, MAX_SPOTLIGHTS, FAN_RANGE} from './level.js';
+import {lighting, MAX_FLASHLIGHTS, MAX_SPOTLIGHTS, FAN_RANGE, packBeams} from './level.js';
+const BEAM_FAR = 42, BEAM_FADE = 10;   // torches on the floor: full strength to 32 m, gone by 42 m
 import {EYE_HEIGHT} from './motion.js';
 import {PAINT_COLORS, RANDOM_PAINT} from './decals.js';
 
@@ -305,6 +306,7 @@ export function addOutline(model) {
 export function createItems({scene, camera, hits, shadows = null}) {
   const items = new Map();          // id -> {state, model, kick}
   const spots = [];                 // real spotlights so avatars catch the beams
+  const slotOf = new Map(), used = new Array(MAX_FLASHLIGHTS).fill(false);   // torch id -> its beam slot
   const lit = [];                   // switched-on flashlights this frame, nearest first
   let myPaint = RANDOM_PAINT;       // the colour you've loaded into the marker
   let highlighted = null;           // the item under your crosshair that you could pick up
@@ -504,30 +506,39 @@ export function createItems({scene, camera, hits, shadows = null}) {
         if (s.type !== 'flashlight') continue;
         u.lens.color.setScalar(s.on ? 4 : .2);
         if (s.on) {
-          // only a few beams can be lit at once: yours first, then other people's, then the nearest on the floor
+          // every lit torch shines. Ones lying far off fade out over a few metres rather than
+          // switching off at a line (the loop curves away; past ~40 m you can't see their light)
           const far = origin.distanceTo(camera.position);
-          if (!s.holder && far > 30) continue;
-          lit.push({it, origin, eye, dir, rank: s.holder === myId ? -1e6 : s.holder ? far - 1e3 : far});
+          const fade = s.holder ? 1 : Math.min(1, Math.max(0, (BEAM_FAR - far) / BEAM_FADE));
+          if (fade > 0) lit.push({it, origin, eye, dir, fade, rank: s.holder === myId ? -1e6 : s.holder ? far - 1e3 : far});
         }
       }
+      // each lit torch keeps its own slot (and so its shadow tile) for as long as it's lit
+      for (const [id, i] of slotOf) if (!lit.some(l => l.it.state.id === id)) { slotOf.delete(id); used[i] = false; }
+      let top = 0;
+      for (const l of lit) {
+        const id = l.it.state.id;
+        let i = slotOf.get(id);
+        if (i === undefined) { i = used.indexOf(false); if (i < 0) continue; used[i] = true; slotOf.set(id, i); }
+        lighting.flPos.value[i].copy(l.origin);
+        lighting.flDir.value[i].copy(l.dir).normalize();
+        lighting.flOn.value[i] = l.fade;
+        shadows?.assign(i, id, l.eye || l.origin, lighting.flDir.value[i]);
+        top = Math.max(top, i + 1);
+      }
+      for (let i = 0; i < MAX_FLASHLIGHTS; i++) if (!used[i]) { lighting.flOn.value[i] = 0; shadows?.clear(i); }
+      shadows?.render(dt);
+      packBeams(top);
+      // the nearest few also get a real spotlight so avatars catch them, but not through the wall it's pointed at
       lit.sort((a, b) => a.rank - b.rank);
       reachBudget = 4;
       for (const l of lit) {
-        if (n >= MAX_FLASHLIGHTS) break;
-        lighting.flPos.value[n].copy(l.origin);
-        lighting.flDir.value[n].copy(l.dir).normalize();
-        lighting.flOn.value[n] = 1;
-        shadows?.assign(n, l.it.state.id, l.eye || l.origin, lighting.flDir.value[n]);
-        if (n < MAX_SPOTLIGHTS) {
-          // avatars catch the beam too, but not through the wall it's pointed at
-          spots[n].position.copy(l.origin); spots[n].target.position.copy(l.origin).add(l.dir); spots[n].intensity = 40;
-          spots[n].distance = Math.min(18, reachOf(l.it, l.origin, l.dir) + 1);
-        }
+        if (n >= MAX_SPOTLIGHTS) break;
+        spots[n].position.copy(l.origin); spots[n].target.position.copy(l.origin).add(l.dir); spots[n].intensity = 40 * l.fade;
+        spots[n].distance = Math.min(18, reachOf(l.it, l.origin, l.dir) + 1);
         n++;
       }
       lit.length = 0;
-      for (let i = n; i < MAX_FLASHLIGHTS; i++) { lighting.flOn.value[i] = 0; shadows?.clear(i); }
-      shadows?.render(dt);
       for (let i = n; i < MAX_SPOTLIGHTS; i++) spots[i].intensity = 0;
     },
   };

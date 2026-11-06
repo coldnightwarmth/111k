@@ -5,14 +5,16 @@
 // lamp group per channel) and lets flashlights light the baked surfaces.
 import * as THREE from 'three';
 import {GLTFLoader} from '../vendor/three/GLTFLoader.js';
+import {ITEM_SPAWNS} from './world-items.js';
 
-export const MAX_FLASHLIGHTS = 8;   // beams painted onto the level (cheap: done in the lightmap shader)
+// every flashlight in the world can shine at once (each gets its own slot; no popping in and out)
+export const MAX_FLASHLIGHTS = Math.max(8, ITEM_SPAWNS.filter(i => i.type === 'flashlight').length);
 export const MAX_SPOTLIGHTS = 4;    // of those, the nearest also get a real spotlight so avatars catch them (dearer)
 // Each beam's shadows come from a depth map rendered from the torch (beamshadows.js), in a
 // frustum spanning tan(angle) -FAN_TAN..FAN_TAN (the cone edge is ~.75) out to FAN_RANGE metres.
 export const FAN_TAN = .78;
 export const FAN_RANGE = 25;
-const SHADOW_COLS = 4, SHADOW_ROWS = Math.ceil(MAX_FLASHLIGHTS / 4), SHADOW_TILE = 512;
+export const SHADOW_COLS = 5, SHADOW_ROWS = Math.ceil(MAX_FLASHLIGHTS / SHADOW_COLS), SHADOW_TILE = 512;
 // the beam's own frame, shared with the shader: right and up across the cone
 export function beamFrame(dir, right, up) {
   const ref = Math.abs(dir.y) > .95 ? [1, 0, 0] : [0, 1, 0];
@@ -32,7 +34,28 @@ export const lighting = {
   flOn: {value: new Array(MAX_FLASHLIGHTS).fill(0)},
   flShadow: {value: null},
   flMat: {value: Array.from({length: MAX_FLASHLIGHTS}, () => new THREE.Matrix4())},
+  // the beams above, packed into a small float texture for the shader (uniform arrays this long
+  // would overflow what phones allow): per beam a row of [pos, on] [dir] [shadow matrix x4]
+  flData: {value: null},
+  flUsed: {value: 0},                 // beam slots in use: 0..flUsed-1
 };
+{
+  const t = new THREE.DataTexture(new Float32Array(6 * MAX_FLASHLIGHTS * 4), 6, MAX_FLASHLIGHTS, THREE.RGBAFormat, THREE.FloatType);
+  t.minFilter = t.magFilter = THREE.NearestFilter; t.generateMipmaps = false; t.needsUpdate = true;
+  lighting.flData.value = t;
+}
+// copy this frame's beams into the shader's texture
+export function packBeams(used) {
+  const t = lighting.flData.value, a = t.image.data;
+  for (let i = 0; i < used; i++) {
+    const o = i * 24, p = lighting.flPos.value[i], d = lighting.flDir.value[i];
+    a[o] = p.x; a[o + 1] = p.y; a[o + 2] = p.z; a[o + 3] = lighting.flOn.value[i];
+    a[o + 4] = d.x; a[o + 5] = d.y; a[o + 6] = d.z; a[o + 7] = 0;
+    a.set(lighting.flMat.value[i].elements, o + 8);
+  }
+  lighting.flUsed.value = used;
+  t.needsUpdate = true;
+}
 
 // Near-camera ghosting: anything closer than about half a metre to the camera dissolves
 // through an ordered dither instead of being sliced by the near plane (third person only).
@@ -88,14 +111,14 @@ uniform sampler2D flickerMap2;
 uniform float flickerSplit;
 uniform vec4 flickerK;
 uniform vec3 flickerTint;
-uniform vec3 flPos[${MAX_FLASHLIGHTS}];
-uniform vec3 flDir[${MAX_FLASHLIGHTS}];
-uniform float flOn[${MAX_FLASHLIGHTS}];
-uniform mat4 flMat[${MAX_FLASHLIGHTS}];
+uniform highp sampler2D flData;
+uniform int flUsed;
+vec4 flTex(int i, int k) { return texelFetch(flData, ivec2(k, i), 0); }
 uniform highp sampler2DShadow flShadow;
 // how much of beam i reaches this point: soft-edged PCF against its tile of the shadow atlas
 float beamVisible(int i, vec3 p, vec3 n, float d) {
-  vec4 sc = flMat[i] * vec4(p + n * (0.012 + 0.0045 * d), 1.0);   // nudged off the surface by about a texel
+  mat4 M = mat4(flTex(i, 2), flTex(i, 3), flTex(i, 4), flTex(i, 5));
+  vec4 sc = M * vec4(p + n * (0.012 + 0.0045 * d), 1.0);   // nudged off the surface by about a texel
   if (sc.w <= 0.0) return 1.0;
   vec3 nd = sc.xyz / sc.w;
   float depth = nd.z * 0.5 + 0.5;
@@ -127,18 +150,20 @@ float beamVisible(int i, vec3 p, vec3 n, float d) {
     vec3 faceN = normalize(cross(dFdx(vWorldPos), dFdy(vWorldPos)));
     if (dot(faceN, cameraPosition - vWorldPos) < 0.0) faceN = -faceN;
     for (int i = 0; i < ${MAX_FLASHLIGHTS}; i++) {
-      if (flOn[i] < 0.01) continue;
-      vec3 toL = flPos[i] - vWorldPos;
+      if (i >= flUsed) break;
+      vec4 pa = flTex(i, 0);
+      if (pa.w < 0.01) continue;
+      vec3 toL = pa.xyz - vWorldPos;
       float d = length(toL);
       vec3 L = toL / max(d, 1e-4);
-      vec3 fw = flDir[i];
+      vec3 fw = flTex(i, 1).xyz;
       float cosA = dot(-L, fw);
       float facing = dot(faceN, L);
       if (cosA < 0.8 || facing <= 0.0) continue;
       float cone = smoothstep(0.80, 0.93, cosA) * (0.65 + 0.35 * smoothstep(0.93, 0.99, cosA));
       float open = beamVisible(i, vWorldPos, faceN, d);
       if (open <= 0.0) continue;
-      reflectedLight.indirectDiffuse += vec3(1.0, 0.94, 0.82) * flOn[i] * cone * facing * open * 9.0 / (1.0 + d * d * 0.45);
+      reflectedLight.indirectDiffuse += vec3(1.0, 0.94, 0.82) * pa.w * cone * facing * open * 9.0 / (1.0 + d * d * 0.45);
     }`);
   };
   material.customProgramCacheKey = () => 'level-lit';
