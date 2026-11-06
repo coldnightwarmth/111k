@@ -156,18 +156,20 @@ function paintballModel() {
 
 const CAN_COLORS = [0xe8322f, 0x2b6cf0, 0xf2c614, 0x22b45a, 0xf06bc6, 0x111111, 0xf4f1e8, 0xff7a1a, 0x8a4df0, 0x19c2c2];
 // A spray can standing on its base (+y up), nozzle facing -z.
+const CAN_SCALE = 1.5;   // cans read as too small next to everything else; drawn half as big again
 function sprayModel(id) {
-  const g = new THREE.Group();
+  const g = new THREE.Group(), can = new THREE.Group();
+  can.scale.setScalar(CAN_SCALE); g.add(can);
   const n = [...id].reduce((s, c) => s + c.charCodeAt(0), 0);
   const col = CAN_COLORS[n % CAN_COLORS.length], cap = CAN_COLORS[(n * 7 + 3) % CAN_COLORS.length];
   const body = std(col, .35, .55), label = std(0xf1ede2, .7, 0), metal = std(0xb9bec6, .3, .9), capM = std(cap, .4, .1);
-  part(g, new THREE.CylinderGeometry(.033, .033, .17, 20), body, [0, .087, 0]);
-  part(g, new THREE.CylinderGeometry(.0335, .0335, .06, 20), label, [0, .075, 0]);
-  part(g, new THREE.CylinderGeometry(.026, .033, .02, 20), metal, [0, .182, 0]);     // shoulder
-  part(g, new THREE.CylinderGeometry(.033, .031, .006, 20), metal, [0, .003, 0]);    // base rim
-  part(g, new THREE.CylinderGeometry(.012, .014, .018, 12), capM, [0, .2, 0]);        // actuator
-  part(g, new THREE.CylinderGeometry(.003, .003, .006, 6), metal, [0, .203, -.013], [Math.PI / 2, 0, 0]);  // nozzle
-  g.userData = {tip: new THREE.Vector3(0, .203, -.02), ground: .033, groundRoll: Math.PI / 2, upright: true};
+  part(can, new THREE.CylinderGeometry(.033, .033, .17, 20), body, [0, .087, 0]);
+  part(can, new THREE.CylinderGeometry(.0335, .0335, .06, 20), label, [0, .075, 0]);
+  part(can, new THREE.CylinderGeometry(.026, .033, .02, 20), metal, [0, .182, 0]);     // shoulder
+  part(can, new THREE.CylinderGeometry(.033, .031, .006, 20), metal, [0, .003, 0]);    // base rim
+  part(can, new THREE.CylinderGeometry(.012, .014, .018, 12), capM, [0, .2, 0]);        // actuator
+  part(can, new THREE.CylinderGeometry(.003, .003, .006, 6), metal, [0, .203, -.013], [Math.PI / 2, 0, 0]);  // nozzle
+  g.userData = {tip: new THREE.Vector3(0, .203, -.02).multiplyScalar(CAN_SCALE), ground: .033 * CAN_SCALE, groundRoll: Math.PI / 2, upright: true};
   return g;
 }
 
@@ -434,8 +436,8 @@ export function createItems({scene, camera, hits, shadows = null}) {
             m.rotation.set(.04 + it.kick * .12, -.06, 0);
           } else if (s.type === 'spray') {
             const sh = it.shake > 0 ? Math.sin(it.sway * 70) * .006 : 0;
-            m.scale.setScalar(.8);
-            m.position.set(.05 + sh, -.1 + bob, .02);
+            m.scale.setScalar(.62);              // (the can is drawn 1.5x; about 1.15x what it was in your hand)
+            m.position.set(.05 + sh, -.11 + bob, .02);
             m.rotation.set(-.15, -.35, sh * 2);
           } else if (s.type === 'bucket') {
             m.scale.setScalar(.85);
@@ -487,7 +489,7 @@ export function createItems({scene, camera, hits, shadows = null}) {
           } else if (socket) {
             socket.getWorldPosition(m.position);
             if (s.type === 'paintball') m.position.addScaledVector(dir, .08).y += .06;
-            else if (s.type === 'spray') m.position.y -= .07;
+            else if (s.type === 'spray') m.position.y -= .07 * CAN_SCALE;
             else if (avatar.hand) {
               // a torch in a fist: the middle of the barrel sits in the closed hand, just ahead of the wrist
               avatar.hand.getWorldPosition(m.position);

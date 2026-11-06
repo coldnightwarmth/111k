@@ -577,8 +577,24 @@ async function start() {
     try { localStorage.setItem('111k:piece', name); } catch {}
     for (const b of galleryList.children) b.classList.toggle('chosen', b.dataset.piece === name);
     const p = pieceByName.get(name);
-    tagLabel.replaceChildren(...(p ? [thumb(p, 72), document.createTextNode(isTouch ? 'tap tags to change' : 'esc: change piece')] : []));
+    tagLabel.replaceChildren(...(p ? [thumb(p, 72), document.createTextNode(isTouch ? 'tap tags to change' : 'scroll or esc: change tag')] : []));
   }
+  // the scroll wheel steps through your tags whenever the tags menu is shut (open, it scrolls the list).
+  // Trackpads send a stream of small deltas, so they're added up and each step takes a fair swipe.
+  let wheelAcc = 0, wheelAt = 0, stepAt = 0, tagFlashUntil = 0;
+  addEventListener('wheel', e => {
+    if (!pieces.length || !gallery.hidden || chat.open) return;
+    if (!controls.state.locked && e.target !== canvas) return;
+    const now = performance.now();
+    if (now - wheelAt > 250) wheelAcc = 0;
+    wheelAt = now;
+    wheelAcc += e.deltaY * (e.deltaMode === 1 ? 33 : e.deltaMode === 2 ? 400 : 1);
+    if (Math.abs(wheelAcc) < 50 || now - stepAt < 70) return;
+    const step = Math.sign(wheelAcc); wheelAcc = 0; stepAt = now;
+    const i = Math.max(0, pieces.findIndex(p => p.name === chosenPiece));
+    choosePiece(pieces[(i + step + pieces.length) % pieces.length].name);
+    tagFlashUntil = now + 1500;            // show which tag it landed on, even without a can in hand
+  }, {passive: true});
   // picked something: shut the menu and go straight back to playing (the click is the gesture the
   // browser needs to take the mouse again)
   function backToPlay() {
@@ -1139,7 +1155,7 @@ async function start() {
       : t ? `click: pick up ${ITEM_NAMES[t.state.type] || 'it'}` : '';
     if (prompt.textContent !== hint) prompt.textContent = hint;
     document.body.classList.toggle('holding', !!h);
-    tagLabel.hidden = type !== 'spray' || !chosenPiece;
+    tagLabel.hidden = (type !== 'spray' && now > tagFlashUntil) || !chosenPiece;
     paintLabel.hidden = type !== 'paintball';
     const galleryLabel = type === 'paintball' ? 'paint' : 'tags';
     if (btnGallery.textContent !== galleryLabel) btnGallery.textContent = galleryLabel;
