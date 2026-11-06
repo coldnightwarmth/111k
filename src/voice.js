@@ -282,7 +282,8 @@ export function voicePanel(voice) {
   function sync() {
     on.checked = voice.micOn; vol.value = voice.volume;
     el.classList.toggle('enabled', voice.micOn);
-    note.textContent = voice.error || (voice.micOn ? 'players near you hear you. headphones sound best.' : 'you hear players near you. turn your mic on to talk.');
+    note.textContent = voice.error;              // only when something's wrong with the mic
+    note.hidden = !voice.error;
   }
   on.addEventListener('change', async () => { await voice.setMicOn(on.checked); fillDevices(); });
   mic.addEventListener('change', () => voice.setDevice(mic.value));

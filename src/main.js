@@ -188,7 +188,7 @@ async function start() {
   // clicking back into the world closes the chat box, the emote menu or the gallery and gives you control again
   document.addEventListener('pointerdown', e => {
     if (!emoteMenu.hidden && !e.target.closest('#emotes, #btnEmote')) toggleEmotes(false);
-    if (chat.open && !e.target.closest('#chat form, #btnChat')) { relock = false; chat.setOpen(false); }
+    if (chat.open && !e.target.closest('#chat, #btnChat')) { relock = false; chat.setOpen(false); }   // (scrolling the log keeps it open)
     if (!gallery.hidden && !e.target.closest('#gallery, #btnGallery')) toggleGallery(false);
   }, true);
 
