@@ -13,8 +13,9 @@ export const PUNCH_RANGE = 2.0;      // server-side check (clients aim at 1.6)
 export const PUNCH_COOLDOWN_MS = 420;
 export const PUNCH_DURATION = .5;
 export const SHOT_INTERVAL_MS = 160;   // paintball rate of fire
-export const SPRAY_INTERVAL_MS = 700;
+export const SPRAY_INTERVAL_MS = 450;
 export const SPRAY_RANGE = 3.2;        // metres from a player to the wall they tag
+export const SPLAT_LIFE_MS = 60000;    // paint fades away after a minute
 export const MAX_SPLATS = 400;         // paint marks the room remembers (oldest go first)
 export const MAX_SPRAYS = 150;
 export const ITEM_TYPES = ['flashlight', 'paintball', 'spray'];
@@ -105,7 +106,13 @@ export function cleanSplat(s) {
   if (!s || typeof s !== 'object') return null;
   const p = vec(s.p, 500), n = unit(s.n), c = int(s.c, 0, 0xffffff), seed = int(s.s, 0, 0xffffff);
   if (!p || !n || c === null || seed === null) return null;
-  return {p, n, c, s: seed};
+  const out = {p, n, c, s: seed};
+  if (s.d !== undefined && s.d !== null) {           // on a swinging door: p and n are in that door's hinge space
+    const d = int(s.d, 0, 999);
+    if (d === null) return null;
+    out.d = d;
+  }
+  return out;
 }
 
 // A sprayed graffiti piece: which piece, where, facing, its up direction and size.

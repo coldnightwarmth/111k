@@ -6,15 +6,18 @@ import * as THREE from 'three';
 import {MeshBVH} from '../vendor/three/three-mesh-bvh.module.js';
 import {hookShader} from './level.js';
 
-const _v = new THREE.Vector3(), _w = new THREE.Vector3(), _ray = new THREE.Ray();
+const _v = new THREE.Vector3(), _w = new THREE.Vector3(), _ray = new THREE.Ray(), _m = new THREE.Matrix4();
 
 // ------------------------------------------------------------------ raycasts
 // One BVH per opaque level mesh. Decals and other see-through surfaces are skipped.
-export function createWorldHits(level) {
+// Swinging doors are kept apart: they move, so they're tested in their own
+// (hinge) space, and marks on them are cut in that space and ride along.
+export function createWorldHits(level, doors = []) {
   const parts = [];
+  const doorMesh = new Set(doors.flatMap(d => d.meshes));
   for (const mesh of level.meshes) {
     const g = mesh.geometry;
-    if (mesh.material.transparent || !g.attributes.uv1 || !g.index || /#10\d\d$/.test(mesh.name)) continue;   // not swinging doors
+    if (mesh.material.transparent || !g.attributes.uv1 || !g.index || doorMesh.has(mesh) || /#10\d\d$/.test(mesh.name)) continue;
     const bvh = new MeshBVH(g, {maxLeafTris: 12});
     mesh.updateMatrixWorld();
     const inv = mesh.matrixWorld.clone().invert();
@@ -22,47 +25,83 @@ export function createWorldHits(level) {
     const sphere = g.boundingSphere.clone().applyMatrix4(mesh.matrixWorld);
     parts.push({mesh, g, bvh, inv, sphere});
   }
+  // door leaves: BVHs over their hinge-space geometry; matrices are read fresh each time
+  const doorParts = new Map();
+  for (const d of doors) {
+    const list = [];
+    for (const mesh of d.meshes) {
+      const g = mesh.geometry;
+      if (!g.index || mesh.material.transparent) continue;
+      g.computeBoundingSphere();
+      list.push({mesh, g, bvh: new MeshBVH(g, {maxLeafTris: 12}), inv: new THREE.Matrix4(), sphere: new THREE.Sphere()});
+    }
+    if (list.length) doorParts.set(d.index, list);
+  }
+  const refresh = p => {
+    p.mesh.updateWorldMatrix(true, false);
+    p.inv.copy(p.mesh.matrixWorld).invert();
+    p.sphere.copy(p.g.boundingSphere).applyMatrix4(p.mesh.matrixWorld);
+  };
   const tri = new THREE.Triangle(), n = new THREE.Vector3();
+  function test(p, origin, dir, far, best) {
+    _ray.origin.copy(origin); _ray.direction.copy(dir);
+    if (_ray.distanceSqToPoint(p.sphere.center) > p.sphere.radius ** 2) return best;
+    _ray.applyMatrix4(p.inv);
+    const hit = p.bvh.raycastFirst(_ray, THREE.DoubleSide, 0, far);
+    if (!hit || hit.distance > far || (best && hit.distance >= best.distance)) return best;
+    const i = p.g.index, pos = p.g.attributes.position;
+    tri.setFromAttributeAndIndices(pos, i.getX(hit.faceIndex * 3), i.getX(hit.faceIndex * 3 + 1), i.getX(hit.faceIndex * 3 + 2));
+    tri.getNormal(n).transformDirection(p.mesh.matrixWorld);
+    if (n.dot(dir) > 0) n.negate();
+    return {point: hit.point.clone().applyMatrix4(p.mesh.matrixWorld), normal: n.clone(), distance: hit.distance, mesh: p.mesh};
+  }
+  function gatherFrom(list, center, radius, toWorld) {
+    const out = [];
+    const sphere = new THREE.Sphere();
+    for (const p of list) {
+      const lp = p.g.boundingSphere;
+      if (toWorld) { if (p.sphere.center.distanceTo(center) > p.sphere.radius + radius) continue; sphere.center.copy(center).applyMatrix4(p.inv); }
+      else { if (lp.center.distanceTo(center) > lp.radius + radius) continue; sphere.center.copy(center); }
+      sphere.radius = radius;
+      const pos = p.g.attributes.position, uv1 = p.g.attributes.uv1, idx = p.g.index;
+      p.bvh.shapecast({
+        intersectsBounds: box => box.intersectsSphere(sphere),
+        intersectsTriangle: (t, i) => {
+          if (!t.intersectsSphere(sphere)) return false;
+          const v = [0, 1, 2].map(k => idx.getX(i * 3 + k));
+          out.push({
+            p: v.map(j => { const q = new THREE.Vector3().fromBufferAttribute(pos, j); return toWorld ? q.applyMatrix4(p.mesh.matrixWorld) : q; }),
+            uv: v.map(j => uv1 ? new THREE.Vector2(uv1.getX(j), uv1.getY(j)) : new THREE.Vector2()),
+          });
+          return false;
+        },
+      });
+    }
+    return out;
+  }
   return {
-    // nearest hit along a segment: {point, normal (facing the ray), distance} or null
-    raycast(origin, dir, far) {
+    // nearest hit along a segment: {point, normal (facing the ray), distance, door?} or null.
+    // With doors on, a hit on a leaf also says which door and gives the hit in its hinge space.
+    raycast(origin, dir, far, withDoors = false) {
       let best = null;
-      for (const p of parts) {
-        _ray.origin.copy(origin); _ray.direction.copy(dir);
-        if (_ray.distanceSqToPoint(p.sphere.center) > p.sphere.radius ** 2) continue;
-        _ray.applyMatrix4(p.inv);
-        const hit = p.bvh.raycastFirst(_ray, THREE.DoubleSide, 0, far);
-        if (!hit || hit.distance > far || (best && hit.distance >= best.distance)) continue;
-        const i = p.g.index, pos = p.g.attributes.position;
-        tri.setFromAttributeAndIndices(pos, i.getX(hit.faceIndex * 3), i.getX(hit.faceIndex * 3 + 1), i.getX(hit.faceIndex * 3 + 2));
-        tri.getNormal(n).transformDirection(p.mesh.matrixWorld);
-        if (n.dot(dir) > 0) n.negate();
-        best = {point: hit.point.clone().applyMatrix4(p.mesh.matrixWorld), normal: n.clone(), distance: hit.distance};
+      for (const p of parts) best = test(p, origin, dir, far, best);
+      if (withDoors) for (const [k, list] of doorParts) for (const p of list) {
+        refresh(p);
+        const h = test(p, origin, dir, far, best);
+        if (h !== best) { best = h; best.door = k; }
+      }
+      if (best?.door !== undefined) {
+        const m = best.mesh;
+        best.local = {point: m.worldToLocal(best.point.clone()), normal: best.normal.clone().transformDirection(_m.copy(m.matrixWorld).invert())};
       }
       return best;
     },
     // every level triangle within `radius` of a point: world positions + lightmap uvs
-    gather(center, radius) {
-      const out = [];
-      const sphere = new THREE.Sphere();
-      for (const p of parts) {
-        if (p.sphere.center.distanceTo(center) > p.sphere.radius + radius) continue;
-        sphere.center.copy(center).applyMatrix4(p.inv); sphere.radius = radius;
-        const pos = p.g.attributes.position, uv1 = p.g.attributes.uv1, idx = p.g.index;
-        p.bvh.shapecast({
-          intersectsBounds: box => box.intersectsSphere(sphere),
-          intersectsTriangle: (t, i) => {
-            if (!t.intersectsSphere(sphere)) return false;
-            const v = [0, 1, 2].map(k => idx.getX(i * 3 + k));
-            out.push({
-              p: v.map(j => new THREE.Vector3().fromBufferAttribute(pos, j).applyMatrix4(p.mesh.matrixWorld)),
-              uv: v.map(j => new THREE.Vector2(uv1.getX(j), uv1.getY(j))),
-            });
-            return false;
-          },
-        });
-      }
-      return out;
+    gather(center, radius) { return gatherFrom(parts, center, radius, true); },
+    // the same for one door, in its hinge space (null if there's no such door)
+    door(k) {
+      const list = doorParts.get(k);
+      return list ? {mesh: list[0].mesh, gather: (center, radius) => gatherFrom(list, center, radius, false)} : null;
     },
   };
 }

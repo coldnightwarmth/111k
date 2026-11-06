@@ -4,7 +4,7 @@
 // Object being evicted between messages. The only shared state is the held
 // items, which the caller keeps (Durable Object storage in production).
 import {CHAT_INTERVAL_MS, CHAT_TTL_MS, POSE_INTERVAL_MS, PICKUP_RANGE, PUNCH_RANGE, PUNCH_COOLDOWN_MS,
-  SHOT_INTERVAL_MS, SPRAY_INTERVAL_MS, SPRAY_RANGE, MAX_SPLATS, MAX_SPRAYS,
+  SHOT_INTERVAL_MS, SPRAY_INTERVAL_MS, SPRAY_RANGE, MAX_SPLATS, MAX_SPRAYS, SPLAT_LIFE_MS,
   sanitizeChat, sanitizePose, samePose, cleanItem, sanitizeLook, sanitizeName, cleanSplat, cleanSpray} from '../src/protocol.js';
 import {ITEM_SPAWNS} from '../src/world-items.js';
 
@@ -32,10 +32,19 @@ export function snapshot(players, now, items = {}) {
 export function freshMarks() { return {splats: [], sprays: []}; }
 export function validMarks(stored) {
   if (!stored || !Array.isArray(stored.splats) || !Array.isArray(stored.sprays)) return freshMarks();
-  return {splats: stored.splats.map(cleanSplat).filter(Boolean).slice(-MAX_SPLATS),
+  const splats = stored.splats.map(s => { const c = cleanSplat(s); return c && Number.isFinite(s.at) ? {...c, at: s.at} : null; });
+  return {splats: splats.filter(Boolean).slice(-MAX_SPLATS),
     sprays: stored.sprays.map(cleanSpray).filter(Boolean).slice(-MAX_SPRAYS)};
 }
-export const marksMessage = marks => ({type: 'marks', splats: marks.splats, sprays: marks.sprays});
+// paint lasts a minute; sprayed pieces stay
+export function pruneSplats(marks, now) {
+  const before = marks.splats.length;
+  marks.splats = marks.splats.filter(s => now - s.at < SPLAT_LIFE_MS);
+  return marks.splats.length !== before;
+}
+export const marksMessage = (marks, now = Date.now()) => ({type: 'marks',
+  splats: marks.splats.filter(s => now - s.at < SPLAT_LIFE_MS).map(({at, ...s}) => ({...s, age: Math.max(0, now - at)})),
+  sprays: marks.sprays});
 
 const flat = (a, b) => Math.hypot(a.x - b.x, a.z - b.z);
 
@@ -159,7 +168,8 @@ export function handleMessage(player, data, now, room = {items: {}, players: () 
       local: target ? local : null, time: now}});
     let marksChanged = false, itemsChanged = false;
     if (hit && !target && room.marks) {
-      room.marks.splats.push(hit);
+      pruneSplats(room.marks, now);
+      room.marks.splats.push({...hit, at: now});
       if (room.marks.splats.length > MAX_SPLATS) room.marks.splats.splice(0, room.marks.splats.length - MAX_SPLATS);
       marksChanged = true;
     }

@@ -211,3 +211,19 @@ test('paintball and spray: holder checks, marks kept and sent to newcomers, hits
   await new Promise(r => setTimeout(r, 4200));
   assert.equal(store.get('marks').sprays.length, 1);
 });
+
+test('paint splats: door splats keep their door, and paint is gone after a minute', async () => {
+  const {cleanSplat, SPLAT_LIFE_MS} = await import('../../src/protocol.js');
+  const {marksMessage, validMarks, pruneSplats} = await import('../room.js');
+  assert.equal(cleanSplat({p: [.4, 1, 0], n: [0, 0, 1], c: 5, s: 9, d: 12}).d, 12);
+  assert.equal(cleanSplat({p: [.4, 1, 0], n: [0, 0, 1], c: 5, s: 9, d: 'x'}), null);
+  assert.equal(cleanSplat({p: [.4, 1, 0], n: [0, 0, 1], c: 5, s: 9}).d, undefined);
+  const now = 1_000_000;
+  const marks = validMarks({splats: [{p: [0, 1, 0], n: [1, 0, 0], c: 1, s: 1, at: now - SPLAT_LIFE_MS - 1},
+    {p: [0, 1, 0], n: [1, 0, 0], c: 2, s: 2, d: 3, at: now - 1000}, {p: [0, 1, 0], n: [1, 0, 0], c: 3, s: 3}], sprays: []});
+  assert.equal(marks.splats.length, 2);           // the one with no time is dropped
+  const msg = marksMessage(marks, now);
+  assert.equal(msg.splats.length, 1);
+  assert.equal(msg.splats[0].d, 3); assert.equal(msg.splats[0].age, 1000); assert.equal(msg.splats[0].at, undefined);
+  assert.equal(pruneSplats(marks, now), true); assert.equal(marks.splats.length, 1);
+});

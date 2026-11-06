@@ -95,6 +95,7 @@ export function createItems({scene, camera}) {
   view.position.set(.2, -.2, -.38);
   camera.add(view);
   const tmpQ = new THREE.Quaternion(), tmpV = new THREE.Vector3(), fwd = new THREE.Vector3();
+  const _ray = new THREE.Ray(), _box = new THREE.Box3();
 
   function ensure(state) {
     let it = items.get(state.id);
@@ -119,17 +120,20 @@ export function createItems({scene, camera}) {
     kick(id, amount = 1) { const it = items.get(id); if (it) it.kick = amount; },
     shake(id) { const it = items.get(id); if (it) it.shake = .5; },
     // nearest free item within reach that you're roughly looking at
-    target(player, yaw, pitch, reach = 2.2) {
-      fwd.set(-Math.sin(yaw) * Math.cos(pitch), Math.sin(pitch), -Math.cos(yaw) * Math.cos(pitch));
-      let best = null, bestScore = -Infinity;
+    // the item the crosshair is actually on: the camera's ray has to pass over it
+    // (with a few centimetres to spare), it has to be within reach of your body,
+    // and nothing solid can be in between (clear(distance) says whether the way is open)
+    target(player, origin, dir, clear = () => true, reach = 2) {
+      let best = null, bestD = Infinity;
+      _ray.set(origin, dir);
       for (const it of items.values()) {
-        if (it.state.holder) continue;
-        const dx = it.state.x - player.x, dz = it.state.z - player.z;
-        const flat = Math.hypot(dx, dz);
-        if (flat > reach) continue;
-        tmpV.set(dx, it.state.y - player.y, dz).normalize();
-        const score = tmpV.dot(fwd) - flat * .15;
-        if (tmpV.dot(fwd) > .55 && score > bestScore) { best = it; bestScore = score; }
+        if (it.state.holder || !it.model.visible) continue;
+        if (Math.hypot(it.state.x - player.x, it.state.z - player.z) > reach) continue;
+        _box.setFromObject(it.model).expandByScalar(.07);
+        const hit = _ray.intersectBox(_box, tmpV);
+        if (!hit) continue;
+        const d = hit.distanceTo(origin);
+        if (d < bestD && clear(d)) { best = it; bestD = d; }
       }
       return best;
     },

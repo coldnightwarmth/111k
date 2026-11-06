@@ -30,7 +30,9 @@ export function createVerticalMovement() {
     get pose() { return {crouch, jumpTime, jumpPower: power}; },
     get chain() { return chain; },
     // horizontal speed multiplier earned by chaining clean hops
-    get boost() { return 1 + .085 * chain; },
+    get boost() { return 1 + .15 * chain; },
+    // seconds since the feet touched down (-1 while in the air)
+    get landedFor() { return jumpTime >= 0 && jumpTime < LANDED ? -1 : grounded; },
     // true once per clean hop, so the caller can add a forward shove
     takeHop() { const h = hopped; hopped = false; return h; },
     jump() {

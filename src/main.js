@@ -13,7 +13,7 @@ import {createDoors} from './doors.js';
 import {pickAvatar} from './picker.js';
 import {randomLook, cleanLook} from './looks.js';
 import {EMOTES, EMOTE_DURATION, PUNCH_COOLDOWN_MS, PUNCH_DURATION, SHOT_INTERVAL_MS, SPRAY_INTERVAL_MS, SPRAY_RANGE,
-  MAX_SPLATS, MAX_SPRAYS, sanitizePose, sanitizeName, cleanSplat, cleanSpray} from './protocol.js';
+  MAX_SPLATS, MAX_SPRAYS, SPLAT_LIFE_MS, sanitizePose, sanitizeName, cleanSplat, cleanSpray} from './protocol.js';
 
 const params = new URLSearchParams(location.search);
 const $ = id => document.getElementById(id);
@@ -95,8 +95,8 @@ async function start() {
   }
   const avatarLights = createAvatarLights(level.meta, scene);
   const collider = createCollider(level.meta);
-  const hits = createWorldHits(level);
   const doors = createDoors(level, collider);
+  const hits = createWorldHits(level, doors.doors);
   const bore = level.meta.bore;
   // height of the ceiling over a point: the tunnel's vault, a door passage, or a room
   function ceilingAt(x, z) {
@@ -188,7 +188,18 @@ async function start() {
   // ------------------------------------------------------- paint & tags
   const splats = createBatch(markMaterial(level, splatAtlas(), 2));
   splats.mesh.renderOrder = 3; scene.add(splats.mesh);
-  const splatMarks = [];
+  const splatMarks = [];   // {batch, m, born}: paint fades away a minute after it lands
+  const doorBatches = new Map();
+  function doorBatch(k) {
+    if (!doorBatches.has(k)) {
+      const surface = hits.door(k);
+      if (!surface) return null;
+      const b = createBatch(splats.mesh.material, 2000);
+      b.mesh.renderOrder = 3; surface.mesh.add(b.mesh);   // rides along as the door swings
+      doorBatches.set(k, {batch: b, surface});
+    }
+    return doorBatches.get(k);
+  }
   const pieces = level.meta.graffiti || [];
   const pieceByName = new Map(pieces.map(p => [p.name, p]));
   const pageBatches = new Map();
@@ -203,17 +214,26 @@ async function start() {
   }
   const sprayMarks = [];
   const fades = [];   // freshly sprayed pieces fade in
-  function addSplat(s, fresh = false) {
+  const SPRAY_FADE_IN = .28, PAINT_FADE_MS = 4000, HOP_GRACE = .2;
+  let lastPaintCheck = 0;
+  function addSplat(s, fresh = false, age = 0) {
+    if (age >= SPLAT_LIFE_MS) return;
     const point = new THREE.Vector3(...s.p), normal = new THREE.Vector3(...s.n);
+    const onDoor = s.d !== undefined ? doorBatch(s.d) : null;
+    if (s.d !== undefined && !onDoor) return;
+    const batch = onDoor ? onDoor.batch : splats;
     const r = ((s.s >> 3) % 1000) / 1000, size = .2 + r * .16;
     const up = Math.abs(normal.y) > .9 ? new THREE.Vector3(Math.cos(s.s), 0, Math.sin(s.s)) : new THREE.Vector3(0, 1, 0);
     up.applyAxisAngle(normal, (s.s % 628) / 100);
-    const verts = cutDecal(hits, {point, normal, up, width: size, height: size, depth: .12});
+    const verts = cutDecal(onDoor ? onDoor.surface : hits, {point, normal, up, width: size, height: size, depth: .12});
     const [cu, cv] = splatCell(s.s);
     for (const q of verts) { q.u = cu + q.u / 4; q.v = cv + q.v / 2; }
-    splatMarks.push(splats.add(verts, rgbOf(s.c)));
-    while (splatMarks.length > MAX_SPLATS) splats.remove(splatMarks.shift());
-    if (fresh) burst(point, normal, s.c);
+    splatMarks.push({batch, m: batch.add(verts, rgbOf(s.c)), born: performance.now() - age});
+    while (splatMarks.length > MAX_SPLATS) { const old = splatMarks.shift(); old.batch.remove(old.m); }
+    if (fresh) {
+      if (onDoor) { onDoor.surface.mesh.localToWorld(point); normal.transformDirection(onDoor.surface.mesh.matrixWorld); }
+      burst(point, normal, s.c);
+    }
   }
   function addSpray(s, fresh = false) {
     const piece = pieceByName.get(s.piece);
@@ -231,9 +251,10 @@ async function start() {
   }
   function resetMarks(list) {
     splats.clear(); splatMarks.length = 0;
+    for (const d of doorBatches.values()) d.batch.clear();
     for (const b of pageBatches.values()) b.clear();
     sprayMarks.length = 0;
-    for (const s of list.splats || []) { const c = cleanSplat(s); if (c) addSplat(c); }
+    for (const s of list.splats || []) { const c = cleanSplat(s); if (c) addSplat(c, false, Number.isFinite(s.age) ? s.age : 0); }
     for (const s of list.sprays || []) { const c = cleanSpray(s); if (c) addSpray(c); }
   }
 
@@ -280,6 +301,7 @@ async function start() {
     mesh.scale.set(.22 / ws.x, .22 / ws.y, .22 / ws.z);
     mesh.frustumCulled = false;
     bone.add(mesh);
+    mesh.userData.born = performance.now();
     (avatar.paint ??= []).push(mesh);
     while (avatar.paint.length > 12) { const old = avatar.paint.shift(); old.removeFromParent(); old.geometry.dispose(); old.material.dispose(); }
   }
@@ -301,8 +323,8 @@ async function start() {
     for (let t = step; t < 2.5; t += step) {
       const next = simulate(o, v, t), seg = next.clone().sub(prev), len = seg.length(), dir = seg.clone().divideScalar(len);
       let best = null;
-      const h = hits.raycast(prev, dir, len);
-      if (h) best = {t: t - step + step * h.distance / len, point: h.point, normal: h.normal, d: h.distance};
+      const h = hits.raycast(prev, dir, len, true);
+      if (h) best = {t: t - step + step * h.distance / len, point: h.point, normal: h.normal, d: h.distance, door: h.door, local: h.local};
       for (const p of [...peers.values(), {id: network.id, last: {x: player.x, z: player.z}, avatar: me}]) {
         if (p.id === ignore || !p.last || !p.avatar) continue;
         // a capsule around each body: 0.28 m wide, feet to head
@@ -328,8 +350,14 @@ async function start() {
   const prompt = $('prompt'), btnAct = $('btnAct');
   const held = () => network.id ? items.heldBy(network.id) : null;
   const heldType = () => held()?.state.type || '';
+  // the loose item under the crosshair, if it's close and in plain view
+  function lookTarget() {
+    camera.updateMatrixWorld();
+    const o = camera.getWorldPosition(new THREE.Vector3()), d = camera.getWorldDirection(new THREE.Vector3());
+    return items.target(player, o, d, dist => { const w = hits.raycast(o, d, dist); return !w || w.distance > dist - .05; });
+  }
   function grab() {
-    const t = items.target(player, controls.state.yaw, controls.state.pitch);
+    const t = lookTarget();
     if (t) { network.send({type: 'pickup', id: t.state.id}); return true; }
     return false;
   }
@@ -364,10 +392,10 @@ async function start() {
     network.send({type: 'punch', target: best ? best.id : ''});
   }
   // where the crosshair points: the first thing along the camera's ray
-  function aimPoint(far = 60) {
+  function aimPoint(far = 60, withDoors = false) {
     const o = camera.getWorldPosition(new THREE.Vector3()), d = camera.getWorldDirection(new THREE.Vector3());
     if (thirdPerson) o.addScaledVector(d, camDist);   // start the ray at your shoulder, not behind it
-    const h = hits.raycast(o, d, far);
+    const h = hits.raycast(o, d, far, withDoors);
     return {point: h ? h.point : o.clone().addScaledVector(d, far), hit: h, origin: o, dir: d};
   }
   function shoot() {
@@ -376,7 +404,7 @@ async function start() {
     lastShot = now;
     camera.updateMatrixWorld(); items.frame(frameArgs(0));
     const muzzle = items.tip(gun);
-    const aim = aimPoint();
+    const aim = aimPoint(60, true);
     const dir = aim.point.clone().sub(muzzle);
     const dist = dir.length(); dir.normalize();
     // aim a little high so the drop meets the crosshair, plus a touch of spread
@@ -394,7 +422,8 @@ async function start() {
       const ln = land.point.clone().sub(new THREE.Vector3(a.root.position.x, land.point.y, a.root.position.z)).normalize()
         .applyQuaternion(a.root.quaternion.clone().invert());
       msg.local = {p: lp.toArray().map(r3), n: ln.toArray().map(r3)};
-    } else if (land.normal) msg.hit = {p: land.point.toArray().map(r3), n: land.normal.toArray().map(r3)};
+    } else if (land.door !== undefined) msg.hit = {p: land.local.point.toArray().map(r3), n: land.local.normal.toArray().map(r3), d: land.door};
+    else if (land.normal) msg.hit = {p: land.point.toArray().map(r3), n: land.normal.toArray().map(r3)};
     items.kick(gun.state.id);
     network.send(msg);
   }
@@ -446,14 +475,14 @@ async function start() {
     const now = performance.now(), can = held();
     if (!can || !chosenPiece || now - lastSpray < SPRAY_INTERVAL_MS) return;
     const piece = pieceByName.get(chosenPiece);
-    const aim = aimPoint(SPRAY_RANGE + 3);
-    if (!aim.hit || Math.hypot(aim.point.x - player.x, aim.point.z - player.z) > SPRAY_RANGE) { items.shake(can.state.id); return; }
+    const aim = aimPoint(SPRAY_RANGE + 3, true);
+    if (!aim.hit || aim.hit.door !== undefined || Math.hypot(aim.point.x - player.x, aim.point.z - player.z) > SPRAY_RANGE) { items.shake(can.state.id); return; }
     lastSpray = now;
     const n = aim.hit.normal;
     // upright on walls; on floors and ceilings, readable from where you stand
     const up = Math.abs(n.y) < .7 ? new THREE.Vector3(0, 1, 0).addScaledVector(n, -n.y).normalize()
       : new THREE.Vector3(aim.dir.x, 0, aim.dir.z).normalize().multiplyScalar(n.y > 0 ? 1 : -1);
-    const tilt = (Math.random() - .5) * .12;
+    const tilt = (Math.random() * 2 - 1) * 3 * Math.PI / 180;   // up to 3° either way
     up.applyAxisAngle(n, tilt);
     const big = Math.max(piece.w, piece.h);
     const size = Math.max(.35, Math.min(piece.w * Math.min(1, 1.5 / big), 2.2)) * (.9 + Math.random() * .2);
@@ -602,7 +631,7 @@ async function start() {
     const input = controls.update();
     const frozen = chat.open || !emoteMenu.hidden;
     // movement in the camera's yaw frame, plus any knock-back still fading out
-    const speed = (input.run ? 4.3 : 2.7) * (input.crouch ? .5 : 1) * vertical.boost;
+    const speed = (input.run ? 4.7 : 3.1) * (input.crouch ? .5 : 1) * vertical.boost;
     const mx = frozen ? 0 : input.moveX, mz = frozen ? 0 : input.moveZ;
     const sin = Math.sin(input.yaw), cos = Math.cos(input.yaw);
     const tx = (mx * cos + mz * sin) * speed, tz = (-mx * sin + mz * cos) * speed;
@@ -611,7 +640,10 @@ async function start() {
       const v = Math.hypot(player.vx, player.vz);
       if (v > .5) { player.kx += player.vx / v * .9; player.kz += player.vz / v * .9; }
     }
-    player.kx *= Math.exp(-dt * 5); player.kz *= Math.exp(-dt * 5);
+    // the hop shove barely fades in the air, and the ground only starts eating it a
+    // moment after touchdown, so a hop timed in the window keeps all of it
+    const landed = vertical.landedFor, drag = landed < 0 || landed < HOP_GRACE ? .6 : 5;
+    player.kx *= Math.exp(-dt * drag); player.kz *= Math.exp(-dt * drag);
     const px = player.x, pz = player.z;
     // fast hops cover a lot of ground per frame: move in small steps so walls stay solid
     const mvx = (player.vx + player.kx) * dt, mvz = (player.vz + player.kz) * dt;
@@ -743,13 +775,31 @@ async function start() {
     for (let i = fades.length - 1; i >= 0; i--) {
       const f = fades[i];
       f.t += dt;
-      f.batch.setAlpha(f.m, Math.min(1, f.t / .55));
-      if (f.t >= .55) fades.splice(i, 1);
+      f.batch.setAlpha(f.m, Math.min(1, f.t / SPRAY_FADE_IN));
+      if (f.t >= SPRAY_FADE_IN) fades.splice(i, 1);
+    }
+    // paint dries off: the last few seconds of its minute it fades out, then it's gone
+    if (now - lastPaintCheck > 100) {
+      lastPaintCheck = now;
+      for (let i = splatMarks.length - 1; i >= 0; i--) {
+        const k = splatMarks[i], left = SPLAT_LIFE_MS - (now - k.born);
+        if (left <= 0) { k.batch.remove(k.m); splatMarks.splice(i, 1); }
+        else if (left < PAINT_FADE_MS) k.batch.setAlpha(k.m, left / PAINT_FADE_MS);
+        else if (k.m.alpha !== 1) k.batch.setAlpha(k.m, 1);
+      }
+      for (const a of [me, meView, ...[...peers.values()].map(p => p.avatar)]) {
+        if (!a?.paint?.length) continue;
+        for (let i = a.paint.length - 1; i >= 0; i--) {
+          const mesh = a.paint[i], left = SPLAT_LIFE_MS - (now - mesh.userData.born);
+          if (left <= 0) { mesh.removeFromParent(); mesh.geometry.dispose(); mesh.material.dispose(); a.paint.splice(i, 1); }
+          else if (left < PAINT_FADE_MS) { mesh.material.opacity = left / PAINT_FADE_MS; mesh.material.alphaTest = .35 * mesh.material.opacity; }
+        }
+      }
     }
 
     // held items and what you can do right now
     items.frame(frameArgs(dt));
-    const t = !h && !frozen ? items.target(player, input.yaw, input.pitch) : null;
+    const t = !h && !frozen ? lookTarget() : null;
     const type = h?.state.type;
     const hint = isTouch ? '' : h ? (type === 'flashlight' ? `click: ${h.state.on ? 'turn off' : 'turn on'}  ·  right-click: drop`
       : type === 'paintball' ? 'click: fire  ·  right-click: drop' : 'click a wall: spray  ·  esc: pick a piece  ·  right-click: drop')
@@ -770,7 +820,7 @@ async function start() {
   });
   document.body.classList.add('ready');
   window.__111k = {scene, camera, player, peers, network, renderer, items, controls, hits, doors, me, meView, vertical,
-    setView: v => { thirdPerson = v; }, primary, secondary, shoot, spray, choosePiece, toggleGallery, get pieces() { return pieces; }};
+    splatMarks, addSplat, doorBatches, setView: v => { thirdPerson = v; }, primary, secondary, shoot, spray, choosePiece, toggleGallery, get pieces() { return pieces; }};
 }
 
 start().catch(err => {
