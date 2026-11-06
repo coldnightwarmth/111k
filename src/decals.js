@@ -170,14 +170,23 @@ const bounds = poly => {
 // behind the surface that was hit the paint can still reach (round one corner, onto what's around
 // a small thing); `front` is how far in front of it things are still close enough to catch some.
 const DEPTH_EPS = .015;
-export function cutDecal(hits, {point, normal, up, width, height, dir = null, front = .15, back = .3, shade = .3}) {
+// Which surfaces take paint: those within `front`/`back` of the hit surface's plane (so a long wall
+// seen at a slant takes the whole tag), and, when `slab` = [behind, ahead] is given, also anything
+// within that distance of the hit point along the throw. The second matters when the aim lands on
+// something small that stands out from what's around it (a urinal divider, a pipe, a ledge): the tag
+// carries on onto the wall behind and beside it instead of stopping a short way from its plane.
+// Only what the throw can see gets paint either way: everything in front casts an exact shadow.
+// `thrower`, when known, is how far back along the throw the thrower stood: nothing behind the
+// nozzle can take paint or block it.
+export function cutDecal(hits, {point, normal, up, width, height, dir = null, front = .15, back = .3, shade = .3, slab = null, thrower = null}) {
   const z = dir ? dir.clone().negate().normalize() : normal.clone().normalize();
   const y = up.clone().addScaledVector(z, -up.dot(z));
   if (y.lengthSq() < 1e-6) y.set(0, 1, 0).addScaledVector(z, -z.y);
   y.normalize();
   const x = new THREE.Vector3().crossVectors(y, z);
   const hx = width / 2, hy = height / 2, near = front + shade;
-  const tris = hits.gather(point, Math.hypot(hx, hy, Math.max(near, back)));
+  const reach = slab ? Math.max(near, back, slab[0], slab[1] + shade) : Math.max(near, back);
+  const tris = hits.gather(point, Math.hypot(hx, hy, reach));
   const local = p => { _v.copy(p).sub(point); return new THREE.Vector3(_v.dot(x), _v.dot(y), _v.dot(z)); };
   // depth measured from the surface that was hit (its plane), along the throw
   const hn = new THREE.Vector3(normal.dot(x), normal.dot(y), normal.dot(z));
@@ -197,15 +206,34 @@ export function cutDecal(hits, {point, normal, up, width, height, dir = null, fr
       poly = clipPolygon(poly, axis, hi, 1); if (poly.length < 3) break;
       poly = clipPolygon(poly, axis, lo, -1); if (poly.length < 3) break;
     }
-    if (poly.length >= 3) poly = clipBy(poly, l => -back - fromHit(l));
-    if (poly.length >= 3) poly = clipBy(poly, l => fromHit(l) - near);
+    if (poly.length >= 3 && thrower !== null) poly = clipBy(poly, l => l.z - (thrower - .05));
     if (poly.length < 3) continue;
-    const id = faces.length + occ.length;
-    // as a shadow caster: its plane in the box frame, z = cz + gx*x + gy*y
-    const a = poly[0].l, ln = new THREE.Vector3(n.dot(x), n.dot(y), n.dot(z));
-    occ.push({id, poly, ...bounds(poly), maxZ: Math.max(...poly.map(q => q.l.z)), gx: -ln.x / ln.z, gy: -ln.y / ln.z, cz: a.z + (ln.x * a.x + ln.y * a.y) / ln.z});
-    const painted = clipBy(poly, l => fromHit(l) - front);
-    if (painted.length >= 3) faces.push({id, poly: painted, n, facing});
+    const ln = new THREE.Vector3(n.dot(x), n.dot(y), n.dot(z));
+    // the parts of it inside the reach (paint) and the slightly deeper reach that only casts shadows
+    for (const piece of within(poly, near)) {
+      const id = faces.length + occ.length;
+      // as a shadow caster: its plane in the box frame, z = cz + gx*x + gy*y
+      const a = piece[0].l;
+      occ.push({id, src: poly, poly: piece, ...bounds(piece), maxZ: Math.max(...piece.map(q => q.l.z)), gx: -ln.x / ln.z, gy: -ln.y / ln.z, cz: a.z + (ln.x * a.x + ln.y * a.y) / ln.z});
+    }
+    for (const piece of within(poly, front)) faces.push({id: -1, poly: piece, n, facing, src: poly});
+  }
+  // a painted piece mustn't be cut by the caster pieces of its own triangle
+  for (const f of faces) f.own = new Set(occ.filter(o => o.src === f.src).map(o => o.id));
+  // the reach as convex pieces: the plane window, plus the slab around the hit point outside it
+  function within(poly, ahead) {
+    const plane = l => fromHit(l), out = [];
+    const keep = q => { if (q.length >= 3 && polyArea(q) > 1e-9) out.push(q); };
+    let inPlane = clipBy(poly, l => -back - plane(l));
+    if (inPlane.length >= 3) inPlane = clipBy(inPlane, l => plane(l) - ahead);
+    if (!slab) { keep(inPlane); return out; }
+    const [behind, aheadZ] = [slab[0], slab[1] + (ahead - front)];
+    let inSlab = clipBy(poly, l => -behind - l.z);
+    if (inSlab.length >= 3) inSlab = clipBy(inSlab, l => l.z - aheadZ);
+    keep(inSlab);
+    // the plane window's parts beyond the slab, either side
+    if (inPlane.length >= 3) { keep(clipBy(inPlane, l => l.z - (-behind))); keep(clipBy(inPlane, l => aheadZ - l.z)); }
+    return out;
   }
   // 2. cut each painted face by every caster in front of it: subtract the region where the caster
   //    covers it in the throw's view and is nearer the thrower
@@ -214,7 +242,7 @@ export function cutDecal(hits, {point, normal, up, width, height, dir = null, fr
   for (const f of faces) {
     let pieces = [f.poly];
     for (const o of occ) {
-      if (o.id === f.id) continue;
+      if (f.own.has(o.id)) continue;
       const next = [];
       for (const q of pieces) {
         const b = bounds(q);

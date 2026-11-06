@@ -133,6 +133,8 @@ export function cleanSpray(s) {
   const out = {p, n, up, piece, size};
   const v = s.v !== undefined ? unit(s.v) : null;                 // which way it was sprayed
   if (v) out.v = v;
+  // how far back along the throw its thrower stood (the paint reaches anything up to just short of them)
+  if (Number.isFinite(s.r)) out.r = round(Math.max(.3, Math.min(6, s.r)), 2);
   if (s.d !== undefined && s.d !== null) {           // on a swinging door: in that door's hinge space
     const d = int(s.d, 0, 999);
     if (d === null) return null;

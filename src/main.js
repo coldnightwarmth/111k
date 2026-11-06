@@ -275,10 +275,14 @@ async function start() {
     return doorPages.get(key);
   }
   // the patch a tag covers: cut from whatever it lands on (a door's own surface for a door)
+  // how far along the throw a tag carries from what you hit: 1.25 m beyond it, and toward you right up
+  // to the nozzle (1.5 m for tags sprayed before where you stood was sent along)
+  const sprayReach = s => [1.25, s.r !== undefined ? Math.max(.1, s.r - .05) : 1.5];
   function sprayVerts(s, piece, onDoor) {
     const point = new THREE.Vector3(...s.p), normal = new THREE.Vector3(...s.n), up = new THREE.Vector3(...s.up);
     const verts = cutDecal(onDoor || hits, {point, normal, up, width: s.size, height: s.size * piece.h / piece.w,
-      dir: s.v ? new THREE.Vector3(...s.v) : null, front: onDoor ? .03 : .9, back: onDoor ? .03 : .5});
+      dir: s.v ? new THREE.Vector3(...s.v) : null, front: onDoor ? .03 : .9, back: onDoor ? .03 : .5,
+      slab: onDoor ? null : sprayReach(s), thrower: s.r ?? null});
     const [u0, v0, u1, v1] = piece.uv;
     for (const q of verts) { q.u = u0 + q.u * (u1 - u0); q.v = v0 + q.v * (v1 - v0); }
     return verts;
@@ -665,7 +669,8 @@ async function start() {
     // sprayed partly along your aim (so it wraps the corner you can see) and partly straight on (so the piece reads)
     const fly = aim.dir.clone().normalize().add(n.clone().negate()).normalize();
     const msg = {type: 'spray', p: aim.point.toArray().map(r3), n: n.toArray().map(r3), up: up.toArray().map(r3), piece: chosenPiece,
-      size: Math.round(size * 100) / 100, v: fly.toArray().map(r3)};
+      size: Math.round(size * 100) / 100, v: fly.toArray().map(r3),
+      r: Math.round(aim.point.clone().sub(aim.origin).dot(fly) * 100) / 100};
     if (aim.hit.door !== undefined) {   // on a door: send it in the door's own space so it stays put as the door swings
       const inv = aim.hit.mesh.matrixWorld.clone().invert();
       Object.assign(msg, {p: aim.hit.local.point.toArray().map(r3), n: aim.hit.local.normal.toArray().map(r3),
