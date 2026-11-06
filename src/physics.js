@@ -1,18 +1,25 @@
-// 2D (top-down) collision for walking: the player is a circle, the level is
-// a set of oriented boxes and circles from the level JSON. Obstacles shorter
-// than the step height are ignored so you can walk over litter. Colliders are
-// bucketed into a grid so only the ones nearby are tested.
-const STEP = .12;
+// Collision for walking: the player is a circle, the level is a set of oriented
+// boxes and circles from the level JSON, each with a bottom and a top. Litter is
+// ignored. Anything short enough (pallets, crates, desks) has a top you can stand
+// on: you step onto it if it's barely higher than your feet, or jump onto it, and
+// it only blocks you while your feet are below its top. Colliders are bucketed
+// into a grid so only the ones nearby are tested.
+const LITTER = .12;          // shorter than this: not there at all
+export const STEP_UP = .2;   // walk straight up onto tops this far above your feet
+const WALKABLE = 1.25;       // tops up to this height can be stood on
+const HEAD = 1.5;            // things hanging higher than this above your feet don't block you
 const CELL = 4;
 
 export function createCollider(meta, radius = .38) {
   const grid = new Map();
   const cellKey = (ix, iz) => `${ix},${iz}`;
   for (const c of meta.colliders) {
-    if (c.y1 !== undefined && c.y1 < STEP) continue;
+    if (c.y1 !== undefined && c.y1 < LITTER) continue;
     if (c.y0 !== undefined && c.y0 > 2.2) continue;
     const o = c.r !== undefined ? {...c, circle: true}
       : {...c, cos: Math.cos(c.yaw || 0), sin: Math.sin(c.yaw || 0)};
+    o.top = c.y1 ?? Infinity; o.bottom = c.y0 ?? 0;
+    o.walkable = o.top <= WALKABLE && o.bottom < .15;
     const reach = (o.circle ? o.r : Math.hypot(o.hx, o.hz)) + radius + .5;
     for (let ix = Math.floor((o.x - reach) / CELL); ix <= Math.floor((o.x + reach) / CELL); ix++)
       for (let iz = Math.floor((o.z - reach) / CELL); iz <= Math.floor((o.z + reach) / CELL); iz++) {
@@ -24,11 +31,33 @@ export function createCollider(meta, radius = .38) {
   const empty = [];
   const b = meta.bounds;
 
-  function resolve(x, z) {
+  // does this collider get in the way of feet at this height?
+  const blocks = (o, feet) => !(o.walkable && feet >= o.top - STEP_UP) && o.bottom < feet + HEAD;
+  // how far a point is outside a collider's footprint (negative inside)
+  function outside(o, x, z) {
+    if (o.circle) return Math.hypot(x - o.x, z - o.z) - o.r;
+    const dx = x - o.x, dz = z - o.z;
+    const lx = Math.abs(dx * o.cos - dz * o.sin) - o.hx, lz = Math.abs(dx * o.sin + dz * o.cos) - o.hz;
+    return lx > 0 || lz > 0 ? Math.hypot(Math.max(lx, 0), Math.max(lz, 0)) : Math.max(lx, lz);
+  }
+  // the floor under a body at (x, z) whose feet are at `feet`: the highest top
+  // it's standing over (with a little overhang allowed) that isn't above its feet + a step
+  function groundAt(x, z, feet = 0, overhang = .14) {
+    const near = grid.get(cellKey(Math.floor(x / CELL), Math.floor(z / CELL))) || empty;
+    let g = 0;
+    for (const o of near) {
+      if (!o.walkable || o.top <= g || o.top > feet + STEP_UP + 1e-4) continue;
+      if (outside(o, x, z) < overhang) g = o.top;
+    }
+    return g;
+  }
+
+  function resolve(x, z, feet = 0) {
     const near = grid.get(cellKey(Math.floor(x / CELL), Math.floor(z / CELL))) || empty;
     for (let iter = 0; iter < 4; iter++) {
       let moved = false;
       for (const o of near) {
+        if (!blocks(o, feet)) continue;
         if (o.circle) {
           const dx = x - o.x, dz = z - o.z, d = Math.hypot(dx, dz), min = o.r + radius;
           if (d < min) {
@@ -100,5 +129,5 @@ export function createCollider(meta, radius = .38) {
     }
     return best;
   }
-  return {resolve, raycast};
+  return {resolve, raycast, groundAt};
 }

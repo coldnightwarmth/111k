@@ -339,7 +339,7 @@ def vestibule(a, door_x, i):
         with W.using('rooms'):
             for x0, x1, y0, y1 in [(lo, dl, 0, VTOP), (dr, hi, 0, VTOP), (dl, dr, DOOR_H, VTOP)]:
                 W.face([(x1, y0, z), (x0, y0, z), (x0, y1, z), (x1, y1, z)], WALLS[1])
-        depth = VD - XF + 0.4
+        depth = VD - XF   # ends flush with the bore's wall colliders, so no hidden corner pokes into the tunnel
         for x in (lo - 0.1, hi + 0.1):
             W.collider_box((x, 0, z - depth / 2), 0.1, depth / 2, 0, 0, VTOP)
         plane_decal(f'st_b-{i + 1:02d}', (door_x, (DOOR_H + VTOP) / 2, z - 0.01), (-1, 0, 0))

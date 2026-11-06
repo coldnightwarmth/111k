@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import {serverUrl, isTouch, lowPower} from './config.js';
 import {loadLevel, createAvatarLights, createFlicker, lighting} from './level.js';
-import {createCollider} from './physics.js';
+import {createCollider, STEP_UP} from './physics.js';
 import {createAvatar, preloadLook, AVATAR_SCALE} from './avatar.js';
 import {createVerticalMovement, createPoseBuffer, EYE_HEIGHT} from './motion.js';
 import {connectRoom} from './net.js';
@@ -118,7 +118,9 @@ async function start() {
   const spawn = spawns[Math.floor(Math.random() * spawns.length)];
   const resumed = mine.resumed && Number.isFinite(mine.x) && Number.isFinite(mine.z);
   const player = {x: resumed ? mine.x : spawn.x, z: resumed ? mine.z : spawn.z, y: EYE_HEIGHT, vx: 0, vz: 0, kx: 0, kz: 0,
-    emote: '', emoteTime: 0, punchTime: -1};
+    emote: '', emoteTime: 0, punchTime: -1,
+    ground: resumed && Number.isFinite(mine.g) ? mine.g : 0,   // height of whatever's under your feet (floor, pallet, desk)
+    fall: 0, stepLag: 0};
   const vertical = createVerticalMovement();
   const me = await createAvatar(mine.look);
   scene.add(me.root);
@@ -225,7 +227,8 @@ async function start() {
     const r = ((s.s >> 3) % 1000) / 1000, size = .2 + r * .16;
     const up = Math.abs(normal.y) > .9 ? new THREE.Vector3(Math.cos(s.s), 0, Math.sin(s.s)) : new THREE.Vector3(0, 1, 0);
     up.applyAxisAngle(normal, (s.s % 628) / 100);
-    const verts = cutDecal(onDoor ? onDoor.surface : hits, {point, normal, up, width: size, height: size, depth: .12});
+    // doors are thin: cut shallow so the paint stays on the face that was hit
+    const verts = cutDecal(onDoor ? onDoor.surface : hits, {point, normal, up, width: size, height: size, depth: onDoor ? .025 : .12});
     const [cu, cv] = splatCell(s.s);
     for (const q of verts) { q.u = cu + q.u / 4; q.v = cv + q.v / 2; }
     splatMarks.push({batch, m: batch.add(verts, rgbOf(s.c)), born: performance.now() - age});
@@ -235,15 +238,28 @@ async function start() {
       burst(point, normal, s.c);
     }
   }
+  // tags on a door live in a batch hung on that door, in its hinge space
+  const doorPages = new Map();
+  function doorPageBatch(k, page) {
+    const key = `${k}:${page}`;
+    if (!doorPages.has(key)) {
+      const b = createBatch(pageBatch(page).mesh.material, 3000);
+      b.mesh.renderOrder = 2; hits.door(k).mesh.add(b.mesh);
+      doorPages.set(key, b);
+    }
+    return doorPages.get(key);
+  }
   function addSpray(s, fresh = false) {
     const piece = pieceByName.get(s.piece);
     if (!piece) return;
+    const onDoor = s.d !== undefined ? hits.door(s.d) : null;
+    if (s.d !== undefined && !onDoor) return;
     const point = new THREE.Vector3(...s.p), normal = new THREE.Vector3(...s.n), up = new THREE.Vector3(...s.up);
     const w = s.size, h = s.size * piece.h / piece.w;
-    const verts = cutDecal(hits, {point, normal, up, width: w, height: h, depth: .15, minFacing: .45});
+    const verts = cutDecal(onDoor || hits, {point, normal, up, width: w, height: h, depth: onDoor ? .025 : .15, minFacing: .45});
     const [u0, v0, u1, v1] = piece.uv;
     for (const q of verts) { q.u = u0 + q.u * (u1 - u0); q.v = v0 + q.v * (v1 - v0); }
-    const batch = pageBatch(piece.page);
+    const batch = onDoor ? doorPageBatch(s.d, piece.page) : pageBatch(piece.page);
     const m = batch.add(verts, [255, 255, 255], fresh ? 0 : 1);
     sprayMarks.push({batch, m});
     while (sprayMarks.length > MAX_SPRAYS) { const old = sprayMarks.shift(); old.batch.remove(old.m); }
@@ -253,6 +269,7 @@ async function start() {
     splats.clear(); splatMarks.length = 0;
     for (const d of doorBatches.values()) d.batch.clear();
     for (const b of pageBatches.values()) b.clear();
+    for (const b of doorPages.values()) b.clear();
     sprayMarks.length = 0;
     for (const s of list.splats || []) { const c = cleanSplat(s); if (c) addSplat(c, false, Number.isFinite(s.age) ? s.age : 0); }
     for (const s of list.sprays || []) { const c = cleanSpray(s); if (c) addSpray(c); }
@@ -328,7 +345,7 @@ async function start() {
       for (const p of [...peers.values(), {id: network.id, last: {x: player.x, z: player.z}, avatar: me}]) {
         if (p.id === ignore || !p.last || !p.avatar) continue;
         // a capsule around each body: 0.28 m wide, feet to head
-        const cx = p.last.x, cz = p.last.z, base = p.avatar.model.position.y;
+        const cx = p.last.x, cz = p.last.z, base = p.avatar.root.position.y + p.avatar.model.position.y;
         for (let k = 0; k <= 8; k++) {
           const q = prev.clone().addScaledVector(dir, len * k / 8);
           if (q.y < base - .05 || q.y > base + 1.62) continue;
@@ -476,7 +493,7 @@ async function start() {
     if (!can || !chosenPiece || now - lastSpray < SPRAY_INTERVAL_MS) return;
     const piece = pieceByName.get(chosenPiece);
     const aim = aimPoint(SPRAY_RANGE + 3, true);
-    if (!aim.hit || aim.hit.door !== undefined || Math.hypot(aim.point.x - player.x, aim.point.z - player.z) > SPRAY_RANGE) { items.shake(can.state.id); return; }
+    if (!aim.hit || Math.hypot(aim.point.x - player.x, aim.point.z - player.z) > SPRAY_RANGE) { items.shake(can.state.id); return; }
     lastSpray = now;
     const n = aim.hit.normal;
     // upright on walls; on floors and ceilings, readable from where you stand
@@ -487,8 +504,14 @@ async function start() {
     const big = Math.max(piece.w, piece.h);
     const size = Math.max(.35, Math.min(piece.w * Math.min(1, 1.5 / big), 2.2)) * (.9 + Math.random() * .2);
     items.shake(can.state.id);
-    network.send({type: 'spray', p: aim.point.toArray().map(r3), n: n.toArray().map(r3), up: up.toArray().map(r3), piece: chosenPiece,
-      size: Math.round(size * 100) / 100});
+    const msg = {type: 'spray', p: aim.point.toArray().map(r3), n: n.toArray().map(r3), up: up.toArray().map(r3), piece: chosenPiece,
+      size: Math.round(size * 100) / 100};
+    if (aim.hit.door !== undefined) {   // on a door: send it in the door's own space so it stays put as the door swings
+      const inv = aim.hit.mesh.matrixWorld.clone().invert();
+      Object.assign(msg, {p: aim.hit.local.point.toArray().map(r3), n: aim.hit.local.normal.toArray().map(r3),
+        up: up.clone().transformDirection(inv).toArray().map(r3), d: aim.hit.door});
+    }
+    network.send(msg);
   }
 
   // ----------------------------------------------------------- network
@@ -621,7 +644,7 @@ async function start() {
   }
   const frameArgs = dt => ({me, myId: network.id, thirdPerson, avatarOf: id => peers.get(id)?.avatar, poseOf: id => peers.get(id)?.last, dt});
   function saveTab() {
-    tabMe.set({look: mine.look, name: mine.name, x: r3(player.x), z: r3(player.z), yaw: r3(controls.state.yaw), pitch: r3(controls.state.pitch),
+    tabMe.set({look: mine.look, name: mine.name, x: r3(player.x), z: r3(player.z), yaw: r3(controls.state.yaw), pitch: r3(controls.state.pitch), g: r3(player.ground),
       view: thirdPerson ? '3p' : '1p'});
   }
   addEventListener('pagehide', saveTab);
@@ -638,7 +661,7 @@ async function start() {
     player.vx += (tx - player.vx) * damp(12, dt); player.vz += (tz - player.vz) * damp(12, dt);
     if (vertical.takeHop()) {   // a clean hop shoves you along the way you're going
       const v = Math.hypot(player.vx, player.vz);
-      if (v > .5) { player.kx += player.vx / v * .9; player.kz += player.vz / v * .9; }
+      if (v > .5) { const k = .9 * vertical.boost; player.kx += player.vx / v * k; player.kz += player.vz / v * k; }
     }
     // the hop shove barely fades in the air, and the ground only starts eating it a
     // moment after touchdown, so a hop timed in the window keeps all of it
@@ -648,14 +671,36 @@ async function start() {
     // fast hops cover a lot of ground per frame: move in small steps so walls stay solid
     const mvx = (player.vx + player.kx) * dt, mvz = (player.vz + player.kz) * dt;
     const steps = Math.min(40, Math.ceil(Math.hypot(mvx, mvz) / .15));
-    for (let i = 0; i < steps; i++) [player.x, player.z] = collider.resolve(player.x + mvx / steps, player.z + mvz / steps);
+    const feet = player.ground + vertical.lift;
+    for (let i = 0; i < steps; i++) [player.x, player.z] = collider.resolve(player.x + mvx / steps, player.z + mvz / steps, feet);
     doors.push(player.x, player.z, player.x - px, player.z - pz);
     [player.x, player.z] = doors.resolve(player.x, player.z);
     const velocity = Math.hypot(player.x - px, player.z - pz) / Math.max(dt, 1e-4);
+    // slamming into a wall or a prop mid-run is a crash: the hop chain and its shove are gone.
+    // (sliding along a wall at a shallow angle keeps most of the speed, so that's fine)
+    const meant = Math.hypot(mvx, mvz) / Math.max(dt, 1e-4);
+    if (vertical.chain > 0 && meant > 2.5 && velocity < meant * .55) { vertical.crash(); player.kx = player.kz = 0; }
     if (velocity > .3) player.emote = '';
     if (player.emote) player.emoteTime = Math.min(EMOTE_DURATION, player.emoteTime + dt);
     if (player.punchTime >= 0) { player.punchTime += dt; if (player.punchTime > PUNCH_DURATION) player.punchTime = -1; }
-    player.y = vertical.update(dt, !frozen && input.crouch);
+    const eye = vertical.update(dt, !frozen && input.crouch);
+    // standing on things: step up onto low tops, land on higher ones from a jump, drop off edges
+    {
+      const feetNow = player.ground + vertical.lift;
+      const support = collider.groundAt(player.x, player.z, feetNow);
+      if (support > player.ground + 1e-4) {
+        if (vertical.lift <= 1e-4) { player.stepLag -= support - player.ground; player.ground = support; player.fall = 0; }   // a step: the view eases up
+        else if (vertical.descending && feetNow <= support + .02) { player.ground = support; player.fall = 0; vertical.touchdown(); }
+      } else if (support < player.ground - 1e-4) {
+        player.fall -= 13 * dt;
+        player.ground = Math.max(support, player.ground + player.fall * dt);
+        if (player.ground <= support + 1e-4) { player.ground = support; player.fall = 0; }
+      } else player.fall = 0;
+      // a short drop just smooths down; a real one is a fall (no jumping mid-air)
+      vertical.setFalling(player.fall < -1.2 || (player.fall < 0 && vertical.lift <= 1e-4 && player.ground - support > STEP_UP));
+      player.stepLag *= Math.exp(-dt * 14);
+    }
+    player.y = player.ground + eye + player.stepLag;
     const h = held(), holding = !!h;
     if (h?.state.type === 'paintball' && input.firing && !frozen) shoot();
     document.body.classList.toggle('holding-spray', h?.state.type === 'spray');
@@ -663,8 +708,8 @@ async function start() {
       punchTime: player.punchTime, holding};
 
     // local avatar
-    me.root.position.set(player.x, 0, player.z); me.root.rotation.y = input.yaw;
-    me.eye = player.y; me.pitch = input.pitch;
+    me.root.position.set(player.x, player.ground + player.stepLag, player.z); me.root.rotation.y = input.yaw;
+    me.eye = player.y - player.ground; me.pitch = input.pitch;
     me.update(dt, velocity, motion);
 
     // camera
@@ -720,7 +765,7 @@ async function start() {
 
     // network: 15 Hz while something changes, then 3 settling packets
     if (now - sentAt >= 1000 / 15 && network.online) {
-      const pose = sanitizePose({x: player.x, y: player.y, z: player.z, yaw: input.yaw, pitch: input.pitch, room: 'office',
+      const pose = sanitizePose({x: player.x, y: player.y, z: player.z, g: player.ground, yaw: input.yaw, pitch: input.pitch, room: 'office',
         crouch: motion.crouch, jumpTime: motion.jumpTime, jumpPower: motion.jumpPower, emote: player.emote, emoteTime: player.emoteTime,
         typing: chat.typing, punchTime: player.punchTime});
       const key = JSON.stringify(pose);
@@ -740,13 +785,13 @@ async function start() {
       const pdt = Math.min(.1, Math.max(0, (now - (p.lastUpdate || now)) / 1000)); p.lastUpdate = now;
       const v = p.previous && pdt > 0 ? Math.hypot(s.x - p.previous.x, s.z - p.previous.z) / pdt : 0;
       p.previous = s;
-      p.avatar.root.position.set(s.x, 0, s.z); p.avatar.root.rotation.y = s.yaw;
+      p.avatar.root.position.set(s.x, s.g || 0, s.z); p.avatar.root.rotation.y = s.yaw;
       p.avatar.update(pdt, v, {...s, holding: !!items.heldBy(p.id)});
       doors.push(s.x, s.z, v * pdt * Math.sin(-s.yaw), 0);
       if (p.bubble && serverNow > p.bubbleExpires) { p.bubble.dispose(); p.bubble = null; }
       if (p.bubble || p.typing) {
         if (!p.sightAt || now - p.sightAt > 150) { p.seen = inSight(s); p.sightAt = now; }
-        const at = project(s, 2.0 + (s.jumpTime >= 0 ? .4 : 0));
+        const at = project(s, (s.g || 0) + 2.0 + (s.jumpTime >= 0 ? .4 : 0));
         const show = at.visible && p.seen;
         const top = p.bubble ? p.bubble.update(at.x, at.y, show) : at.y;
         p.typing?.update(at.x, top, show);
@@ -754,7 +799,7 @@ async function start() {
     }
     if (myBubble) {
       if (serverNow > myBubbleExpires) { myBubble.dispose(); myBubble = null; }
-      else { const at = project(player, 2.0); myBubble.update(at.x, at.y, at.visible && thirdPerson); }
+      else { const at = project(player, player.ground + 2.0); myBubble.update(at.x, at.y, at.visible && thirdPerson); }
     }
     doors.update(dt);
 

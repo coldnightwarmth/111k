@@ -180,7 +180,9 @@ export function handleMessage(player, data, now, room = {items: {}, players: () 
     const can = Object.values(items).find(it => it.holder === player.id && it.type === 'spray');
     const mark = cleanSpray(m);
     if (!can || !mark || !player.pose || now - player.lastSpray < SPRAY_INTERVAL_MS) return {out, changed: false};
-    if (Math.hypot(mark.p[0] - player.pose.x, mark.p[2] - player.pose.z) > SPRAY_RANGE + 1) return {out, changed: false};
+    // door marks are in the door's own space, a door-width from its hinge at most
+    if (mark.d !== undefined ? Math.hypot(...mark.p) > 3 : Math.hypot(mark.p[0] - player.pose.x, mark.p[2] - player.pose.z) > SPRAY_RANGE + 1)
+      return {out, changed: false};
     player.lastSpray = now; player.lastActive = now;
     out.push({to: 'all', msg: {type: 'spray', from: player.id, mark, time: now}});
     if (room.marks) {

@@ -49,6 +49,7 @@ export function sanitizePose(p) {
   const emote = normalizeEmote(p.emote);
   return {
     x: round(x), y: round(y), z: round(z), yaw: round(yaw), pitch: round(pitch), room,
+    g: Number.isFinite(p.g) ? round(Math.max(-2, Math.min(5, p.g))) : 0,     // height of the floor under their feet
     crouch: Number.isFinite(p.crouch) ? round(Math.max(0, Math.min(1, p.crouch))) : 0,
     jumpTime: Number.isFinite(p.jumpTime) ? round(Math.max(-1, Math.min(1.1, p.jumpTime))) : -1,
     jumpPower: Number.isFinite(p.jumpPower) ? round(Math.max(.5, Math.min(1.5, p.jumpPower)), 2) : 1,
@@ -60,7 +61,7 @@ export function sanitizePose(p) {
 
 export function samePose(a, b) {
   if (!a || !b) return false;
-  for (const k of ['x', 'y', 'z', 'yaw', 'pitch', 'room', 'crouch', 'jumpTime', 'jumpPower', 'emote', 'emoteTime', 'typing', 'punchTime'])
+  for (const k of ['x', 'y', 'z', 'g', 'yaw', 'pitch', 'room', 'crouch', 'jumpTime', 'jumpPower', 'emote', 'emoteTime', 'typing', 'punchTime'])
     if (a[k] !== b[k]) return false;
   return true;
 }
@@ -122,5 +123,11 @@ export function cleanSpray(s) {
   const piece = typeof s.piece === 'string' && /^[a-zA-Z0-9_.-]{1,48}$/.test(s.piece) ? s.piece : null;
   const size = Number.isFinite(s.size) ? round(Math.max(.2, Math.min(2.4, s.size)), 2) : null;
   if (!p || !n || !up || !piece || size === null) return null;
-  return {p, n, up, piece, size};
+  const out = {p, n, up, piece, size};
+  if (s.d !== undefined && s.d !== null) {           // on a swinging door: in that door's hinge space
+    const d = int(s.d, 0, 999);
+    if (d === null) return null;
+    out.d = d;
+  }
+  return out;
 }

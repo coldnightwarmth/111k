@@ -7,7 +7,8 @@ export const JUMP_TAKEOFF = .14;
 export const JUMP_FLIGHT = 2 / 3;
 export const MAX_HOP_POWER = 1.42;
 const LANDED = JUMP_TAKEOFF + JUMP_FLIGHT;
-const HOP_WINDOW = .13;        // press this close to touchdown (either side) for a clean hop
+const HOP_WINDOW = .13;
+const HOP_GAIN = 1.15;         // each clean hop: 15% faster than you already were        // press this close to touchdown (either side) for a clean hop
 const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
 
 export function jumpHeight(time, power = 1) {
@@ -20,6 +21,7 @@ export function jumpHeight(time, power = 1) {
 // hop carries a little more speed (without limit) and goes a little higher (up to a cap).
 export function createVerticalMovement() {
   let crouch = 0, jumpTime = -1, power = 1, chain = 0, queued = -1, grounded = 0, hopped = false;
+  let falling = false, pressedAt = -1, clock = 0;   // dropping off a ledge (not part of a jump)
   function launch(clean) {
     chain = clean ? chain + 1 : 0;                                    // no cap: keep hopping, keep speeding up
     power = clean ? Math.min(MAX_HOP_POWER, 1 + .07 * chain) : 1;     // but the height tops out
@@ -30,12 +32,26 @@ export function createVerticalMovement() {
     get pose() { return {crouch, jumpTime, jumpPower: power}; },
     get chain() { return chain; },
     // horizontal speed multiplier earned by chaining clean hops
-    get boost() { return 1 + .15 * chain; },
+    // compounding, so every hop feels as big as the first, however fast you're already going
+    get boost() { return HOP_GAIN ** chain; },
+    // ran into something at speed: the run is over (even if the next hop is timed perfectly)
+    crash() { chain = 0; queued = -1; },
     // seconds since the feet touched down (-1 while in the air)
-    get landedFor() { return jumpTime >= 0 && jumpTime < LANDED ? -1 : grounded; },
+    get landedFor() { return falling || (jumpTime >= 0 && jumpTime < LANDED) ? -1 : grounded; },
+    // how high the jump has lifted the feet right now, and whether they're on the way down
+    get lift() { return jumpHeight(jumpTime, power); },
+    get descending() { return jumpTime >= JUMP_TAKEOFF + JUMP_FLIGHT / 2 && jumpTime < LANDED; },
+    // the feet met something on the way down (a crate, a desk): the jump ends here
+    touchdown() { if (jumpTime >= JUMP_TAKEOFF && jumpTime < LANDED) jumpTime = LANDED; },
+    // walking off an edge; a press just before the drop ends counts as a hop
+    setFalling(on) {
+      if (falling && !on && pressedAt >= 0 && clock - pressedAt < HOP_WINDOW) { falling = false; pressedAt = -1; grounded = 0; launch(true); return; }
+      falling = on; if (!on) pressedAt = -1;
+    },
     // true once per clean hop, so the caller can add a forward shove
     takeHop() { const h = hopped; hopped = false; return h; },
     jump() {
+      if (falling && (jumpTime < 0 || jumpTime >= LANDED)) { pressedAt = clock; return true; }
       if (jumpTime < 0) { launch(false); return true; }
       if (jumpTime >= LANDED) { launch(jumpTime - LANDED < HOP_WINDOW); return true; }
       if (jumpTime >= LANDED - HOP_WINDOW) { queued = jumpTime; return true; }
@@ -45,12 +61,13 @@ export function createVerticalMovement() {
     bump() { if (jumpTime < 0 || jumpTime >= LANDED) { chain = 0; power = .8; jumpTime = JUMP_TAKEOFF; grounded = 0; } },
     update(dt, duck) {
       dt = clamp(dt, 0, .1);
+      clock += dt;
       if (jumpTime >= 0) {
         jumpTime += dt;
         if (queued >= 0 && jumpTime >= LANDED) launch(true);
         else if (jumpTime >= JUMP_DURATION) jumpTime = -1;
       }
-      if (jumpTime < 0 || jumpTime >= LANDED) {
+      if (!falling && (jumpTime < 0 || jumpTime >= LANDED)) {
         grounded += dt;
         if (grounded > .3 && chain) chain = 0;   // standing around ends the run
       }
@@ -90,6 +107,7 @@ export function createPoseBuffer({delay = 85, maxPrediction = 80} = {}) {
       const t = time > b.time ? 1 + future / duration : (time - a.time) / duration;
       const result = {...b.pose};
       for (const key of ['x', 'y', 'z', 'pitch']) result[key] = a.pose[key] + (b.pose[key] - a.pose[key]) * t;
+      result.g = (a.pose.g || 0) + ((b.pose.g || 0) - (a.pose.g || 0)) * Math.min(t, 1);
       result.crouch = (a.pose.crouch || 0) + ((b.pose.crouch || 0) - (a.pose.crouch || 0)) * Math.min(t, 1);
       result.jumpTime = b.pose.jumpTime ?? -1;
       result.jumpPower = b.pose.jumpPower || 1;
