@@ -30,7 +30,8 @@ you land to bunny hop: each clean hop goes a little higher and faster) · C crou
 enter chat · E emotes · V first/third person · left click punches, or uses what
 you hold · right click (or F) drops it.
 
-- Flashlights (three): left click switches them on and off.
+- Flashlights (fifteen, six of them already on, lying around the loop): left click switches them on and off.
+  Every item goes back where it started when the last person leaves, or once nobody has done anything for 3 minutes.
 - The paintball marker (in the starting room): left click fires, hold to keep firing.
   Paint stays on the walls; a hit player gets paint on them and drops what they hold.
 - Spray cans (ten, round the loop): left click a wall to tag it. Press Esc while

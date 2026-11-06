@@ -6,7 +6,7 @@
 import * as THREE from 'three';
 import {GLTFLoader} from '../vendor/three/GLTFLoader.js';
 
-export const MAX_FLASHLIGHTS = 3;
+export const MAX_FLASHLIGHTS = 4;
 
 // Shared by every level material: the game updates these each frame.
 export const lighting = {

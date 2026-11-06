@@ -680,6 +680,8 @@ W.meta.update({'name': 'world', 'ambient': [0.035, 0.035, 0.045], 'fog': {'color
 
 
 def write_items():
+    from scatter import scatter_flashlights
+    ITEMS.extend(scatter_flashlights(W.colliders, ITEMS))
     prefix, count, items = {'flashlight': 'fl', 'paintball': 'pb', 'spray': 'sp'}, {}, []
     for it in ITEMS:
         count[it['type']] = count.get(it['type'], 0) + 1

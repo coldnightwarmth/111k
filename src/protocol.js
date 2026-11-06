@@ -7,6 +7,7 @@ export const CHAT_INTERVAL_MS = 900;
 export const CHAT_TTL_MS = 8000;
 export const POSE_INTERVAL_MS = 45;
 export const INACTIVE_MS = 5 * 60 * 1000;
+export const IDLE_RESET_MS = 3 * 60 * 1000;   // nobody's done anything for this long: every item goes back where it started
 export const ROOMS = ['office'];
 export const PICKUP_RANGE = 2.6;     // metres from a player's feet to an item they can grab
 export const PUNCH_RANGE = 2.0;      // server-side check (clients aim at 1.6)

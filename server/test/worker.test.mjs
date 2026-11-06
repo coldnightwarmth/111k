@@ -227,3 +227,30 @@ test('paint splats: door splats keep their door, and paint is gone after a minut
   assert.equal(msg.splats[0].d, 3); assert.equal(msg.splats[0].age, 1000); assert.equal(msg.splats[0].at, undefined);
   assert.equal(pruneSplats(marks, now), true); assert.equal(marks.splats.length, 1);
 });
+
+test('items: scattered flashlights start lit or not, and an idle room puts everything back', async () => {
+  const {ITEM_SPAWNS} = await import('../../src/world-items.js');
+  const {IDLE_RESET_MS} = await import('../../src/protocol.js');
+  const lights = ITEM_SPAWNS.filter(s => s.type === 'flashlight');
+  assert.equal(lights.length, 15); assert.equal(lights.filter(s => s.on).length, 6);
+  const {room, sockets, ctx} = makeRoom();
+  await join(room, S1); await join(room, S2);
+  const [a, b] = sockets;
+  const items = a.messages().find(m => m.type === 'state').items;
+  assert.equal(items.filter(it => it.on).length, 6);
+  // a picks a torch up and wanders off with it
+  const torch = lights.find(s => s.on);
+  await room.webSocketMessage(a, JSON.stringify({type: 'pose', pose: {...pose, x: torch.x, z: torch.z}}));
+  await room.webSocketMessage(a, JSON.stringify({type: 'pickup', id: torch.id}));
+  assert.equal(room.items[torch.id].holder, a.messages()[0].id);
+  // still busy: nothing happens
+  await room.alarm();
+  assert.equal(room.items[torch.id].holder, a.messages()[0].id);
+  assert.ok(ctx.storage.alarm <= Date.now() + IDLE_RESET_MS + 1000, 'an alarm is set for the idle reset');
+  // three minutes with nobody doing anything: all back where it started (and still lit)
+  for (const ws of sockets) { const p = ws.deserializeAttachment(); p.lastActive -= IDLE_RESET_MS + 1000; ws.serializeAttachment(p); }
+  await room.alarm();
+  assert.equal(room.items[torch.id].holder, null);
+  assert.equal(room.items[torch.id].x, torch.x); assert.equal(room.items[torch.id].on, true);
+  assert.ok(b.messages().some(m => m.type === 'item' && m.item.id === torch.id && m.item.holder === null));
+});

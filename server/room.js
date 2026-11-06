@@ -15,7 +15,12 @@ export function newPlayer(id, now) {
 
 // Items start where the level put them; a stored set from an older level is replaced.
 export function freshItems() {
-  return Object.fromEntries(ITEM_SPAWNS.map(s => [s.id, cleanItem({...s, holder: null, on: false})]));
+  return Object.fromEntries(ITEM_SPAWNS.map(s => [s.id, cleanItem({...s, holder: null, on: s.on === true})]));
+}
+// everything where it started (and lit the way it started)?
+export function itemsAtSpawn(items) {
+  const fresh = freshItems();
+  return Object.keys(fresh).every(id => JSON.stringify(items[id]) === JSON.stringify(fresh[id]));
 }
 export function validItems(stored) {
   if (!stored || typeof stored !== 'object') return freshItems();

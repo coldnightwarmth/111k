@@ -1,8 +1,8 @@
 // Cloudflare Worker + Durable Object for the shared hangout (free tier).
 // One Durable Object instance ("public-v1") holds every socket. Hibernating
 // WebSockets plus automatic ping/pong mean an idle room costs nothing.
-import {INACTIVE_MS, MAX_PLAYERS} from '../src/protocol.js';
-import {handleMessage, newPlayer, snapshot, freshItems, validItems, releaseItems, validMarks, marksMessage} from './room.js';
+import {INACTIVE_MS, IDLE_RESET_MS, MAX_PLAYERS} from '../src/protocol.js';
+import {handleMessage, newPlayer, snapshot, freshItems, validItems, releaseItems, validMarks, marksMessage, itemsAtSpawn} from './room.js';
 
 function allowedOrigins(env) {
   const list = (env.ALLOWED_ORIGINS || '').split(',').map(s => s.trim()).filter(Boolean);
@@ -51,9 +51,13 @@ export class Room {
   send(ws, msg) { try { ws.send(typeof msg === 'string' ? msg : JSON.stringify(msg)); } catch {} }
   broadcast(msg) { const data = JSON.stringify(msg); for (const ws of this.sockets()) this.send(ws, data); }
   async scheduleAlarm() {
-    const live = this.players().filter(p => !p.inactive);
-    if (!live.length) return;
-    let at = Math.min(...live.map(p => p.lastActive)) + INACTIVE_MS + 1000;
+    const everyone = this.players(), live = everyone.filter(p => !p.inactive);
+    const times = [];
+    if (live.length) times.push(Math.min(...live.map(p => p.lastActive)) + INACTIVE_MS + 1000);
+    // items out of place: put them back once the room has been idle long enough
+    if (everyone.length && !itemsAtSpawn(await this.loadItems())) times.push(Math.max(...everyone.map(p => p.lastActive)) + IDLE_RESET_MS + 500);
+    if (!times.length) return;
+    let at = Math.min(...times);
     const pending = await this.ctx.storage.getAlarm?.();
     if (pending && pending > Date.now() && pending < at) at = pending;   // keep a sooner one (dropped items)
     await this.ctx.storage.setAlarm(at);
@@ -87,7 +91,7 @@ export class Room {
     if (result.close) { ws.close(1009, result.close); return; }
     if (result.changed) ws.serializeAttachment(player);
     for (const {to, msg} of result.out) to === 'all' ? this.broadcast(msg) : this.send(ws, msg);
-    if (result.itemsChanged) await this.saveItems();
+    if (result.itemsChanged) { await this.saveItems(); await this.scheduleAlarm(); }
     if (result.marksChanged) this.saveMarksSoon();
     if (result.returning) { this.broadcast(snapshot(this.players(), now, items)); await this.scheduleAlarm(); }
   }
@@ -104,7 +108,15 @@ export class Room {
       for (const {msg} of dropped) this.broadcast(msg);
       if (dropped.length) await this.saveItems();
     }
+    // nobody connected has done anything for a while: tidy up
+    const everyone = this.players();
+    const lastActive = everyone.length ? Math.max(...everyone.map(p => p.lastActive)) : 0;
+    if (now - lastActive >= IDLE_RESET_MS && !itemsAtSpawn(await this.loadItems())) await this.resetItems();
     await this.scheduleAlarm();
+  }
+  async resetItems() {
+    this.items = freshItems(); await this.saveItems();
+    for (const item of Object.values(this.items)) this.broadcast({type: 'item', item});
   }
 
   async webSocketClose(ws) { await this.depart(ws); }

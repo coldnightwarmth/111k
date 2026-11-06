@@ -85,6 +85,7 @@ const MODELS = {flashlight: flashlightModel, paintball: paintballModel, spray: s
 export function createItems({scene, camera}) {
   const items = new Map();          // id -> {state, model, kick}
   const spots = [];                 // real spotlights so avatars catch the beams
+  const lit = [];                   // switched-on flashlights this frame, nearest first
   for (let i = 0; i < MAX_FLASHLIGHTS; i++) {
     const s = new THREE.SpotLight(BEAM_COLOR, 0, 18, .52, .45, 1.6);
     scene.add(s, s.target);
@@ -205,14 +206,23 @@ export function createItems({scene, camera}) {
         }
         if (s.type !== 'flashlight') continue;
         u.lens.color.setScalar(s.on ? 4 : .2);
-        if (s.on && n < MAX_FLASHLIGHTS) {
-          lighting.flPos.value[n].copy(origin);
-          lighting.flDir.value[n].copy(dir).normalize();
-          lighting.flOn.value[n] = 1;
-          spots[n].position.copy(origin); spots[n].target.position.copy(origin).add(dir); spots[n].intensity = 40;
-          n++;
+        if (s.on) {
+          // only a few beams can be lit at once: yours first, then other people's, then the nearest on the floor
+          const far = origin.distanceTo(camera.position);
+          if (!s.holder && far > 30) continue;
+          lit.push({origin, dir, rank: s.holder === myId ? -1e6 : s.holder ? far - 1e3 : far});
         }
       }
+      lit.sort((a, b) => a.rank - b.rank);
+      for (const l of lit) {
+        if (n >= MAX_FLASHLIGHTS) break;
+        lighting.flPos.value[n].copy(l.origin);
+        lighting.flDir.value[n].copy(l.dir).normalize();
+        lighting.flOn.value[n] = 1;
+        spots[n].position.copy(l.origin); spots[n].target.position.copy(l.origin).add(l.dir); spots[n].intensity = 40;
+        n++;
+      }
+      lit.length = 0;
       for (let i = n; i < MAX_FLASHLIGHTS; i++) { lighting.flOn.value[i] = 0; spots[i].intensity = 0; }
     },
   };

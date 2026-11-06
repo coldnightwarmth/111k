@@ -7,8 +7,8 @@ import {createHash} from 'node:crypto';
 import {readFile, stat} from 'node:fs/promises';
 import {extname, join, normalize, resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
-import {INACTIVE_MS, MAX_PLAYERS} from '../src/protocol.js';
-import {handleMessage, newPlayer, snapshot, freshItems, releaseItems, freshMarks, marksMessage} from './room.js';
+import {INACTIVE_MS, IDLE_RESET_MS, MAX_PLAYERS} from '../src/protocol.js';
+import {handleMessage, newPlayer, snapshot, freshItems, releaseItems, freshMarks, marksMessage, itemsAtSpawn} from './room.js';
 
 const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const PORT = Number(process.env.PORT || 8000);
@@ -125,6 +125,12 @@ setInterval(() => {
     c.player.inactive = true; broadcast({type: 'leave', id: c.player.id});
     for (const {msg} of releaseItems(items, c.player)) broadcast(msg);
   }
-}, 5000);
+  // nobody's done anything for a while: every item goes back where it started
+  const last = Math.max(0, ...[...clients].map(c => c.player.lastActive));
+  if (clients.size && now - last >= (Number(process.env.IDLE_RESET_MS) || IDLE_RESET_MS) && !itemsAtSpawn(items)) {
+    items = freshItems();
+    for (const item of Object.values(items)) broadcast({type: 'item', item});
+  }
+}, Number(process.env.IDLE_RESET_MS) ? 1000 : 5000);
 
 server.listen(PORT, () => console.log(`111k dev server: http://localhost:${PORT}  (multiplayer on the same port)`));
