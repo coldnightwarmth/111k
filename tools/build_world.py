@@ -473,13 +473,23 @@ with W.using('props', density=1.0):
               uv_const=Pr.sw(['ledgreen', 'pink', 'yellow', 'ledblue'][k % 4]))
     # abandoned stuff around the loop
     junk_r = np.random.default_rng(21)
+    # rough footprint of each kind, so two never land on top of each other (the later one is left out)
+    junk_reach = {'pallet': 0.7, 'spool': 0.5, 'cones': 0.7, 'drum': 0.3, 'boxes': 0.6, 'pipes': 1.05,
+                  'ladder': 1.25, 'bucket': 0.2, 'chair': 0.6, 'cart': 0.5}
+    junk_placed = []
     for k in range(30):
         aa = junk_r.uniform(0, 2 * math.pi)
         if adist(aa, party_a) < 0.2 or any(adist(aa, d) < 0.05 for d in door_angles):
             continue
         x = junk_r.choice([-1, 1]) * junk_r.uniform(1.6, 2.1)
         kind = junk_r.choice(['pallet', 'spool', 'cones', 'drum', 'boxes', 'pipes', 'ladder', 'bucket', 'chair', 'cart'])
-        with W.frame(at(aa, x), aa + junk_r.uniform(-0.3, 0.3)):
+        here = np.asarray(at(aa, x), float)
+        clash = any(np.hypot(*(here - q)[[0, 2]]) < junk_reach[kind] + r for q, r in junk_placed)
+        if clash:
+            print(f'  junk {k}: {kind} would land on another prop, left out')
+        else:
+            junk_placed.append((here, junk_reach[kind]))
+        with W.discard(clash), W.frame(at(aa, x), aa + junk_r.uniform(-0.3, 0.3)):
             if kind == 'pallet':
                 for dz in (-0.45, 0, 0.45):
                     W.box((0, 0.05, dz), (1.0, 0.1, 0.1), M['wood'])

@@ -108,6 +108,24 @@ class World:
         finally:
             self.part, self.density = old
 
+    @contextlib.contextmanager
+    def discard(self, drop=True):
+        """Build inside this and nothing sticks (keeps random draws in step when skipping a prop)."""
+        sizes = {k: (len(g['v']), len(g['f']), len(g['uv'])) for k, g in self.geo.items()}
+        n_col = len(self.colliders)
+        try:
+            yield
+        finally:
+            if drop:
+                for k in list(self.geo):
+                    if k not in sizes:
+                        del self.geo[k]
+                        continue
+                    nv, nf, nu = sizes[k]
+                    g = self.geo[k]
+                    del g['v'][nv:], g['f'][nf:], g['uv'][nu:]
+                del self.colliders[n_col:]
+
     def T(self, p):
         R, o, _ = self.frames[-1]
         return o + np.asarray(p, float) @ R.T
