@@ -613,7 +613,10 @@ async function start() {
     }
     player.kx *= Math.exp(-dt * 5); player.kz *= Math.exp(-dt * 5);
     const px = player.x, pz = player.z;
-    [player.x, player.z] = collider.resolve(player.x + (player.vx + player.kx) * dt, player.z + (player.vz + player.kz) * dt);
+    // fast hops cover a lot of ground per frame: move in small steps so walls stay solid
+    const mvx = (player.vx + player.kx) * dt, mvz = (player.vz + player.kz) * dt;
+    const steps = Math.min(40, Math.ceil(Math.hypot(mvx, mvz) / .15));
+    for (let i = 0; i < steps; i++) [player.x, player.z] = collider.resolve(player.x + mvx / steps, player.z + mvz / steps);
     doors.push(player.x, player.z, player.x - px, player.z - pz);
     [player.x, player.z] = doors.resolve(player.x, player.z);
     const velocity = Math.hypot(player.x - px, player.z - pz) / Math.max(dt, 1e-4);

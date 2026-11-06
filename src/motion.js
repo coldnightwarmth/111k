@@ -17,12 +17,12 @@ export function jumpHeight(time, power = 1) {
 
 // Jumps can chain the moment you touch down. Pressing right at touchdown (or
 // just before it: the press is remembered) skips the wind-up and each clean
-// hop goes a little higher and carries a little more speed.
+// hop carries a little more speed (without limit) and goes a little higher (up to a cap).
 export function createVerticalMovement() {
   let crouch = 0, jumpTime = -1, power = 1, chain = 0, queued = -1, grounded = 0, hopped = false;
   function launch(clean) {
-    chain = clean ? Math.min(chain + 1, 6) : 0;
-    power = clean ? Math.min(MAX_HOP_POWER, 1 + .07 * chain) : 1;
+    chain = clean ? chain + 1 : 0;                                    // no cap: keep hopping, keep speeding up
+    power = clean ? Math.min(MAX_HOP_POWER, 1 + .07 * chain) : 1;     // but the height tops out
     jumpTime = clean ? JUMP_TAKEOFF : 0;     // a clean hop leaves straight away
     grounded = 0; queued = -1; hopped = clean;
   }
