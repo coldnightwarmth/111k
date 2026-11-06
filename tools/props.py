@@ -362,29 +362,30 @@ class Props:
                        ((dr + 0.04, DOOR_H / 2, fz), (0.08, DOOR_H + 0.08, T_W + 0.04)),
                        ((door_x, DOOR_H + 0.04, fz), (DOOR_W, 0.08, T_W + 0.04))]:
             W.box(c, s, metal)
-        hinge = np.array([dl + 0.02, 0, Z0 + 0.03])
+        hinge = np.array([dl + 0.02, 0, fz])            # mid-frame, so the leaf swings clear either way
         lw = DOOR_W - 0.04
         yaw = -opened
         R = rot(yaw)
         swing = opened > 0
         k = len(W.meta.setdefault('doors', []))
         with W.using(f'door{k}' if swing else None):
-            centre = hinge + R @ np.array([lw / 2, DOOR_H / 2 - 0.01, 0.025])
+            centre = hinge + R @ np.array([lw / 2, DOOR_H / 2 - 0.01, 0.0])
             W.box(centre, (lw, DOOR_H - 0.03, 0.05), leaf_mat, yaw=yaw, collide=not swing)
             for off, size, col in [((0, 0.25, 0.0285), (0.36, 0.6, 0.004), 'glass'), ((0, 0.25, -0.0285), (0.36, 0.6, 0.004), 'glass'),
                                    ((0, -1.08, 0.0285), (lw - 0.1, 0.28, 0.004), 'steel'),
-                                   ((-0.38, -0.18, 0.055), (0.03, 0.03, 0.06), 'steel'), ((-0.38, -0.18, 0.09), (0.14, 0.03, 0.03), 'steel'),
-                                   ((-0.38, -0.18, -0.055), (0.03, 0.03, 0.06), 'steel'), ((-0.38, -0.18, -0.09), (0.14, 0.03, 0.03), 'steel'),
-                                   ((-0.38, -0.18, 0.027), (0.06, 0.13, 0.006), 'steel'), ((-0.38, -0.18, -0.027), (0.06, 0.13, 0.006), 'steel')]:
+                                   ((0.38, -0.18, 0.055), (0.03, 0.03, 0.06), 'steel'), ((0.38, -0.18, 0.09), (0.14, 0.03, 0.03), 'steel'),
+                                   ((0.38, -0.18, -0.055), (0.03, 0.03, 0.06), 'steel'), ((0.38, -0.18, -0.09), (0.14, 0.03, 0.03), 'steel'),
+                                   ((0.38, -0.18, 0.027), (0.06, 0.13, 0.006), 'steel'), ((0.38, -0.18, -0.027), (0.06, 0.13, 0.006), 'steel')]:
                 p = hinge + R @ (np.array([lw / 2, DOOR_H / 2, 0]) + np.array(off))
                 self.box(p, size, col, yaw=yaw)
             for hy in (0.25, DOOR_H - 0.3):     # hinge knuckles
-                self.cyl(hinge + np.array([-0.01, hy, -0.005]), 0.012, 0.1, 'steel')
+                self.cyl(hinge + np.array([-0.01, hy, 0.0]), 0.012, 0.1, 'steel')
         if swing:
             h = W.T(hinge)
             to = lambda d: (lambda v: math.atan2(-v[2], v[0]))(W.T(hinge + d) - h)
             baked, closed = to(R @ np.array([1.0, 0, 0])), to(np.array([1.0, 0, 0]))
             centre_off = math.atan2(math.sin(closed - baked), math.cos(closed - baked))
+            W.meta['doorStyle'] = 2                     # handle on the free edge, pivot mid-frame (the game stops correcting)
             W.meta['doors'].append({'index': k, 'hinge': [round(float(h[0]), 3), round(float(h[2]), 3)],
                                     'yaw': round(baked, 4), 'closed': round(centre_off, 4), 'width': round(lw, 3), 'thick': 0.05})
 

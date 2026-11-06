@@ -152,6 +152,15 @@ export function handleMessage(player, data, now, room = {items: {}, players: () 
     return {out, changed: false};
   }
 
+  // ------------------------------------------------ doors pulled shut
+  // Doors swing on each client; a click to shut one is passed to everyone so they all close it.
+  if (m.type === 'door') {
+    if (!Number.isInteger(m.i) || m.i < 0 || m.i > 999 || !player.pose || now - (player.lastDoor || 0) < 250) return {out, changed: false};
+    player.lastDoor = now; player.lastActive = now;
+    out.push({to: 'all', msg: {type: 'door', i: m.i, by: player.id}});
+    return {out, changed: true};
+  }
+
   // ---------------------------------------------------------- lap timer
   if (m.type === 'button') {
     if (!player.pose || player.inactive || !room.race || now - (player.lastButton || 0) < 400) return {out, changed: false};

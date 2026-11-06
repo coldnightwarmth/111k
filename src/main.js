@@ -137,6 +137,7 @@ async function start() {
   meView.root.visible = false;
   camera.add(meView.root);
   let thirdPerson = params.get('view') === '3p' || (resumed && mine.view === '3p');
+  let fireLatch = false, doorAim = null, doorCheckAt = 0;   // set by the click that picks something up, until the button is let go
   let relock = false, lastPunch = 0, lastShot = 0, lastSpray = 0, shake = 0, menuRelease = false;
 
   const controls = createControls({
@@ -383,7 +384,7 @@ async function start() {
   }
   function grab() {
     const t = lookTarget();
-    if (t) { network.send({type: 'pickup', id: t.state.id}); return true; }
+    if (t) { network.send({type: 'pickup', id: t.state.id}); fireLatch = true; return true; }   // this click doesn't fire what you picked up
     return false;
   }
   // the lap timer's button, if the crosshair is on it and it's in reach
@@ -393,10 +394,21 @@ async function start() {
     const far = (thirdPerson ? camDist : 0) + BUTTON_RANGE;
     return Math.hypot(player.x - BUTTON.x, player.z - BUTTON.z) < BUTTON_RANGE - .1 && machine.aimed(o, d, far) !== null;
   }
+  // an open door under the crosshair, within reach (empty hand: click pulls it shut)
+  function doorTarget() {
+    camera.updateMatrixWorld();
+    const o = camera.getWorldPosition(new THREE.Vector3()), d = camera.getWorldDirection(new THREE.Vector3());
+    const h = hits.raycast(o, d, (thirdPerson ? camDist : 0) + 2.4, true);
+    return h && h.door !== undefined && doors.isOpen(h.door) ? h.door : null;
+  }
   function primary() {
     if (chat.open || !emoteMenu.hidden) return;
     if (onButton()) { machine.press(); network.send({type: 'button'}); return; }
     const h = held();
+    if (!h && !lookTarget()) {
+      const door = doorTarget();
+      if (door !== null) { doors.close(door); network.send({type: 'door', i: door}); return; }
+    }
     if (h?.state.type === 'flashlight') { network.send({type: 'toggle', id: h.state.id, on: !h.state.on}); return; }
     if (h?.state.type === 'paintball') { shoot(); return; }
     if (h?.state.type === 'spray') { spray(); return; }
@@ -439,11 +451,11 @@ async function start() {
     lastPunch = now; player.punchTime = 0; player.emote = '';
     // whoever is closest in front of you, within reach
     const yaw = controls.state.yaw, fx = -Math.sin(yaw), fz = -Math.cos(yaw);
-    let best = null, bestD = 1.6;
+    let best = null, bestD = 1.95;
     for (const p of peers.values()) {
       const s = p.motion.sample(now); if (!s) continue;
       const dx = s.x - player.x, dz = s.z - player.z, d = Math.hypot(dx, dz);
-      if (d < bestD && (dx * fx + dz * fz) / (d || 1) > .55) { best = p; bestD = d; }
+      if (d < bestD && (dx * fx + dz * fz) / (d || 1) > .5) { best = p; bestD = d; }
     }
     network.send({type: 'punch', target: best ? best.id : ''});
   }
@@ -668,6 +680,7 @@ async function start() {
     },
     onMessage: m => {
       if (m.type === 'rtc') { voice.signal(m.from, m.d); return; }
+      if (m.type === 'door') { doors.close(m.i); return; }
       if (m.type === 'look' && m.id !== network.id) setLook(peer(m.id), m.look);
       else if (m.type === 'marks') resetMarks(m);
       else if (m.type === 'shot') {
@@ -711,16 +724,16 @@ async function start() {
 
   // ------------------------------------------------------------- voice
   voice.attach(m => network.send(m), () => network.id || '');
-  if (voice.enabled && !voice.hasMic) voice.setEnabled(true);    // on from last time (or just switched on at the door)
+  if (voice.wantsMic && !voice.hasMic) voice.setMicOn(true);      // mic on from last time (or just switched on at the door)
   const bubbleLayer = $('bubbles'), micBtn = $('micBtn'), voiceDock = $('voiceDock');
   voiceDock.append(voicePanel(voice));
   micBtn.addEventListener('click', () => {
     if (isTouch) { voiceDock.classList.toggle('open'); return; }
-    if (!voice.enabled) voice.setEnabled(true); else voice.setMuted(!voice.muted);
+    voice.setMicOn(!voice.micOn);
   });
   addEventListener('keydown', e => {
     if (e.code !== 'KeyM' || e.repeat || chat.open || e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement) return;
-    if (voice.enabled) voice.setMuted(!voice.muted);
+    voice.setMicOn(!voice.micOn);
   });
 
   // --------------------------------------------------------- flicker
@@ -817,7 +830,8 @@ async function start() {
     }
     player.y = player.ground + eye + player.stepLag;
     const h = held(), holding = !!h;
-    if (h?.state.type === 'paintball' && input.firing && !frozen) shoot();
+    if (!input.firing) fireLatch = false;
+    if (h?.state.type === 'paintball' && input.firing && !fireLatch && !frozen) shoot();
     document.body.classList.toggle('holding-spray', h?.state.type === 'spray');
     document.body.classList.toggle('holding-paint', h?.state.type === 'paintball');
     const motion = {...vertical.pose, emote: player.emote, emoteTime: player.emoteTime, pitch: input.pitch,
@@ -884,7 +898,7 @@ async function start() {
     if (now - sentAt >= 1000 / 15 && network.online) {
       const pose = sanitizePose({x: player.x, y: player.y, z: player.z, g: player.ground, pc: chosenPaint, yaw: input.yaw, pitch: input.pitch, room: 'office',
         crouch: motion.crouch, jumpTime: motion.jumpTime, jumpPower: motion.jumpPower, emote: player.emote, emoteTime: player.emoteTime,
-        typing: chat.typing, punchTime: player.punchTime, punchHand: player.punchHand, vc: voice.enabled ? 1 : 0});
+        typing: chat.typing, punchTime: player.punchTime, punchHand: player.punchHand, vc: voice.micOn ? 1 : 0});
       const key = JSON.stringify(pose);
       if (key !== lastSent) settle = 3;
       if (key !== lastSent || settle > 0) { network.sendPose(pose); if (key === lastSent) settle--; lastSent = key; }
@@ -892,6 +906,9 @@ async function start() {
     }
     if (now - savedAt > 1000) { savedAt = now; saveTab(); }
 
+    // anyone the camera is inside (you, pressed against a wall; someone you walk through) ghosts entirely
+    const camWorld = camera.getWorldPosition(new THREE.Vector3());
+    if (thirdPerson) me.ghostFor(camWorld, dt);
     // remote peers
     const serverNow = network.now();
     for (const p of peers.values()) {
@@ -904,6 +921,7 @@ async function start() {
       p.previous = s;
       p.avatar.root.position.set(s.x, s.g || 0, s.z); p.avatar.root.rotation.y = s.yaw;
       p.avatar.update(pdt, v, {...s, holding: !!items.heldBy(p.id)});
+      p.avatar.ghostFor(camWorld, pdt);
       doors.push(s.x, s.z, v * pdt * Math.sin(-s.yaw), 0);
       if (p.bubble && serverNow > p.bubbleExpires) { p.bubble.dispose(); p.bubble = null; }
       if (p.bubble || p.typing) {
@@ -931,7 +949,7 @@ async function start() {
         }
       }
     }
-    micBtn.dataset.state = !voice.enabled ? 'off' : voice.muted ? 'muted' : !voice.hasMic ? 'listen' : voice.talking ? 'talking' : 'live';
+    micBtn.dataset.state = !voice.micOn ? 'off' : voice.talking ? 'talking' : 'live';
     if (myBubble) {
       if (serverNow > myBubbleExpires) { myBubble.dispose(); myBubble = null; }
       else { const at = project(player, player.ground + 2.0); myBubble.update(at.x, at.y, at.visible && thirdPerson); }
@@ -984,8 +1002,11 @@ async function start() {
     machine.update(dt);
     const t = !h && !frozen && !pushable ? lookTarget() : null;
     items.highlight(t ? t.state.id : null);
+    // an open door in reach to pull shut (checked a few times a second)
+    if (h || t || frozen || pushable) doorAim = null;
+    else if (now - doorCheckAt > 120) { doorCheckAt = now; doorAim = doorTarget(); }
     const type = h?.state.type;
-    const hint = isTouch ? '' : pushable ? 'click: push the button' : h ? (type === 'flashlight' ? `click: ${h.state.on ? 'turn off' : 'turn on'}  ·  right-click: drop`
+    const hint = isTouch ? '' : pushable ? 'click: push the button' : doorAim !== null ? 'click: close the door' : h ? (type === 'flashlight' ? `click: ${h.state.on ? 'turn off' : 'turn on'}  ·  right-click: drop`
       : type === 'paintball' ? 'click: fire  ·  right-click: drop' : 'click a wall: spray  ·  esc: pick a piece  ·  right-click: drop')
       : t ? `click: pick up ${ITEM_NAMES[t.state.type] || 'it'}` : '';
     if (prompt.textContent !== hint) prompt.textContent = hint;
@@ -994,7 +1015,7 @@ async function start() {
     paintLabel.hidden = type !== 'paintball';
     const galleryLabel = type === 'paintball' ? 'paint' : 'tags';
     if (btnGallery.textContent !== galleryLabel) btnGallery.textContent = galleryLabel;
-    const act = pushable ? 'push' : h ? (type === 'flashlight' ? (h.state.on ? 'light off' : 'light on') : type === 'paintball' ? 'fire' : 'spray') : t ? 'grab' : 'punch';
+    const act = pushable ? 'push' : doorAim !== null ? 'close' : h ? (type === 'flashlight' ? (h.state.on ? 'light off' : 'light on') : type === 'paintball' ? 'fire' : 'spray') : t ? 'grab' : 'punch';
     if (btnAct.textContent !== act) btnAct.textContent = act;
     document.body.classList.toggle('can-grab', !!t);
     // first person: say which emote you're doing, since you can't see yourself

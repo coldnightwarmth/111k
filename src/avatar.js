@@ -105,10 +105,18 @@ export async function createAvatar(look) {
   const wardrobe = createAvatarAppearance(model, look);
   wardrobe.setAppearance(look);
   // seen from a camera pressed up close (third person against a wall), you dissolve rather than clip
-  model.traverse(o => { if (o.isMesh) for (const m of [].concat(o.material)) if (!m.isShaderMaterial) ghostMaterial(m); });
+  // the camera inside any part of this avatar ghosts all of it (ghostAll), not just the nearby faces
+  const ghostOwn = {ghostAll: {value: 0}};
+  model.traverse(o => {
+    if (!o.isMesh) return;
+    if (Array.isArray(o.material)) o.material = o.material.map(m => m.isShaderMaterial ? m : ghostMaterial(m, ghostOwn));
+    else if (!o.material.isShaderMaterial) o.material = ghostMaterial(o.material, ghostOwn);
+  });
   model.traverse(o => { if (o.isMesh) o.frustumCulled = false; });
   model.scale.setScalar(AVATAR_SCALE); model.rotation.y = Math.PI;
   const root = new THREE.Group(); root.name = 'avatar'; root.add(model);
+  // the body's extent (around its root, before it moves), for telling when the camera is inside it
+  const bodyBox = new THREE.Box3().setFromObject(root).expandByScalar(.06), camLocal = new THREE.Vector3();
   const mixer = new THREE.AnimationMixer(model);
   const actions = new Map(c.clips.map(clip => [clip.name, mixer.clipAction(clip)]));
   // holding something swaps each locomotion clip for its right-hand-holding twin
@@ -130,7 +138,7 @@ export async function createAvatar(look) {
   let moving = false, speed = 0, walkBlend = 0, holdBlend = 0, hideHead = false;
 
   return {
-    root, model, socket, look, scale: AVATAR_SCALE, eye: 1.45, pitch: 0,
+    root, model, socket, hand: model.getObjectByName('HandR') || model.getObjectByName('Hand.R'), look, scale: AVATAR_SCALE, eye: 1.45, pitch: 0,
     setVisible(v) { model.visible = v; },
     // first person: keep the body (so you see your own punch) but fold the head away
     setHeadless(v) { hideHead = v; },
@@ -188,6 +196,14 @@ export async function createAvatar(look) {
       this.fold();
     },
     fold() { if (head && hideHead) head.scale.setScalar(1e-3); },
+    // dissolve the whole avatar while the camera is inside it (eased in and out)
+    ghostFor(cameraPos, dt) {
+      root.updateMatrixWorld(); camLocal.copy(cameraPos); root.worldToLocal(camLocal); camLocal.y -= model.position.y;
+      const inside = model.visible !== false && root.visible && bodyBox.containsPoint(camLocal) ? 1 : 0;
+      const g = ghostOwn.ghostAll;
+      g.value += (inside - g.value) * (1 - Math.exp(-dt * 18));
+      if (g.value < .002) g.value = 0;
+    },
     dispose() {
       mixer.stopAllAction(); mixer.uncacheRoot(model); wardrobe.dispose();
       const skeletons = new Set(); model.traverse(o => { if (o.isSkinnedMesh) skeletons.add(o.skeleton); });

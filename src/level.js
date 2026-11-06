@@ -41,26 +41,36 @@ export const GHOST_GLSL = `
 uniform float ghostOn;
 float ghostBayer2(vec2 a) { a = floor(a); return fract(dot(a, vec2(0.5, a.y * 0.75))); }
 float ghostBayer(vec2 a) { return ghostBayer2(0.25 * a) * 0.0625 + ghostBayer2(0.5 * a) * 0.25 + ghostBayer2(a); }
-void ghostClip(float camDist) {
-  if (ghostOn < 0.5) return;
-  float keep = 0.22 + 0.78 * smoothstep(0.14, 0.6, camDist);
+// camDist: this fragment's distance from the camera; all: 1 to ghost the whole object (an avatar the camera is inside)
+void ghostClip(float camDist, float all) {
+  float keep = ghostOn > 0.5 ? 0.22 + 0.78 * smoothstep(0.14, 0.6, camDist) : 1.0;
+  keep = min(keep, 1.0 - 0.85 * all);
   if (keep < 1.0 && keep <= ghostBayer(gl_FragCoord.xy)) discard;
 }`;
 export const ghost = {ghostOn: {value: 0}};
-// add the ghosting to any built-in material (avatars); distance from the camera is the view position's length
-export function ghostMaterial(material) {
-  if (material.userData.ghosted) return;
+// add the ghosting to a built-in material (avatars). `own` carries that avatar's whole-body ghost amount.
+// A material already ghosted for another avatar is copied, so each avatar dissolves on its own.
+export function ghostMaterial(material, own) {
+  if (material.userData.ghosted) {
+    const pre = material.userData.preGhost;
+    const copy = material.clone();
+    copy.onBeforeCompile = pre.before; copy.customProgramCacheKey = pre.key;
+    copy.userData = {...material.userData, ghosted: false};
+    material = copy;
+  }
   material.userData.ghosted = true;
   const before = material.onBeforeCompile, key = material.customProgramCacheKey;
+  material.userData.preGhost = {before, key};
   material.onBeforeCompile = (shader, renderer) => {
     before?.call(material, shader, renderer);
-    Object.assign(shader.uniforms, ghost);
+    Object.assign(shader.uniforms, ghost, own);
     shader.fragmentShader = shader.fragmentShader
-      .replace('#include <common>', '#include <common>' + GHOST_GLSL)
-      .replace('#include <clipping_planes_fragment>', '#include <clipping_planes_fragment>\n  ghostClip(length(vViewPosition));');
+      .replace('#include <common>', '#include <common>' + GHOST_GLSL + '\nuniform float ghostAll;')
+      .replace('#include <clipping_planes_fragment>', '#include <clipping_planes_fragment>\n  ghostClip(length(vViewPosition), ghostAll);');
   };
   material.customProgramCacheKey = () => key.call(material) + '|ghost';
   material.needsUpdate = true;
+  return material;
 }
 
 const LIGHTMAP_LINE = 'reflectedLight.indirectDiffuse += lightMapTexel.rgb * lightMapIntensity * RECIPROCAL_PI;';
@@ -81,7 +91,7 @@ uniform vec3 flPos[${MAX_FLASHLIGHTS}];
 uniform vec3 flDir[${MAX_FLASHLIGHTS}];
 uniform float flOn[${MAX_FLASHLIGHTS}];
 uniform sampler2D flReach;` + GHOST_GLSL)
-      .replace('#include <clipping_planes_fragment>', '#include <clipping_planes_fragment>\n  ghostClip(length(vWorldPos - cameraPosition));')
+      .replace('#include <clipping_planes_fragment>', '#include <clipping_planes_fragment>\n  ghostClip(length(vWorldPos - cameraPosition), 0.0);')
       .replace(LIGHTMAP_LINE, `
     vec3 baked = lightMapTexel.rgb;
     // dim the share of each texel's light that comes from lamp groups currently flickering off

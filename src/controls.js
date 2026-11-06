@@ -66,21 +66,29 @@ export function createControls({canvas, isTouch, onToggleView, onJump, onChat, o
     if (lookId !== null) return;
     lookId = e.pointerId; lastX = e.clientX; lastY = e.clientY; canvas.setPointerCapture(e.pointerId);
   });
-  canvas.addEventListener('pointermove', e => {
+  // looking: the finger can be anywhere once it's down (so a thumb that pressed jump or punch
+  // can keep sliding to steer), so moves and lifts are watched on the whole document
+  document.addEventListener('pointermove', e => {
     if (e.pointerId !== lookId) return;
     look((e.clientX - lastX) * .0055, (e.clientY - lastY) * .0055);
     lastX = e.clientX; lastY = e.clientY;
   });
-  const endLook = e => { if (e.pointerId === lookId) lookId = null; };
-  canvas.addEventListener('pointerup', endLook); canvas.addEventListener('pointercancel', endLook);
-  const tap = (id, fn) => document.getElementById(id).addEventListener('pointerdown', e => { e.preventDefault(); e.stopPropagation(); fn(); });
-  tap('btnJump', onJump);
-  tap('btnCrouch', () => { touchCrouch = !touchCrouch; document.getElementById('btnCrouch').classList.toggle('on', touchCrouch); onCrouchToggle?.(touchCrouch); });
+  let fireId = null;
+  const endPointer = e => {
+    if (e.pointerId === lookId) lookId = null;
+    if (e.pointerId === fireId) { fireId = null; state.firing = false; }
+  };
+  document.addEventListener('pointerup', endPointer); document.addEventListener('pointercancel', endPointer);
+  const tap = (id, fn, steer = false) => document.getElementById(id).addEventListener('pointerdown', e => {
+    e.preventDefault(); e.stopPropagation(); fn(e);
+    if (steer && lookId === null) { lookId = e.pointerId; lastX = e.clientX; lastY = e.clientY; }
+  });
+  tap('btnJump', onJump, true);
+  tap('btnCrouch', () => { touchCrouch = !touchCrouch; document.getElementById('btnCrouch').classList.toggle('on', touchCrouch); onCrouchToggle?.(touchCrouch); }, true);
   tap('btnChat', onChat);
   tap('btnEmote', onEmotes);
-  tap('btnView', onToggleView);
-  tap('btnAct', () => { state.firing = true; onPrimary?.(); });
-  for (const t of ['pointerup', 'pointercancel', 'pointerleave']) document.getElementById('btnAct').addEventListener(t, () => { state.firing = false; });
+  tap('btnView', onToggleView, true);
+  tap('btnAct', e => { state.firing = true; fireId = e.pointerId; onPrimary?.(); }, true);
   tap('btnGallery', () => onGallery?.());
   tap('btnDrop', () => onSecondary?.());
 

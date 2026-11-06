@@ -1,6 +1,6 @@
-// Proximity voice chat. Audio goes browser to browser over WebRTC (the room server only
-// passes the setup notes along). You link up with players in voice within CONNECT metres
-// and drop them past DROP. Each voice plays from that player's head through a 3D panner,
+// Proximity voice chat, always listening. Audio goes browser to browser over WebRTC (the
+// room server only passes the setup notes along). Two players link up within CONNECT metres
+// when at least one of them has their mic on, and drop past DROP. Each voice plays from that player's head through a 3D panner,
 // fades with distance, and is muffled when a wall is in the way.
 import * as THREE from 'three';
 
@@ -12,7 +12,13 @@ const KEY = '111k:voice';
 const isChromium = !!(navigator.userAgentData?.brands || []).find(b => /Chromium|Google Chrome|Edge/.test(b.brand)) || /Chrome\//.test(navigator.userAgent);
 
 function loadPrefs() {
-  try { return {on: false, muted: false, deviceId: '', volume: 1, ...JSON.parse(localStorage.getItem(KEY) || '{}')}; } catch { return {on: false, muted: false, deviceId: '', volume: 1}; }
+  const prefs = {mic: false, deviceId: '', volume: 1};
+  try {
+    const saved = JSON.parse(localStorage.getItem(KEY) || '{}');
+    if (saved.mic === undefined && saved.on) saved.mic = !saved.muted;   // from when voice had an on switch
+    Object.assign(prefs, {mic: !!saved.mic, deviceId: saved.deviceId || '', volume: Number.isFinite(saved.volume) ? saved.volume : 1});
+  } catch {}
+  return prefs;
 }
 
 // Opus in stereo at a generous bitrate (the loopback below carries the spatial mix)
@@ -73,7 +79,6 @@ export function createVoice() {
       mic?.getTracks().forEach(t => t.stop());
       mic = stream;
       const track = mic.getAudioTracks()[0];
-      track.enabled = !prefs.muted;
       if (!prefs.deviceId) prefs.deviceId = track.getSettings?.().deviceId || '';
       micSource?.disconnect();
       micSource = audio().createMediaStreamSource(mic);
@@ -82,12 +87,16 @@ export function createVoice() {
       for (const p of peers.values()) p.sender?.replaceTrack(track).catch(() => {});
     } catch (err) {
       // no mic (or no permission): you can still listen
-      micError = err?.name === 'NotAllowedError' ? 'mic blocked: you can still listen' : 'no mic found: you can still listen';
+      micError = err?.name === 'NotAllowedError' ? 'mic blocked: allow it in the browser to talk' : 'no mic found';
+      prefs.mic = false;
       if (prefs.deviceId && err?.name === 'OverconstrainedError') { prefs.deviceId = ''; return openMic(); }
     }
     changed();
   }
-  function closeMic() { mic?.getTracks().forEach(t => t.stop()); mic = null; micSource?.disconnect(); micSource = null; micAnalyser = null; }
+  function closeMic() {
+    mic?.getTracks().forEach(t => t.stop()); mic = null; micSource?.disconnect(); micSource = null; micAnalyser = null;
+    for (const p of peers.values()) p.sender?.replaceTrack(null).catch(() => {});
+  }
   const micTrack = () => mic?.getAudioTracks()[0] || null;
 
   // ---------------------------------------------------------------- links
@@ -139,7 +148,7 @@ export function createVoice() {
   }
 
   async function signal(from, d) {
-    if (!prefs.on || !send) return;
+    if (!send) return;
     if (d.bye) { drop(from, false, 3000); return; }
     let p = peers.get(from);
     try {
@@ -171,29 +180,30 @@ export function createVoice() {
   const fwd = new THREE.Vector3(), up = new THREE.Vector3(), camPos = new THREE.Vector3(), head = new THREE.Vector3(), dirV = new THREE.Vector3();
 
   const api = {
-    get enabled() { return prefs.on; },
-    get muted() { return prefs.muted; },
+    get enabled() { return true; },                // always listening
+    get micOn() { return prefs.mic && !!mic; },
+    get wantsMic() { return prefs.mic; },
     get volume() { return prefs.volume; },
     get deviceId() { return prefs.deviceId; },
     get hasMic() { return !!mic; },
     get error() { return micError; },
-    get talking() { return !!mic && !prefs.muted && micAnalyser && rms(micAnalyser) > .08; },
+    get talking() { return !!mic && micAnalyser && rms(micAnalyser) > .08; },
     onChange(f) { listeners.add(f); return () => listeners.delete(f); },
     unlock: null,
-    async setEnabled(on) {
-      prefs.on = on;
+    // talking is opt-in; hearing others is always on
+    async setMicOn(on) {
+      prefs.mic = on;
       if (on) { audio(); api.unlock?.(); ctx.resume(); await openMic(); }
-      else { for (const id of [...peers.keys()]) drop(id); closeMic(); micError = ''; changed(); }
+      else { closeMic(); micError = ''; changed(); }
     },
-    setMuted(m) { prefs.muted = m; const t = micTrack(); if (t) t.enabled = !m; changed(); },
     setVolume(v) { prefs.volume = v; if (master) master.gain.setTargetAtTime(v, ctx.currentTime, .05); changed(); },
-    async setDevice(id) { prefs.deviceId = id; if (prefs.on) await openMic(); else changed(); },
+    async setDevice(id) { prefs.deviceId = id; if (prefs.mic) await openMic(); else changed(); },
     async devices() {
       try { return (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'audioinput'); } catch { return []; }
     },
     // for tests: each link's state
     debug() { return [...peers.values()].map(p => `${p.id}:${p.pc.connectionState}/${p.pc.signalingState}/${p.audio ? 'audio' : 'none'}`).join(' ') || 'no links'; },
-    micLevel() { return micAnalyser && !prefs.muted ? rms(micAnalyser) : 0; },
+    micLevel() { return micAnalyser ? rms(micAnalyser) : 0; },
     // how loud someone is right now (0..1), for the speaking marker over their head
     levelOf(id) { return peers.get(id)?.level || 0; },
     // join the room's signalling once connected
@@ -201,10 +211,10 @@ export function createVoice() {
     signal,
     // once a frame: who to link with, where everyone is, what's between you
     update({camera, peers: others, hits}) {
-      if (!prefs.on || !send || !myId()) return;
+      if (!send || !myId()) return;
       const now = performance.now(), me = myId();
       camera.getWorldPosition(camPos); camera.getWorldDirection(fwd); up.set(0, 1, 0).applyQuaternion(camera.getWorldQuaternion(new THREE.Quaternion()));
-      if (ctx) {
+      if (ctx && peers.size) {
         const L = ctx.listener;
         if (L.positionX) {
           L.positionX.value = camPos.x; L.positionY.value = camPos.y; L.positionZ.value = camPos.z;
@@ -212,12 +222,13 @@ export function createVoice() {
         } else { L.setPosition(camPos.x, camPos.y, camPos.z); L.setOrientation(fwd.x, fwd.y, fwd.z, up.x, up.y, up.z); }
       }
       const seen = new Set();
+      const talking = api.micOn;
       for (const o of others) {
-        if (!o.vc) continue;
         const d = Math.hypot(o.x - camPos.x, o.z - camPos.z);
-        seen.add(o.id);
+        const wanted = talking || !!o.vc;            // someone in the pair has something to say
+        if (wanted) seen.add(o.id);
         let p = peers.get(o.id);
-        if (!p && d < CONNECT && me < o.id && now > (retryAfter.get(o.id) || 0)) p = link(o.id, true);   // the lower id calls
+        if (!p && wanted && d < CONNECT && me < o.id && now > (retryAfter.get(o.id) || 0)) p = link(o.id, true);   // the lower id calls
         if (p && d > DROP) { drop(o.id); continue; }
         if (!p?.audio) continue;
         const {panner, gain, filter, analyser} = p.audio.nodes;
@@ -244,22 +255,22 @@ export function createVoice() {
 }
 
 // ------------------------------------------------------------------- panel
-// The same small panel on the start screen and the Esc screen.
+// The same small panel on the start screen and the Esc screen: you always hear people near
+// you; your mic is up to you.
 export function voicePanel(voice) {
   const el = document.createElement('section');
   el.className = 'voice-panel';
   el.innerHTML = `
     <h2>voice chat</h2>
-    <label class="row toggle"><input type="checkbox" class="on"><span>proximity voice</span></label>
+    <label class="row toggle"><input type="checkbox" class="on"><span>use my mic <kbd>M</kbd></span></label>
     <div class="more">
       <label class="row"><span>mic</span><select class="mic"><option value="">default mic</option></select></label>
       <div class="meter" aria-hidden="true"><i></i></div>
-      <label class="row toggle"><input type="checkbox" class="mute"><span>mute mic <kbd>M</kbd></span></label>
-      <label class="row"><span>voices</span><input type="range" class="vol" min="0" max="1.5" step="0.05"></label>
-      <p class="note"></p>
-    </div>`;
+    </div>
+    <label class="row"><span>voices</span><input type="range" class="vol" min="0" max="1.5" step="0.05"></label>
+    <p class="note"></p>`;
   const $ = s => el.querySelector(s);
-  const on = $('.on'), mic = $('.mic'), mute = $('.mute'), vol = $('.vol'), note = $('.note'), bar = $('.meter i');
+  const on = $('.on'), mic = $('.mic'), vol = $('.vol'), note = $('.note'), bar = $('.meter i');
   for (const type of ['keydown', 'keyup']) el.addEventListener(type, e => { if (e.key !== 'Escape') e.stopPropagation(); });
   async function fillDevices() {
     const list = await voice.devices();
@@ -269,13 +280,12 @@ export function voicePanel(voice) {
     mic.value = voice.deviceId && list.some(d => d.deviceId === voice.deviceId) ? voice.deviceId : (list[0]?.deviceId || '');
   }
   function sync() {
-    on.checked = voice.enabled; mute.checked = voice.muted; vol.value = voice.volume;
-    el.classList.toggle('enabled', voice.enabled);
-    note.textContent = voice.error || (voice.enabled ? 'players near you hear you. headphones sound best.' : 'talk to players near you.');
+    on.checked = voice.micOn; vol.value = voice.volume;
+    el.classList.toggle('enabled', voice.micOn);
+    note.textContent = voice.error || (voice.micOn ? 'players near you hear you. headphones sound best.' : 'you hear players near you. turn your mic on to talk.');
   }
-  on.addEventListener('change', async () => { await voice.setEnabled(on.checked); fillDevices(); });
+  on.addEventListener('change', async () => { await voice.setMicOn(on.checked); fillDevices(); });
   mic.addEventListener('change', () => voice.setDevice(mic.value));
-  mute.addEventListener('change', () => voice.setMuted(mute.checked));
   vol.addEventListener('input', () => voice.setVolume(Number(vol.value)));
   voice.onChange(sync);
   sync(); fillDevices();

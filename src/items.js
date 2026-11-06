@@ -393,7 +393,11 @@ export function createItems({scene, camera, hits}) {
             socket.getWorldPosition(m.position);
             if (s.type === 'paintball') m.position.addScaledVector(dir, .08).y += .06;
             else if (s.type === 'spray') m.position.y -= .07;
-            else m.position.addScaledVector(dir, .03);
+            else if (avatar.hand) {
+              // a torch in a fist: the middle of the barrel sits in the closed hand, just ahead of the wrist
+              avatar.hand.getWorldPosition(m.position);
+              m.position.addScaledVector(dir, .085).add(tmpV.set(Math.cos(yaw), 0, -Math.sin(yaw)).multiplyScalar(-.022));
+            } else m.position.addScaledVector(dir, .03);
             m.visible = avatar.root.visible && avatar.model.visible !== false;
           } else {
             const px = pose ? pose.x : me.root.position.x, pz = pose ? pose.z : me.root.position.z;
