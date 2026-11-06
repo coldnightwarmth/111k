@@ -35,11 +35,39 @@ export const lighting = {
   flReach: {value: fanTexture},
 };
 
+// Near-camera ghosting: anything closer than about half a metre to the camera dissolves
+// through an ordered dither instead of being sliced by the near plane (third person only).
+export const GHOST_GLSL = `
+uniform float ghostOn;
+float ghostBayer2(vec2 a) { a = floor(a); return fract(dot(a, vec2(0.5, a.y * 0.75))); }
+float ghostBayer(vec2 a) { return ghostBayer2(0.25 * a) * 0.0625 + ghostBayer2(0.5 * a) * 0.25 + ghostBayer2(a); }
+void ghostClip(float camDist) {
+  if (ghostOn < 0.5) return;
+  float keep = 0.22 + 0.78 * smoothstep(0.14, 0.6, camDist);
+  if (keep < 1.0 && keep <= ghostBayer(gl_FragCoord.xy)) discard;
+}`;
+export const ghost = {ghostOn: {value: 0}};
+// add the ghosting to any built-in material (avatars); distance from the camera is the view position's length
+export function ghostMaterial(material) {
+  if (material.userData.ghosted) return;
+  material.userData.ghosted = true;
+  const before = material.onBeforeCompile, key = material.customProgramCacheKey;
+  material.onBeforeCompile = (shader, renderer) => {
+    before?.call(material, shader, renderer);
+    Object.assign(shader.uniforms, ghost);
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', '#include <common>' + GHOST_GLSL)
+      .replace('#include <clipping_planes_fragment>', '#include <clipping_planes_fragment>\n  ghostClip(length(vViewPosition));');
+  };
+  material.customProgramCacheKey = () => key.call(material) + '|ghost';
+  material.needsUpdate = true;
+}
+
 const LIGHTMAP_LINE = 'reflectedLight.indirectDiffuse += lightMapTexel.rgb * lightMapIntensity * RECIPROCAL_PI;';
 
 export function hookShader(material) {
   material.onBeforeCompile = shader => {
-    Object.assign(shader.uniforms, lighting);
+    Object.assign(shader.uniforms, lighting, ghost);
     shader.vertexShader = shader.vertexShader
       .replace('#include <common>', '#include <common>\nvarying vec3 vWorldPos;')
       .replace('#include <project_vertex>', '#include <project_vertex>\nvWorldPos = (modelMatrix * vec4(transformed, 1.0)).xyz;');
@@ -52,7 +80,8 @@ uniform vec3 flickerTint;
 uniform vec3 flPos[${MAX_FLASHLIGHTS}];
 uniform vec3 flDir[${MAX_FLASHLIGHTS}];
 uniform float flOn[${MAX_FLASHLIGHTS}];
-uniform sampler2D flReach;`)
+uniform sampler2D flReach;` + GHOST_GLSL)
+      .replace('#include <clipping_planes_fragment>', '#include <clipping_planes_fragment>\n  ghostClip(length(vWorldPos - cameraPosition));')
       .replace(LIGHTMAP_LINE, `
     vec3 baked = lightMapTexel.rgb;
     // dim the share of each texel's light that comes from lamp groups currently flickering off

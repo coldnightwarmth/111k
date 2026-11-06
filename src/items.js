@@ -173,11 +173,75 @@ function sprayModel(id) {
 const MODELS = {flashlight: flashlightModel, paintball: paintballModel, spray: sprayModel};
 export const ITEM_MODELS = MODELS;   // for previews
 
+// ------------------------------------------------------------------- falling
+// A dropped item's fall through the level: gravity, a couple of soft bounces, a skid to a stop.
+// Pure and fixed-step, so every client works out the same path from the same start.
+const FALL_DT = 1 / 60;
+export function simulateFall(hits, start, velocity) {
+  const p = new THREE.Vector3(...start), v = new THREE.Vector3(...velocity), path = [p.clone()];
+  const step = new THREE.Vector3(), dir = new THREE.Vector3();
+  for (let i = 0; i < 240; i++) {
+    v.y -= 9.8 * FALL_DT;
+    step.copy(v).multiplyScalar(FALL_DT);
+    const len = step.length();
+    const h = len > 1e-6 ? hits.raycast(p, dir.copy(step).divideScalar(len), len + .02) : null;
+    if (h) {
+      const n = h.normal, vn = v.dot(n);
+      p.copy(h.point).addScaledVector(n, .005);
+      if (n.y > .7 && -vn < 1.1) { p.y = h.point.y; path.push(p.clone()); return {path, rest: p}; }   // settled
+      v.addScaledVector(n, -1.35 * vn);                 // bounce, losing most of the speed into the surface
+      v.multiplyScalar(.62);                            // and scraping along it
+    } else p.add(step);
+    path.push(p.clone());
+    if (p.y < -1) break;
+  }
+  p.y = Math.max(p.y, 0);
+  return {path, rest: p};
+}
+
+// A soft yellow glow round whatever you can pick up: the model's surfaces pushed out a few
+// millimetres (in view space, so scaled parts get the same rim) and drawn back-faces only.
+const glowTime = {value: 0};
+function outlineMaterial(width, opacity) {
+  const m = new THREE.MeshBasicMaterial({color: new THREE.Color(1, .82, .18), side: THREE.BackSide, transparent: true,
+    opacity, depthWrite: false, toneMapped: false, blending: THREE.AdditiveBlending});
+  m.onBeforeCompile = sh => {
+    sh.uniforms.glowTime = glowTime;
+    sh.vertexShader = sh.vertexShader.replace('#include <project_vertex>', `#include <project_vertex>
+      vec3 outN = normalize(normalMatrix * normal);
+      mvPosition.xyz += outN * ${width.toFixed(4)} * (1.0 + 0.002 * -mvPosition.z);
+      gl_Position = projectionMatrix * mvPosition;`);
+    sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nuniform float glowTime;')
+      .replace('#include <opaque_fragment>', `#include <opaque_fragment>
+      gl_FragColor.a *= 0.75 + 0.25 * sin(glowTime * 5.0);`);
+  };
+  m.customProgramCacheKey = () => `outline-${width}`;
+  return m;
+}
+const OUTLINES = [outlineMaterial(.007, 1), outlineMaterial(.016, .35)];
+function addOutline(model) {
+  const shells = new THREE.Group(); shells.visible = false;
+  const meshes = [];
+  model.traverse(o => { if (o.isMesh) meshes.push(o); });
+  for (const o of meshes) for (const mat of OUTLINES) {
+    const shell = new THREE.Mesh(o.geometry, mat);
+    o.updateMatrix(); shell.matrixAutoUpdate = false;
+    // the part's transform relative to the model, so the shell sits on it wherever the model goes
+    shell.matrix.copy(o.matrix); let q = o.parent;
+    while (q && q !== model) { q.updateMatrix(); shell.matrix.premultiply(q.matrix); q = q.parent; }
+    shell.renderOrder = 5;
+    shells.add(shell);
+  }
+  model.add(shells);
+  return shells;
+}
+
 export function createItems({scene, camera, hits}) {
   const items = new Map();          // id -> {state, model, kick}
   const spots = [];                 // real spotlights so avatars catch the beams
   const lit = [];                   // switched-on flashlights this frame, nearest first
   let myPaint = RANDOM_PAINT;       // the colour you've loaded into the marker
+  let highlighted = null;           // the item under your crosshair that you could pick up
   // how far each ray of a beam's fan gets before it hits the level (cached while the light holds still)
   const fanRight = new THREE.Vector3(), fanUp = new THREE.Vector3(), fanDir = new THREE.Vector3();
   let fanBudget = 0;                // fans re-cast this frame (moving lights beyond this reuse last frame's)
@@ -215,7 +279,7 @@ export function createItems({scene, camera, hits}) {
       if (it) it.model.removeFromParent();
       const model = (MODELS[state.type] || flashlightModel)(state.id);
       model.traverse(o => { o.castShadow = false; o.frustumCulled = false; });
-      it = {state, model, sway: 0, kick: 0, shake: 0};
+      it = {state, model, sway: 0, kick: 0, shake: 0, outline: addOutline(model), fall: null};
       scene.add(model);
       items.set(state.id, it);
     }
@@ -226,7 +290,17 @@ export function createItems({scene, camera, hits}) {
   return {
     items,
     set(list) { for (const s of list) ensure(s); },
-    update(state) { ensure(state); },
+    // a new state from the server; with a fall, it drops from where it was let go to where it settled
+    update(state, fall) {
+      const it = ensure(state);
+      if (fall && hits && !state.holder) {
+        const f = simulateFall(hits, fall.p, fall.v);
+        f.path[f.path.length - 1].set(state.x, state.y, state.z);   // the server's resting spot is the word
+        it.fall = {path: f.path, t: 0, spin: (state.yaw * 7.3) % 1 > .5 ? 1 : -1};
+      } else it.fall = null;
+    },
+    // which item (if any) shows the pick-up glow
+    highlight(id) { highlighted = id; },
     heldBy(id) { for (const it of items.values()) if (it.state.holder === id) return it; return null; },
     // recoil / shake for your own view model
     kick(id, amount = 1) { const it = items.get(id); if (it) it.kick = amount; },
@@ -254,6 +328,7 @@ export function createItems({scene, camera, hits}) {
     tip(it) { it.model.updateMatrixWorld(); return it.model.localToWorld(it.model.userData.tip.clone()); },
     // place every item: on the ground, in a hand, or in your view
     frame({me, myId, thirdPerson, avatarOf, poseOf, dt}) {
+      glowTime.value += dt;
       let n = 0;
       for (const it of items.values()) {
         const s = it.state, m = it.model, u = m.userData;
@@ -262,6 +337,7 @@ export function createItems({scene, camera, hits}) {
         it.kick *= Math.exp(-dt * 14); it.shake = Math.max(0, it.shake - dt);
         let origin = null, dir = null;
         if (!(s.holder === myId && !thirdPerson) || s.type === 'flashlight') m.scale.setScalar(1);
+        it.outline.visible = !s.holder && s.id === highlighted && !it.fall;
         if (!s.holder) {
           if (m.parent !== scene) scene.add(m);
           m.visible = true;
@@ -269,6 +345,16 @@ export function createItems({scene, camera, hits}) {
           m.position.set(s.x, s.y + u.ground, s.z);
           m.rotation.set(0, s.yaw, u.groundRoll, 'YXZ');
           if (u.upright) { m.rotation.set(Math.PI / 2, s.yaw, 0, 'YXZ'); m.position.y = s.y + u.ground; }
+          if (it.fall) {                      // still on its way down: follow the path, tumbling, settling into its rest pose
+            const f = it.fall; f.t += dt;
+            const at = f.t / FALL_DT, i = Math.floor(at), last = f.path.length - 1;
+            if (i >= last) it.fall = null;
+            else {
+              const k = at - i, togo = Math.min(1, (last - at) / 24);
+              m.position.lerpVectors(f.path[i], f.path[i + 1], k); m.position.y += u.ground;
+              m.rotation.x += togo * togo * 5 * f.spin; m.rotation.z += togo * 1.2 * f.spin;
+            }
+          }
           m.updateMatrixWorld();
           origin = m.localToWorld(tmpV.copy(u.tip)).clone();
           dir = new THREE.Vector3(0, 0, -1).applyQuaternion(m.getWorldQuaternion(tmpQ));

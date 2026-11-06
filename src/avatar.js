@@ -9,6 +9,7 @@ import {normalizeAppearance, characterId} from './cards/drifmaker-config.mjs';
 import {partsFor} from './looks.js';
 import {normalizeEmote, normalizeEmoteTime, PUNCH_DURATION} from './protocol.js';
 import {jumpHeight} from './motion.js';
+import {ghostMaterial} from './level.js';
 
 export const AVATAR_SCALE = .66;
 const ROOT = new URL('../assets/avatars/', import.meta.url).href;
@@ -103,6 +104,8 @@ export async function createAvatar(look) {
   needed.forEach((p, i) => attachPart(model, parts[i], p, c.index.parts[p].parent));
   const wardrobe = createAvatarAppearance(model, look);
   wardrobe.setAppearance(look);
+  // seen from a camera pressed up close (third person against a wall), you dissolve rather than clip
+  model.traverse(o => { if (o.isMesh) for (const m of [].concat(o.material)) if (!m.isShaderMaterial) ghostMaterial(m); });
   model.traverse(o => { if (o.isMesh) o.frustumCulled = false; });
   model.scale.setScalar(AVATAR_SCALE); model.rotation.y = Math.PI;
   const root = new THREE.Group(); root.name = 'avatar'; root.add(model);

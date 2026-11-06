@@ -1,13 +1,13 @@
 import * as THREE from 'three';
 import {serverUrl, isTouch, lowPower} from './config.js';
-import {loadLevel, createAvatarLights, createFlicker, lighting} from './level.js';
+import {loadLevel, createAvatarLights, createFlicker, lighting, ghost} from './level.js';
 import {createCollider, STEP_UP} from './physics.js';
 import {createAvatar, preloadLook, AVATAR_SCALE} from './avatar.js';
 import {createVerticalMovement, createPoseBuffer, EYE_HEIGHT} from './motion.js';
 import {connectRoom} from './net.js';
 import {createChatUI, createBubble} from './chat.js';
 import {createControls} from './controls.js';
-import {createItems, ITEM_NAMES} from './items.js';
+import {createItems, ITEM_NAMES, simulateFall} from './items.js';
 import {createWorldHits, cutDecal, createBatch, markMaterial, splatAtlas, splatCell, PAINT_COLORS, PAINT_ROWS, RANDOM_PAINT, rgbOf} from './decals.js';
 import {createDoors} from './doors.js';
 import {pickAvatar} from './picker.js';
@@ -388,12 +388,33 @@ async function start() {
     if (grab()) return;
     punch();
   }
+  // put it down where you're aiming if there's something within reach; otherwise let it go in
+  // front of you and it falls (everyone replays the same fall to the spot it settles on)
+  const DROP_REACH = 1.8;
   function secondary() {
     const h = held();
     if (!h) return;
     const yaw = controls.state.yaw;
     toggleGallery(false);
-    network.send({type: 'drop', id: h.state.id, x: player.x - Math.sin(yaw) * .55, z: player.z - Math.cos(yaw) * .55, yaw});
+    camera.updateMatrixWorld();
+    const o = camera.getWorldPosition(new THREE.Vector3()), d = camera.getWorldDirection(new THREE.Vector3());
+    if (thirdPerson) o.addScaledVector(d, camDist);
+    const hit = hits.raycast(o, d, DROP_REACH);
+    const msg = {type: 'drop', id: h.state.id, yaw};
+    let start = null, vel = null;
+    if (hit && hit.normal.y > .7) Object.assign(msg, {x: r3(hit.point.x), y: r3(hit.point.y), z: r3(hit.point.z)});   // set down right there
+    else if (hit) { start = hit.point.clone().addScaledVector(hit.normal, .12); vel = new THREE.Vector3(); }          // against a wall: slides down it
+    else {
+      const fwd = new THREE.Vector3(-Math.sin(yaw), 0, -Math.cos(yaw)), eye = new THREE.Vector3(player.x, player.y - .2, player.z);
+      const block = hits.raycast(eye, fwd, .75);
+      start = eye.addScaledVector(fwd, block ? Math.max(0, block.distance - .2) : .55);
+      vel = fwd.multiplyScalar(1.3).add(new THREE.Vector3(player.vx * .4, .9, player.vz * .4));
+    }
+    if (start) {
+      const f = simulateFall(hits, start.toArray(), vel.toArray());
+      Object.assign(msg, {x: r3(f.rest.x), y: r3(f.rest.y), z: r3(f.rest.z), fall: {p: start.toArray().map(r3), v: vel.toArray().map(r3)}});
+    }
+    network.send(msg);
   }
   function punch() {
     const now = performance.now();
@@ -606,9 +627,9 @@ async function start() {
     },
     onPose: m => applyPose(m.id, m.pose, m.time),
     onLeave: id => removePeer(id),
-    onItem: it => {
+    onItem: (it, fall) => {
       const before = items.items.get(it.id)?.state.holder;
-      items.update(it);
+      items.update(it, fall);
       if (before === network.id && it.holder !== network.id) toggleGallery(false);
     },
     onPunch: m => {
@@ -761,6 +782,7 @@ async function start() {
     me.update(dt, velocity, motion);
 
     // camera
+    ghost.ghostOn.value = thirdPerson ? 1 : 0;
     shake *= Math.exp(-dt * 7);
     const sx = (Math.random() - .5) * .06 * shake, sy = (Math.random() - .5) * .06 * shake;
     if (thirdPerson) {
@@ -795,7 +817,7 @@ async function start() {
       camDist += (free - camDist) * (free < camDist ? damp(30, dt) : damp(4, dt));
       if (firstFrame) camDist = free;
       camera.position.copy(smoothPivot).addScaledVector(dir, camDist);
-      me.setVisible(camDist > .55);  // too close to a wall: hide yourself rather than fill the screen
+      me.setVisible(true);   // pressed close against a wall the camera ghosts you (dithered) rather than hiding you
       meView.root.visible = false;
     } else {
       camera.position.set(player.x, player.y, player.z);
@@ -893,6 +915,7 @@ async function start() {
     // held items and what you can do right now
     items.frame(frameArgs(dt));
     const t = !h && !frozen ? lookTarget() : null;
+    items.highlight(t ? t.state.id : null);
     const type = h?.state.type;
     const hint = isTouch ? '' : h ? (type === 'flashlight' ? `click: ${h.state.on ? 'turn off' : 'turn on'}  ·  right-click: drop`
       : type === 'paintball' ? 'click: fire  ·  right-click: drop' : 'click a wall: spray  ·  esc: pick a piece  ·  right-click: drop')

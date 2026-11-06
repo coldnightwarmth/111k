@@ -54,9 +54,9 @@ export const marksMessage = (marks, now = Date.now()) => ({type: 'marks',
 const flat = (a, b) => Math.hypot(a.x - b.x, a.z - b.z);
 
 // Put an item down where a player stands (or stood).
-function dropAt(item, pose, dx = 0, dz = 0) {
+function dropAt(item, pose, dx = 0, dz = 0, y = null) {
   item.holder = null;
-  item.x = pose.x + dx; item.z = pose.z + dz; item.y = .03;
+  item.x = pose.x + dx; item.z = pose.z + dz; item.y = y ?? (pose.g || 0) + .03;   // on whatever they stood on
   item.yaw = pose.yaw || 0;
 }
 
@@ -127,14 +127,20 @@ export function handleMessage(player, data, now, room = {items: {}, players: () 
   }
   if (m.type === 'drop') {
     if (!item || item.holder !== player.id || !player.pose) return {out, changed: false};
-    // dropped in front of the player, never more than a step away
+    // put down where they aimed, or tossed and settled nearby: never far from them
     let dx = Number(m.x) - player.pose.x, dz = Number(m.z) - player.pose.z;
     if (!Number.isFinite(dx) || !Number.isFinite(dz)) { dx = 0; dz = 0; }
     const d = Math.hypot(dx, dz);
-    if (d > 1.2) { dx *= 1.2 / d; dz *= 1.2 / d; }
-    dropAt(item, player.pose, dx, dz);
+    if (d > 4) { dx *= 4 / d; dz *= 4 / d; }
+    const y = Number.isFinite(m.y) ? Math.max(-.5, Math.min(4, m.y)) : null;
+    dropAt(item, player.pose, dx, dz, y);
     if (Number.isFinite(m.yaw)) item.yaw = Math.round(m.yaw * 1000) / 1000;
-    out.push({to: 'all', msg: {type: 'item', item: cleanItem(item)}});
+    // how it fell (start and velocity): everyone replays the same fall to where it came to rest
+    const fp = m.fall && Array.isArray(m.fall.p) && m.fall.p.length === 3 && m.fall.p.every(Number.isFinite) ? m.fall.p : null;
+    const fv = m.fall && Array.isArray(m.fall.v) && m.fall.v.length === 3 && m.fall.v.every(Number.isFinite) ? m.fall.v : null;
+    const fall = fp && fv && Math.hypot(fp[0] - player.pose.x, fp[2] - player.pose.z) < 4 && Math.hypot(...fv) < 15
+      ? {p: fp.map(v => Math.round(v * 1000) / 1000), v: fv.map(v => Math.round(v * 1000) / 1000)} : undefined;
+    out.push({to: 'all', msg: {type: 'item', item: cleanItem(item), fall}});
     return {out, changed: true, itemsChanged: true};
   }
   if (m.type === 'toggle') {
