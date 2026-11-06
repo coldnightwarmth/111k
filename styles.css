@@ -129,20 +129,20 @@ body.touch #hint { display: none; }
 #buttons { position: fixed; right: max(14px, env(safe-area-inset-right)); bottom: max(14px, env(safe-area-inset-bottom));
   width: 270px; height: 270px; pointer-events: none; }
 #buttons button { position: absolute; right: calc(var(--x) - var(--s) / 2); bottom: calc(var(--y) - var(--s) / 2);
-  width: var(--s); height: var(--s); border-radius: 50%; padding: 0 calc(var(--s) * .14); pointer-events: auto; box-sizing: border-box;
+  width: var(--s); height: var(--s); border-radius: 50%; padding: 0 calc(var(--s) * .07); pointer-events: auto; box-sizing: border-box;
   border: 1px solid var(--line); background: rgba(10, 10, 11, .45); color: inherit; touch-action: none; overflow: hidden;
   display: flex; align-items: center; justify-content: center; text-align: center; line-height: 1.05;
-  font: inherit; font-size: clamp(9px, calc(var(--s) * .2), 15px); letter-spacing: .04em; white-space: normal; overflow-wrap: anywhere;
+  font: inherit; font-size: 10px; letter-spacing: .02em; white-space: nowrap;   /* one size for every label */
   -webkit-user-select: none; user-select: none; }
 #buttons button::after, #buttons button::before { content: none !important; }
 #buttons button:active, #buttons button.on { background: rgba(233, 230, 220, .25); }
 #btnJump { --x: 66px; --y: 66px; --s: 100px; border-width: 2px !important; }
 #btnAct { --x: 180px; --y: 54px; --s: 78px; }
-#btnCrouch { --x: 164px; --y: 146px; --s: 58px; }
-#btnView { --x: 98px; --y: 184px; --s: 50px; }
+#btnCrouch { --x: 164px; --y: 146px; --s: 52px; }
+#btnView { --x: 238px; --y: 126px; --s: 48px; }
 #btnDrop { --x: 34px; --y: 182px; --s: 54px; }
 #btnGallery { --x: 226px; --y: 196px; --s: 48px; }
-#btnEmote { --x: 238px; --y: 126px; --s: 44px; }
+#btnEmote { --x: 98px; --y: 184px; --s: 58px; }
 #btnChat { --x: 40px; --y: 246px; --s: 44px; }
 @media (min-width: 700px) and (min-height: 500px) {
   #buttons { transform: scale(1.18); transform-origin: bottom right; }
