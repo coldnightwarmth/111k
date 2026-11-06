@@ -12,6 +12,9 @@
     "ALLOWED_ORIGINS": "https://coldnightwarmth.github.io",
     "ALLOW_LOCALHOST_ORIGINS": "true"
   },
-  "durable_objects": {"bindings": [{"name": "ROOM", "class_name": "Room"}]},
+  // a deploy reaches the running room within seconds (the default lets a busy room run old code
+  // for up to 5 minutes); hibernated WebSockets stay connected across the switch
+  "durable_objects": {"bindings": [{"name": "ROOM", "class_name": "Room"}],
+    "code_update_strategy": {"mode": "deferred", "max_delay": 10}},
   "migrations": [{"tag": "v1", "new_sqlite_classes": ["Room"]}]
 }
