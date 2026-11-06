@@ -243,7 +243,7 @@ async function start() {
     // doors are thin: cut shallow so the paint stays on the face that was hit
     // thrown along the ball's flight: wraps the corner it can reach, lands round small things, never behind
     const verts = cutDecal(onDoor ? onDoor.surface : hits, {point, normal, up, width: size, height: size,
-      dir: s.v ? new THREE.Vector3(...s.v) : null, front: .12, back: onDoor ? .03 : .35, grid: 3});
+      dir: s.v ? new THREE.Vector3(...s.v) : null, front: onDoor ? .03 : .3, back: onDoor ? .03 : .35});
     const [cu, cv] = splatCell(s.s);
     for (const q of verts) { q.u = cu + q.u / 4; q.v = cv + q.v / 2; }
     const m = batch.add(verts, rgbOf(s.c));
@@ -266,10 +266,10 @@ async function start() {
     return doorPages.get(key);
   }
   // the patch a tag covers: cut from whatever it lands on (a door's own surface for a door)
-  function sprayVerts(s, piece, onDoor, grid) {
+  function sprayVerts(s, piece, onDoor) {
     const point = new THREE.Vector3(...s.p), normal = new THREE.Vector3(...s.n), up = new THREE.Vector3(...s.up);
     const verts = cutDecal(onDoor || hits, {point, normal, up, width: s.size, height: s.size * piece.h / piece.w,
-      dir: s.v ? new THREE.Vector3(...s.v) : null, front: .15, back: onDoor ? .03 : .5, grid});
+      dir: s.v ? new THREE.Vector3(...s.v) : null, front: onDoor ? .03 : .9, back: onDoor ? .03 : .5});
     const [u0, v0, u1, v1] = piece.uv;
     for (const q of verts) { q.u = u0 + q.u * (u1 - u0); q.v = v0 + q.v * (v1 - v0); }
     return verts;
@@ -279,7 +279,7 @@ async function start() {
     if (!piece) return;
     const onDoor = s.d !== undefined ? hits.door(s.d) : null;
     if (s.d !== undefined && !onDoor) return;
-    const verts = sprayVerts(s, piece, onDoor, 6);
+    const verts = sprayVerts(s, piece, onDoor);
     const batch = onDoor ? doorPageBatch(s.d, piece.page) : pageBatch(piece.page);
     const m = batch.add(verts, [255, 255, 255], fresh ? 0 : 1);
     sprayMarks.push({batch, m, kind: 'spray', id: `${s.piece}@${s.p.join(',')}`, verts: m.verts});
@@ -668,7 +668,7 @@ async function start() {
     const key = `${s.piece}|${s.d ?? ''}|${s.p}|${s.n}|${s.up}|${s.v}|${s.size}`;
     if (key === previewKey) return;
     const onDoor = s.d !== undefined ? hits.door(s.d) : null;
-    const verts = sprayVerts(s, piece, onDoor, 4);
+    const verts = sprayVerts(s, piece, onDoor);
     clearPreview(); previewKey = key;
     if (!verts.length) return;
     const position = [], uv = [], color = [];
