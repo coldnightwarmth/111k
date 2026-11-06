@@ -396,7 +396,7 @@ export function createItems({scene, camera, hits, shadows = null}) {
         // the hopper shows what's loaded: yours, the holder's choice, or a mix lying on the floor
         if (u.setPaint) u.setPaint(s.holder === myId ? myPaint : s.holder ? (poseOf(s.holder)?.pc ?? RANDOM_PAINT) : RANDOM_PAINT, PAINT_COLORS);
         it.kick *= Math.exp(-dt * 14); it.shake = Math.max(0, it.shake - dt);
-        let origin = null, dir = null;
+        let origin = null, dir = null, eye = null;
         if (!(s.holder === myId && !thirdPerson) || s.type === 'flashlight') m.scale.setScalar(1);
         it.outline.visible = !s.holder && s.id === highlighted && !it.fall;
         if (!s.holder) {
@@ -450,6 +450,17 @@ export function createItems({scene, camera, hits, shadows = null}) {
           m.updateMatrixWorld();
           origin = camera.localToWorld(tmpV.set(.18, -.16, -.5)).clone();
           dir = camera.getWorldDirection(new THREE.Vector3());
+          // up against a wall the torch's tip pokes through it, and from the far side the beam lit
+          // nothing; so the light starts no further out than the first thing between eye and tip
+          {
+            const from = camera.getWorldPosition(new THREE.Vector3()), to = origin.clone().sub(from), len = to.length();
+            const h = hits?.raycast(from, to.divideScalar(len), len, true);
+            if (h) origin.copy(from).addScaledVector(to, Math.max(.02, h.distance - .08));
+          }
+          // your own beam casts its shadows from just beside your eye: each shadow then falls behind
+          // the thing casting it as you see it, instead of sheets of dark showing past shelves and
+          // table tops that the torch, lower and to the right, can't see over
+          eye = camera.localToWorld(tmpV.set(.03, -.04, 0)).clone();
         } else {
           const avatar = s.holder === myId ? me : avatarOf(s.holder);
           const socket = avatar?.socket;
@@ -496,7 +507,7 @@ export function createItems({scene, camera, hits, shadows = null}) {
           // only a few beams can be lit at once: yours first, then other people's, then the nearest on the floor
           const far = origin.distanceTo(camera.position);
           if (!s.holder && far > 30) continue;
-          lit.push({it, origin, dir, rank: s.holder === myId ? -1e6 : s.holder ? far - 1e3 : far});
+          lit.push({it, origin, eye, dir, rank: s.holder === myId ? -1e6 : s.holder ? far - 1e3 : far});
         }
       }
       lit.sort((a, b) => a.rank - b.rank);
@@ -506,7 +517,7 @@ export function createItems({scene, camera, hits, shadows = null}) {
         lighting.flPos.value[n].copy(l.origin);
         lighting.flDir.value[n].copy(l.dir).normalize();
         lighting.flOn.value[n] = 1;
-        shadows?.assign(n, l.it.state.id, l.origin, lighting.flDir.value[n]);
+        shadows?.assign(n, l.it.state.id, l.eye || l.origin, lighting.flDir.value[n]);
         if (n < MAX_SPOTLIGHTS) {
           // avatars catch the beam too, but not through the wall it's pointed at
           spots[n].position.copy(l.origin); spots[n].target.position.copy(l.origin).add(l.dir); spots[n].intensity = 40;

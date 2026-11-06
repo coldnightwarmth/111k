@@ -96,20 +96,21 @@ uniform highp sampler2DShadow flShadow;
 // how much of beam i reaches this point: soft-edged PCF against its tile of the shadow atlas
 float beamVisible(int i, vec3 p, vec3 n, float d) {
   vec4 sc = flMat[i] * vec4(p + n * (0.012 + 0.0045 * d), 1.0);   // nudged off the surface by about a texel
+  if (sc.w <= 0.0) return 1.0;
   vec3 nd = sc.xyz / sc.w;
   float depth = nd.z * 0.5 + 0.5;
-  if (depth >= 1.0) return 1.0;
+  if (depth >= 1.0 || abs(nd.x) > 1.0 || abs(nd.y) > 1.0) return 1.0;   // beyond what its shadow camera sees
   vec2 tile = vec2(mod(float(i), ${SHADOW_COLS.toFixed(1)}), floor(float(i) / ${SHADOW_COLS.toFixed(1)}));
   vec2 texel = 1.0 / vec2(${(SHADOW_COLS * SHADOW_TILE).toFixed(1)}, ${(SHADOW_ROWS * SHADOW_TILE).toFixed(1)});
   vec2 lo = tile / vec2(${SHADOW_COLS.toFixed(1)}, ${SHADOW_ROWS.toFixed(1)}) + texel * 1.5;
   vec2 hi = (tile + 1.0) / vec2(${SHADOW_COLS.toFixed(1)}, ${SHADOW_ROWS.toFixed(1)}) - texel * 1.5;
   vec2 uv = (tile + clamp(nd.xy * 0.5 + 0.5, 0.0, 1.0)) / vec2(${SHADOW_COLS.toFixed(1)}, ${SHADOW_ROWS.toFixed(1)});
-  // four bilinear-filtered compares in a small rotated square: a smooth ~3-texel penumbra
+  // four bilinear-filtered compares in a small rotated square: a smooth ~4-texel penumbra
   float v = 0.0;
-  v += texture(flShadow, vec3(clamp(uv + texel * vec2(-0.6, -0.25), lo, hi), depth));
-  v += texture(flShadow, vec3(clamp(uv + texel * vec2(0.25, -0.6), lo, hi), depth));
-  v += texture(flShadow, vec3(clamp(uv + texel * vec2(0.6, 0.25), lo, hi), depth));
-  v += texture(flShadow, vec3(clamp(uv + texel * vec2(-0.25, 0.6), lo, hi), depth));
+  v += texture(flShadow, vec3(clamp(uv + texel * vec2(-1.0, -0.4), lo, hi), depth));
+  v += texture(flShadow, vec3(clamp(uv + texel * vec2(0.4, -1.0), lo, hi), depth));
+  v += texture(flShadow, vec3(clamp(uv + texel * vec2(1.0, 0.4), lo, hi), depth));
+  v += texture(flShadow, vec3(clamp(uv + texel * vec2(-0.4, 1.0), lo, hi), depth));
   return v * 0.25;
 }` + GHOST_GLSL)
       .replace('#include <clipping_planes_fragment>', '#include <clipping_planes_fragment>\n  ghostClip(length(vWorldPos - cameraPosition), 0.0);')
