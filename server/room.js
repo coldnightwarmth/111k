@@ -76,6 +76,7 @@ function trackRunner(r, player, now, out) {
   if (along < need) return false;
   if (done === 0) r.dir = Math.sign(r.progress);
   r.laps--;
+  r.splits = [...(r.splits || []), now - r.startedAt];
   out.push({to: 'all', msg: {type: 'race', race: publicRace(r, now), event: 'lap', by: player.id, byName: player.name || ''}});
   return true;
 }

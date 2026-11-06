@@ -390,7 +390,7 @@ async function start() {
   function onButton() {
     camera.updateMatrixWorld();
     const o = camera.getWorldPosition(new THREE.Vector3()), d = camera.getWorldDirection(new THREE.Vector3());
-    const far = (thirdPerson ? camDist : 0) + 2.2;
+    const far = (thirdPerson ? camDist : 0) + BUTTON_RANGE;
     return Math.hypot(player.x - BUTTON.x, player.z - BUTTON.z) < BUTTON_RANGE - .1 && machine.aimed(o, d, far) !== null;
   }
   function primary() {
@@ -690,11 +690,17 @@ async function start() {
         if (m.by && m.by !== network.id) machine.press();
         const who = m.by === network.id ? 'you' : (m.byName || 'anon'), whose = m.by === network.id ? 'your' : `${m.byName || 'anon'}'s`;
         const say = text => chat.record(text, {system: true});
-        if (m.busy) say(`${m.race.name || 'someone'} is mid-run: wait for them to finish (or for 3 minutes to pass)`);
-        else if (m.event === 'start') say(`${who} started a ${RACE_LAPS}-lap run`);
-        else if (m.event === 'lap') say(m.race.laps ? `${who}: lap ${RACE_LAPS - m.race.laps} done, ${m.race.laps} to go` : `${who}: last lap done, hit the button!`);
-        else if (m.event === 'finish') say(`${who} ran ${RACE_LAPS} laps in ${formatRace(m.race.time)}`);
-        else if (m.event === 'cancel') say(m.race.runner === m.by ? `${whose} run was called off` : `${who} called off ${m.race.name || 'anon'}'s run`);
+        const splits = m.race.splits || [];
+        if (m.busy) say(`${m.race.name || 'someone'} is on a loop run: wait for them to finish (or for 3 minutes to pass)`);
+        else if (m.event === 'start') say(`${who} started a loop run`);
+        else if (m.event === 'lap') {
+          // the lap's own time, then the running total
+          const n = splits.length, lapTime = splits[n - 1] - (splits[n - 2] || 0);
+          say(`${who}: lap ${n} in ${formatRace(lapTime)} (${formatRace(splits[n - 1])})${m.race.laps ? '' : ' · hit the button!'}`);
+        } else if (m.event === 'finish') {
+          const laps = splits.map((t, i) => formatRace(t - (splits[i - 1] || 0))).join(' / ');
+          say(`${who} finished the loop run in ${formatRace(m.race.time)}${laps ? ` (laps ${laps})` : ''}`);
+        } else if (m.event === 'cancel') say(m.race.runner === m.by ? `${whose} loop run was called off` : `${who} called off ${m.race.name || 'anon'}'s loop run`);
       } else if (m.type === 'spray') {
         addSpray(m.mark, true);
         const p = peers.get(m.from);
