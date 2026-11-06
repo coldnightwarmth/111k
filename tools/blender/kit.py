@@ -74,11 +74,72 @@ def orient(pts, toward):
     return pts if np.dot(n, np.asarray(toward) - pts.mean(0)) >= 0 else pts[::-1]
 
 
+def texel_size(P, valid):
+    """Roughly how many metres one atlas texel spans at each texel (from its neighbours on the same chart)."""
+    ds = []
+    for ax in (0, 1):
+        d = np.linalg.norm(np.diff(P, axis=ax), axis=-1)
+        ok = (np.take(valid, range(1, valid.shape[ax]), axis=ax) * np.take(valid, range(valid.shape[ax] - 1), axis=ax)) > 0
+        d = np.where(ok & (d < 0.3), d, np.nan)
+        pad = [(0, 1), (0, 0)] if ax == 0 else [(0, 0), (0, 1)]
+        ds.append(np.pad(d, pad, constant_values=np.nan))
+    ts = np.nanmean(np.stack(ds), 0)
+    med = np.nanmedian(ts) if np.isfinite(ts).any() else 0.03
+    return np.where(np.isfinite(ts), ts, med).astype(np.float32)
+
+
+def dilate(chans, valid, steps=8):
+    """Fill the padding round each chart with that chart's own edge values (repeatedly averaging the
+    filled neighbours), so a texture lookup that strays over a chart's edge reads more of the same
+    chart: never black, never another chart's light or flicker."""
+    filled = valid > 0
+    out = [c.copy() for c in chans]
+    for _ in range(steps):
+        acc = [np.zeros_like(c) for c in out]
+        cnt = np.zeros(filled.shape, np.float32)
+        for dy, dx in ((-1, 0), (1, 0), (0, -1), (0, 1), (-1, -1), (-1, 1), (1, -1), (1, 1)):
+            f = np.roll(np.roll(filled, dy, 0), dx, 1)
+            cnt += f
+            for k, c in enumerate(out):
+                acc[k] += np.roll(np.roll(c, dy, 0), dx, 1) * (f[..., None] if c.ndim == 3 else f)
+        grow = ~filled & (cnt > 0)
+        for k, c in enumerate(out):
+            avg = acc[k] / np.maximum(cnt, 1)[..., None] if c.ndim == 3 else acc[k] / np.maximum(cnt, 1)
+            c[grow] = avg[grow]
+        filled = filled | grow
+    return out
+
+
+def lum_of(rgb):
+    return rgb @ np.array([.2126, .7152, .0722], np.float32)
+
+
+def confidence(lum):
+    """How far to trust the fine filter: 1 in decently lit places, 0 in the dim ones, where the bake's
+    few bounced samples are noise that a fine filter leaves as mottled patches."""
+    return np.clip((lum / LM_SCALE) / 0.03, 0, 1).astype(np.float32)
+
+
+def adaptive_filter(chans, P, N, valid, weight_lum, fine=(5, 2.6), wide=(8, 4.0)):
+    """The world-aware filter, fine where there's plenty of light, much wider where it's dim.
+    Fireflies first: a texel far brighter than its smoothed neighbourhood is a stray sample (an image
+    denoiser used to eat them; a plain average would spread one over a whole small object)."""
+    rough = geo_filter(chans, P, N, valid, radius=3, sigma_texels=1.6)
+    chans = [np.minimum(c, 3 * r_ + 0.02 * LM_SCALE) for c, r_ in zip(chans, rough)]
+    a = geo_filter(chans, P, N, valid, radius=fine[0], sigma_texels=fine[1])
+    b = geo_filter(chans, P, N, valid, radius=wide[0], sigma_texels=wide[1])
+    c = confidence(weight_lum(a))
+    return [x * c + y * (1 - c) for x, y in zip(a, b)], c
+
+
 def geo_filter(chans, P, N, valid, radius=4, sigma_texels=2.2, sigma_world=0.12, normal_power=8):
     """Smooth lightmap-atlas images without crossing charts: each texel averages its atlas
-    neighbours weighted by how close they are in the world and how alike their normals are."""
+    neighbours weighted by how close they are in the world and how alike their normals are.
+    A neighbour that is further away in the world than its distance in the atlas allows (another
+    chart packed alongside, or the far side of a wall) doesn't count at all."""
     H, W_ = valid.shape
     r = radius
+    ts = texel_size(P, valid)
     pad = lambda a: np.pad(a, [(r, r), (r, r)] + [(0, 0)] * (a.ndim - 2), mode='constant')
     Pp, Np, Vp = pad(P), pad(N), pad(valid)
     Cp = [pad(c) for c in chans]
@@ -92,7 +153,8 @@ def geo_filter(chans, P, N, valid, radius=4, sigma_texels=2.2, sigma_world=0.12,
             sl = (slice(r + dy, r + dy + H), slice(r + dx, r + dx + W_))
             d2 = ((Pp[sl] - P) ** 2).sum(-1)
             nd = np.clip((Np[sl] * N).sum(-1), 0, 1) ** normal_power
-            w = (ws * np.exp(-d2 / (2 * sigma_world ** 2)) * nd * Vp[sl] * valid).astype(np.float32)
+            near = d2 <= (1.6 * math.hypot(dx, dy) * ts + 0.01) ** 2
+            w = (ws * np.exp(-d2 / (2 * sigma_world ** 2)) * nd * Vp[sl] * valid * near).astype(np.float32)
             den += w
             for k, c in enumerate(Cp):
                 num[k] += w * c[sl]
@@ -511,6 +573,10 @@ class World:
         sc.cycles.samples = samples
         sc.cycles.max_bounces = 4
         sc.cycles.diffuse_bounces = 3
+        # no fireflies: cap what one bounced sample can carry (a stray bright sample in a dark corner
+        # would otherwise end up as a glowing patch on a small object)
+        sc.cycles.sample_clamp_direct = 0.0
+        sc.cycles.sample_clamp_indirect = 3.0
         sc.world = bpy.data.worlds.new('world')
         sc.world.color = ambient
         self._materials()
@@ -605,8 +671,12 @@ class World:
             for n, v in emitters:
                 n.inputs['Strength'].default_value = v
         sc.cycles.samples = 1
+        # positions and normals with no margin: a texel only counts as part of a chart (for the
+        # filters and for filling the padding) if a chart really covers it
+        bk.margin = 0
         set_target(pos_img); bpy.ops.object.bake(type='POSITION', uv_layer='lm')
         set_target(nor_img); bk.normal_space = 'OBJECT'; bpy.ops.object.bake(type='NORMAL', uv_layer='lm')
+        bk.margin = 4
 
         def pixels(image):
             w, h = image.size
@@ -626,25 +696,32 @@ class World:
         full_raw = pixels(img)[..., :3].copy()
         raw_path = out_base + '-raw.exr'
         img.filepath_raw = raw_path; img.file_format = 'OPEN_EXR'; img.save()
-        if denoise:
-            subprocess.run([sys.executable, os.path.join(HERE, 'denoise.py'), raw_path, out_base + '-dn.exr'],
-                           check=True, capture_output=True)
-            dimg = bpy.data.images.load(out_base + '-dn.exr')
-            light = pixels(dimg)[..., :3].astype(float)
-            os.remove(out_base + '-dn.exr')
-        else:
-            light = full_raw.astype(float)
         os.remove(raw_path)
         P = pixels(pos_img)[..., :3].astype(float)
         P = np.stack([P[..., 0], P[..., 2], -P[..., 1]], -1)  # blender -> game
         Nn = pixels(nor_img)[..., :3].astype(float) * 2 - 1
         Nn = np.stack([Nn[..., 0], Nn[..., 2], -Nn[..., 1]], -1)
+        valid = (np.abs(P).sum(-1) > 1e-6).astype(np.float32)
+        # Denoise with the same world-aware filter as the flicker shares, never in atlas space: the
+        # atlas is ~20k small charts packed side by side, and an image denoiser smears each into its
+        # neighbours, which showed up as patches of another room's light (and flicker) along seams.
+        raw3 = np.maximum(full_raw, 0).astype(np.float32)
+        if denoise:
+            filt, _ = adaptive_filter([raw3[..., c] for c in range(3)], P.astype(np.float32), Nn.astype(np.float32), valid,
+                                      lambda f: lum_of(np.stack(f, -1)))
+            light = np.stack(filt, -1).astype(float)
+        else:
+            light = raw3.astype(float)
         # a little flat fill so unlit corners are dark rather than void
         light += np.asarray(fill, float)[None, None]
         light_raw = light.copy()
         if grime is not None:
             light *= np.clip(grime(P.reshape(-1, 3), Nn.reshape(-1, 3)), 0, 2).reshape(lm_size, lm_size, 1)
         light = np.maximum(light, 0)
+        light = dilate([light.astype(np.float32)], valid)[0].astype(float)     # chart padding: the chart's own edge
+        if os.environ.get('LM_DEBUG'):
+            np.savez_compressed(out_base + '-debug.npz', P=P.astype(np.float32), N=Nn.astype(np.float32), valid=valid,
+                                raw=full_raw.astype(np.float32), light=light.astype(np.float32))
         enc = (srgb_encode(light / LM_SCALE) * 255 + 0.5).astype(np.uint8)[::-1]  # top row first
         from PIL import Image
         lm_png = Image.fromarray(enc, 'RGB')
@@ -659,15 +736,15 @@ class World:
             # the raw group bakes and the raw full bake are smoothed with a filter that only mixes
             # texels that are close together in the world and face the same way.
             lum = lambda a: a @ np.array([.2126, .7152, .0722], np.float32)
-            valid = (np.abs(P).sum(-1) > 1e-6).astype(np.float32)
             chans = [lum(np.maximum(full_raw, 0).astype(np.float32))]
             order = [g for g in range(4) if g in group_imgs]
             chans += [lum(np.maximum(pixels(group_imgs[g])[..., :3], 0).astype(np.float32)) for g in order]
-            sm = geo_filter(chans, P.astype(np.float32), Nn.astype(np.float32), valid)
+            sm, _ = adaptive_filter(chans, P.astype(np.float32), Nn.astype(np.float32), valid, lambda f: f[0], fine=(4, 2.2))
             total = sm[0] + 1e-4
             share = {g: np.clip(sm[1 + k] / total, 0, 1) for k, g in enumerate(order)}
             fl = np.stack([share.get(g, np.zeros_like(total)) for g in range(4)], -1)
             fl /= np.maximum(1, fl.sum(-1, keepdims=True))
+            fl = dilate([fl.astype(np.float32)], valid)[0]                       # padding: the chart's own share
             fl = (fl * 255 + 0.5).astype(np.uint8)[::-1]
             # lossless, and no alpha channel: encoders and browsers are free to throw away or
             # premultiply colour under low alpha, which would wreck independent data

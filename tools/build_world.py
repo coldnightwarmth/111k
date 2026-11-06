@@ -466,26 +466,81 @@ with W.using('props', density=1.0):
     Pr.camp_chair(*at(party_a - 0.075, 0.9)[[0, 2]], party_a + 2.3, 'green')
     Pr.camp_chair(*at(party_a + 0.08, -1.6)[[0, 2]], party_a - 1.3, 'red')
 
-    def strand(a0, a1, x, y, sag, n, colors, name):
-        pts = [P(a0 + (a1 - a0) * t, x, y - sag * 4 * t * (1 - t)) for t in np.linspace(0, 1, 25)]
-        for p, q in zip(pts[:-1], pts[1:]):
-            Pr.tube(p, q, 0.004, 'black', sides=3, caps=False)
+    # string lights over the party door: hung from screw hooks in the lining, dipping between them,
+    # each bulb on a little socket; one end tied off by the doorway, the far left end's cord climbing
+    # the wall in clips to the service pipe and along it into a junction box
+    def off_wall(a, y, gap):
+        return P(a, wall_x(y) - gap, y)
+
+    def hook(a, y):
+        e = off_wall(a, y, 0.0)
+        Pr.tube(e, off_wall(a, y, 0.035), 0.003, 'steel', sides=4)                 # screw eye
+        Pr.box(off_wall(a, y - 0.006, 0.037), (0.012, 0.012, 0.012), 'steel')
+
+    def strand(a0, a1, y, hooks, sag, n, colors, name):
+        anchors = np.linspace(a0, a1, hooks + 1)
+        for a in anchors:
+            hook(a, y)
+        path = []                        # (angle, height) along the wire: a dip between each pair of hooks
+        for ha, hb in zip(anchors[:-1], anchors[1:]):
+            for t in np.linspace(0, 1, 9)[:-1]:
+                path.append((ha + (hb - ha) * t, y - sag * 4 * t * (1 - t)))
+        path.append((anchors[-1], y))
+        wire = [off_wall(a, yy, 0.035) for a, yy in path]
+        for p_, q_ in zip(wire[:-1], wire[1:]):
+            Pr.tube(p_, q_, 0.0035, 'black', sides=3, caps=False)
         bulbs = []
         for i in range(n):
-            t = (i + 0.5) / n
-            p = P(a0 + (a1 - a0) * t, x, y - sag * 4 * t * (1 - t) - 0.04)
-            Pr.rbox(p, (0.035, 0.05, 0.035), colors[i % len(colors)], mat=M['glow'], ch=0.008)
-            bulbs.append(p)
+            f = (i + 0.5) / n * (len(path) - 1)
+            k = int(f); t = f - k
+            a = path[k][0] + (path[k + 1][0] - path[k][0]) * t
+            yy = path[k][1] + (path[k + 1][1] - path[k][1]) * t
+            Pr.box(off_wall(a, yy - 0.018, 0.035), (0.016, 0.022, 0.016), 'black')          # socket
+            b = off_wall(a, yy - 0.05, 0.035)
+            Pr.rbox(b, (0.03, 0.045, 0.03), colors[i % len(colors)], mat=M['glow'], ch=0.008)
+            bulbs.append(b)
         W.light(np.mean(bulbs, 0), (1.0, 0.55, 0.35), 0.5, 6.0, radius=1.2, name=name, bake=False)
-        for p in bulbs[::3]:
-            W.bake_lights.append({'pos': p, 'color': (1.0, 0.6, 0.35), 'intensity': 0.06, 'radius': 0.03, 'area': None})
-    strand(party_a - 0.13, party_a - half - 0.01, 2.45, 3.1, 0.25, 22, ['warm', 'orange', 'warm', 'red'], 'str_out_a')
-    strand(party_a + half + 0.01, party_a + 0.11, 2.45, 3.1, 0.3, 18, ['warm', 'yellow', 'warm', 'red'], 'str_out_b')
+        for p_ in bulbs[::3]:
+            W.bake_lights.append({'pos': p_, 'color': (1.0, 0.6, 0.35), 'intensity': 0.06, 'radius': 0.03, 'area': None})
+        return wire
+
+    strand(party_a - 0.13, party_a - half - 0.006, 3.05, 4, 0.12, 22, ['warm', 'orange', 'warm', 'red'], 'str_out_a')
+    strand(party_a + half + 0.006, party_a + 0.11, 3.05, 3, 0.13, 18, ['warm', 'yellow', 'warm', 'red'], 'str_out_b')
+    # the feed: from the left-hand end, up the wall in clips, under the big service pipe and along it
+    ea = party_a + 0.11
+    climb = [(ea + 0.004, 3.05), (ea + 0.008, 3.35), (ea + 0.011, 3.65), (ea + 0.013, 3.93)]
+    feed = [off_wall(a, yy, 0.012) for a, yy in climb]
+    pipe_x, pipe_y, pipe_r = wall_x(4.1) - 0.12 - 0.03, 4.1, 0.12
+    under = lambda a: P(a, pipe_x - 0.02, pipe_y - pipe_r - 0.012)
+    feed += [under(ea + 0.016)] + [under(ea + 0.016 + k * 0.012) for k in range(1, 6)]
+    for p_, q_ in zip(feed[:-1], feed[1:]):
+        Pr.tube(p_, q_, 0.007, 'orange', sides=5, caps=False)                                   # an orange extension lead
+    for a, yy in climb[1:]:
+        Pr.box(off_wall(a, yy, 0.006), (0.03, 0.012, 0.014), 'grey')                       # cable clips
+    for k in range(1, 5):
+        a = ea + 0.016 + k * 0.012
+        Pr.tube(P(a, pipe_x - 0.06, pipe_y - pipe_r - 0.03), P(a, pipe_x + 0.06, pipe_y - pipe_r - 0.03), 0.004, 'black', sides=4)  # cable tie
+    jb = ea + 0.016 + 5 * 0.012 + 0.01
+    with W.frame(P(jb, pipe_x - 0.05, pipe_y - pipe_r - 0.08), jb):
+        Pr.rbox((0, 0, 0), (0.16, 0.12, 0.09), 'grey', ch=0.01)                              # junction box
+        Pr.box((0, 0.065, 0), (0.05, 0.01, 0.05), 'steel')
+        Pr.tube((0, 0.06, 0), (0, 0.13, 0), 0.012, 'steel', sides=6)                       # conduit up into the pipe bracket
+    # glow sticks dropped round the door: thin, a little bent, dark end caps
     gr_ = np.random.default_rng(13)
-    for k in range(9):   # glow sticks
-        p = at(party_a + gr_.uniform(-0.12, 0.12), gr_.uniform(-2.0, 2.0), 0.012)
-        W.box(p, (0.15, 0.015, 0.015), M['glow'], yaw=gr_.uniform(0, 6.28), world_uv=False,
-              uv_const=Pr.sw(['ledgreen', 'pink', 'yellow', 'ledblue'][k % 4]))
+
+    def glow_tube(p0, p1, col, rr=0.0065):
+        d = np.asarray(p1, float) - np.asarray(p0, float); L = np.linalg.norm(d); d /= L
+        W.cylinder(p0, rr, L, M['glow'], sides=6, yaw=math.atan2(d[0], d[2]), pitch=math.acos(np.clip(d[1], -1, 1)),
+                   uv_const=Pr.sw(col))
+    for k in range(9):
+        p = at(party_a + gr_.uniform(-0.12, 0.12), gr_.uniform(-2.0, 2.0), 0.007)
+        yaw_, bend = gr_.uniform(0, 6.28), gr_.uniform(-0.25, 0.25)
+        col = ['ledgreen', 'pink', 'yellow', 'ledblue'][k % 4]
+        d0 = np.array([math.cos(yaw_), 0, math.sin(yaw_)]); d1 = np.array([math.cos(yaw_ + bend), 0, math.sin(yaw_ + bend)])
+        mid = np.asarray(p, float)
+        glow_tube(mid - d0 * 0.075, mid, col); glow_tube(mid, mid + d1 * 0.075, col)
+        for e, dd in ((mid - d0 * 0.075, -d0), (mid + d1 * 0.075, d1)):
+            Pr.tube(e, e + dd * 0.012, 0.0072, 'charcoal', sides=6)
     # abandoned stuff around the loop
     junk_r = np.random.default_rng(21)
     # rough footprint of each kind, so two never land on top of each other (the later one is left out)

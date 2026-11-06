@@ -51,6 +51,43 @@ class Props:
             else:
                 self.W.face(tri, mat)
 
+    def lathe(self, base, prof, color, sides=10, mat=None, yaw=0.0, pitch=0.0, roll=0.0, caps=True):
+        """A turned shape: profile [(radius, height), ...] from the bottom up, spun round the local y axis
+        (pots, kettles, jars, bottle necks, buckets)."""
+        b, R = np.asarray(base, float), rot(yaw, pitch, roll)
+        mat_ = mat or self.M['props']
+        uv = None if mat is not None else self.sw(color)
+        ang = [2 * math.pi * i / sides for i in range(sides)]
+        ring = lambda rr, y: [b + R @ np.array([math.cos(t) * rr, y, -math.sin(t) * rr]) for t in ang]
+        rings = [ring(rr, y) for rr, y in prof]
+        for (ra, (r0, _)), (rb, (r1, _)) in zip(zip(rings, prof), zip(rings[1:], prof[1:])):
+            for i in range(sides):
+                j = (i + 1) % sides
+                pts = [ra[i], ra[j], rb[j], rb[i]]
+                if r0 < 1e-6: pts = [ra[i], rb[j], rb[i]]
+                elif r1 < 1e-6: pts = [ra[i], ra[j], rb[i]]
+                self.W.face(pts, mat_, uv=np.tile(uv, (len(pts), 1)) if uv is not None else None)
+        if caps:
+            if prof[0][0] > 1e-6:
+                self.W.face(rings[0][::-1], mat_, uv=np.tile(uv, (sides, 1)) if uv is not None else None)
+            if prof[-1][0] > 1e-6:
+                self.W.face(rings[-1], mat_, uv=np.tile(uv, (sides, 1)) if uv is not None else None)
+
+    def surface(self, fn, nu, nv, color=None, mat=None):
+        """A bendy sheet: fn(u, v) -> point for u, v in [0, 1] (draped cloth, sagging tarps, bags).
+        Use a double-sided material (the cloth ones) so it reads from both sides."""
+        P = [[np.asarray(fn(i / nu, j / nv), float) for j in range(nv + 1)] for i in range(nu + 1)]
+        uvc = self.sw(color) if mat is None else None
+        for i in range(nu):
+            for j in range(nv):
+                pts = [P[i][j], P[i + 1][j], P[i + 1][j + 1], P[i][j + 1]]
+                if uvc is not None:
+                    self.W.face(pts, self.M['props'], uv=np.tile(uvc, (4, 1)))
+                else:
+                    t = mat.tile
+                    self.W.face(pts, mat, uv=[(i / nu / t, j / nv / t), ((i + 1) / nu / t, j / nv / t),
+                                              ((i + 1) / nu / t, (j + 1) / nv / t), (i / nu / t, (j + 1) / nv / t)])
+
     def rbox(self, center, size, color=None, ch=0.02, mat=None, yaw=0.0, pitch=0.0, roll=0.0):
         """Box with chamfered edges."""
         h = np.asarray(size, float) / 2
@@ -266,48 +303,152 @@ class Props:
         with self.W.using('tiny'):
             self._debris(r, x, z, kind, y)
 
+    # what turns up on the floor, roughly how often. Nothing round and solid thicker than a glow stick
+    # (a can or a bottle lying about reads as a spray can you could pick up): cans are crushed flat,
+    # bottles broken, cups squashed.
+    DEBRIS = {'paper': 3, 'flyer': 2, 'crumple': 2, 'folded': 1, 'can': 3, 'glass': 2, 'caps': 1, 'chunk': 3,
+              'bag': 2, 'cardboard': 2, 'pizza': 1, 'cup': 2, 'chips': 2, 'candy': 1, 'butts': 2, 'battery': 1,
+              'lighter': 1, 'rag': 1, 'receipt': 1, 'wire': 1}
+
+    def _flat_hull(self, x, y, z, outline, h, color, yaw=0.0, mat=None, dent=None, r=None):
+        """A thin irregular slab: outline [(u, w), ...] in the ground plane, height h (crushed things)."""
+        co, si = math.cos(yaw), math.sin(yaw)
+        pts = []
+        for k, (u, w) in enumerate(outline):
+            for yy in (0.0, h * (1 if dent is None else (0.55 + 0.45 * r.random()))):
+                pts.append((x + u * co + w * si, y + yy, z - u * si + w * co))
+        self.hull(pts, color, mat)
+
     def _debris(self, r, x, z, kind=None, y=0.0):
-        kinds = ['paper', 'paper', 'crumple', 'can', 'can', 'bottle', 'chunk', 'chunk', 'bag', 'scrap', 'cup',
-                 'wire', 'wrapper', 'butts']
-        kind = kind or kinds[r.integers(len(kinds))]
+        names = list(self.DEBRIS)
+        wts = np.array([self.DEBRIS[k] for k in names], float)
+        kind = kind or names[r.choice(len(names), p=wts / wts.sum())]
         yaw = r.uniform(0, 6.28)
-        if kind == 'paper':
-            self.box((x, y + 0.004, z), (r.uniform(0.18, 0.3), 0.006, r.uniform(0.2, 0.3)), 'paper', yaw=yaw,
+        co, si = math.cos(yaw), math.sin(yaw)
+        local = lambda u, w, h=0.0: (x + u * co + w * si, y + h, z - u * si + w * co)
+        if kind == 'paper':                                    # a sheet, lying not quite flat
+            self.box((x, y + 0.004, z), (r.uniform(0.18, 0.3), 0.004, r.uniform(0.2, 0.3)), 'paper', yaw=yaw,
                      roll=r.uniform(-0.05, 0.05))
+        elif kind == 'flyer':                                  # a printed flyer: a band of colour, a picture, lines of type
+            w, d = 0.21, 0.29
+            self.box((x, y + 0.003, z), (w, 0.003, d), 'paper', yaw=yaw)
+            band = ['red', 'black', 'blue', 'purple', 'orange'][r.integers(5)]
+            self.box(local(0, -d * 0.32, 0.0049), (w * 0.86, 0.0012, d * 0.18), band, yaw=yaw)
+            self.box(local(-w * 0.14, d * 0.05, 0.0049), (w * 0.44, 0.0012, d * 0.3), ['charcoal', 'teal', 'pink'][r.integers(3)], yaw=yaw)
+            for k in range(4):
+                self.box(local(w * 0.22, -0.02 + k * 0.025, 0.0049), (w * 0.3, 0.0012, 0.006), 'grey', yaw=yaw)
         elif kind == 'crumple':
-            self.blob((x, y, z), (0.04, 0.035, 0.045), 'paper', r, n=9)
-        elif kind == 'can':
-            col = ['canred', 'cangreen', 'steel', 'blue', 'yellow'][r.integers(5)]
-            if r.random() < 0.7:
-                self.cyl((x, y + 0.033, z), 0.033, 0.12, col, axis='x', yaw=yaw, sides=7)
+            self.blob((x, y, z), (0.04, 0.035, 0.045), 'paper', r, n=11)
+        elif kind == 'folded':                                 # a sheet folded in half, standing as a tent
+            a = r.uniform(0.35, 0.7)
+            for side in (-1, 1):
+                self.box(local(side * 0.05 * math.cos(a), 0, 0.05 * math.sin(a) + 0.002), (0.1, 0.004, 0.21), 'paper',
+                         yaw=yaw, roll=side * a)
+        elif kind == 'can':                                    # stamped flat: torn alloy with a scrap of the print on top
+            n, rx, rz, h = 11, r.uniform(0.034, 0.05), r.uniform(0.055, 0.07), r.uniform(0.012, 0.022)
+            out = [(math.cos(t) * rx * r.uniform(0.85, 1.12), math.sin(t) * rz * r.uniform(0.85, 1.12)) for t in np.linspace(0, 6.28, n, endpoint=False)]
+            self._flat_hull(x, y, z, out, h, 'alu', yaw, dent=True, r=r)
+            col = ['canred', 'cangreen', 'navy', 'yellow', 'black', 'white', 'orange'][r.integers(7)]
+            patch = [(u * 0.7, w * 0.62) for u, w in out]
+            self._flat_hull(x, y + h * 0.5, z, patch, h * 0.55 + 0.002, col, yaw)
+        elif kind == 'glass':                                  # a broken bottle: shards and the heavy base
+            col = ['bottlebrown', 'bottlegreen', 'glass'][r.integers(3)]
+            for k in range(r.integers(4, 8)):
+                cx, cz, s_ = r.uniform(-0.09, 0.09), r.uniform(-0.09, 0.09), r.uniform(0.012, 0.035)
+                out = [(cx + math.cos(t) * s_ * r.uniform(0.4, 1.3), cz + math.sin(t) * s_ * r.uniform(0.4, 1.3)) for t in np.linspace(0, 6.28, 4, endpoint=False) + r.uniform(0, 1)]
+                self._flat_hull(x, y, z, out, 0.003, col, yaw)
+            if r.random() < 0.6:
+                base = [(math.cos(t) * 0.034, math.sin(t) * 0.034) for t in np.linspace(0, 6.28, 9, endpoint=False)]
+                self._flat_hull(x + r.uniform(-0.05, 0.05), y, z + r.uniform(-0.05, 0.05), base, 0.012, col, yaw)
+        elif kind == 'caps':                                   # bottle caps
+            for k in range(r.integers(2, 5)):
+                self.cyl((x + r.uniform(-0.12, 0.12), y, z + r.uniform(-0.12, 0.12)), 0.0145, 0.006,
+                         ['steel', 'red', 'ledamber', 'navy'][r.integers(4)], sides=10)
+        elif kind == 'chunk':                                  # concrete broken off, the odd bit of rebar sticking out
+            s_ = r.uniform(0.04, 0.14)
+            self.blob((x, y, z), (s_, s_ * 0.6, s_ * 0.8), 'concrete', r, n=9)
+            if s_ > 0.09 and r.random() < 0.5:
+                a0 = np.array(local(0, 0, s_ * 0.5)); a1 = np.array(local(s_ * 1.6, s_ * 0.3, s_ * 0.9))
+                self.tube(a0, a1, 0.005, 'rust', sides=4)
+            for k in range(r.integers(0, 3)):
+                q = s_ * 0.3
+                self.blob((x + r.uniform(-0.15, 0.15), y, z + r.uniform(-0.15, 0.15)), (q, q * 0.6, q * 0.8), 'concrete', r, n=6)
+        elif kind == 'bag':                                    # a carrier bag, slumped, handles up
+            col = ['white', 'black', 'lightgrey', 'blue'][r.integers(4)]
+            self.blob((x, y, z), (0.15, 0.035, 0.11), col, r, n=14)
+            for side in (-1, 1):
+                p0 = np.array(local(-0.11, side * 0.035, 0.05)); p1 = np.array(local(-0.17, side * 0.03, 0.065)); p2 = np.array(local(-0.2, side * 0.035, 0.03))
+                self.tube(p0, p1, 0.004, col, sides=3, caps=False); self.tube(p1, p2, 0.004, col, sides=3, caps=False)
+        elif kind == 'cardboard':                              # a box knocked flat, fold and tape still on it
+            w, d = r.uniform(0.3, 0.5), r.uniform(0.25, 0.4)
+            self.W.box((x, y + 0.004, z), (w, 0.008, d), self.M['cardboard'], yaw=yaw, world_uv=False)
+            fold = r.uniform(0.25, 0.6)
+            self.W.box(local(w / 2 + 0.06 * math.cos(fold), 0, 0.06 * math.sin(fold) + 0.004), (0.12, 0.008, d),
+                       self.M['cardboard'], yaw=yaw, roll=fold, world_uv=False)
+            self.box(local(0, 0, 0.0085), (w * 0.98, 0.001, 0.045), 'tan', yaw=yaw)
+        elif kind == 'pizza':                                  # a pizza box, sometimes left open
+            w = 0.34
+            self.W.box((x, y + 0.012, z), (w, 0.024, w), self.M['cardboard'], yaw=yaw, world_uv=False)
+            if r.random() < 0.5:
+                self.W.box((x, y + 0.026, z), (w, 0.004, w), self.M['cardboard'], yaw=yaw, world_uv=False)
+                self.box(local(0, 0, 0.0285), (0.14, 0.001, 0.1), 'red', yaw=yaw)
             else:
-                self.cyl((x, y, z), 0.033, r.uniform(0.04, 0.12), col, sides=7)  # crushed
-        elif kind == 'bottle':
-            self.bottle(x, z, ['bottlebrown', 'bottlegreen', 'glass'][r.integers(3)], lying=True, yaw=yaw, y=y)
-        elif kind == 'chunk':
-            s = r.uniform(0.04, 0.14)
-            self.blob((x, y, z), (s, s * 0.6, s * 0.8), 'concrete', r, n=8)
-        elif kind == 'bag':
-            self.blob((x, y, z), (0.16, 0.03, 0.12), ['white', 'black', 'blue'][r.integers(3)], r, n=10)
-        elif kind == 'scrap':
-            self.W.box((x, y + 0.006, z), (r.uniform(0.2, 0.45), 0.012, r.uniform(0.15, 0.35)), self.M['cardboard'],
-                       yaw=yaw, world_uv=False)
-        elif kind == 'cup':
-            self.cyl((x, y + 0.04, z), 0.04, 0.11, ['white', 'red'][r.integers(2)], axis='x', yaw=yaw, sides=6, top=0.03)
+                lid = r.uniform(0.6, 1.4)
+                self.W.box(local(0.5 * w * math.cos(lid) - w / 2, 0, 0.5 * w * math.sin(lid) + 0.024), (w, 0.004, w),
+                           self.M['cardboard'], yaw=yaw, roll=lid, world_uv=False)
+                self.box((x, y + 0.025, z), (0.3, 0.002, 0.3), 'dirty', yaw=yaw)
+        elif kind == 'cup':                                    # a takeaway cup trodden flat, the lid nearby
+            col = ['white', 'kraft', 'red'][r.integers(3)]
+            out = [(-0.05, -0.028), (0.05, -0.044), (0.055, 0.0), (0.05, 0.044), (-0.05, 0.028), (-0.055, 0.0)]
+            out = [(u + r.uniform(-0.005, 0.005), w + r.uniform(-0.005, 0.005)) for u, w in out]
+            self._flat_hull(x, y, z, out, r.uniform(0.014, 0.024), col, yaw, dent=True, r=r)
+            if r.random() < 0.5:
+                lid = [(math.cos(t) * 0.045, math.sin(t) * 0.045) for t in np.linspace(0, 6.28, 10, endpoint=False)]
+                self._flat_hull(x + r.uniform(-0.12, 0.12), y, z + r.uniform(-0.12, 0.12), lid, 0.006, ['black', 'white'][r.integers(2)], yaw)
+        elif kind == 'chips':                                  # an empty crisp packet: a puffy pillow, crimped at the ends
+            col = ['red', 'blue', 'yellow', 'orange', 'purple', 'green'][r.integers(6)]
+            self.blob((x, y, z), (0.07, 0.014, 0.1), col, r, n=14)
+            for end in (-1, 1):
+                self.box(local(0, end * 0.105, 0.012), (0.12, 0.004, 0.018), col, yaw=yaw)
+        elif kind == 'candy':                                  # sweet wrappers, twisted at both ends
+            for k in range(r.integers(1, 4)):
+                cx, cz, c = r.uniform(-0.1, 0.1), r.uniform(-0.1, 0.1), ['red', 'yellow', 'pink', 'lime', 'purple'][r.integers(5)]
+                self.blob((x + cx, y, z + cz), (0.022, 0.008, 0.014), c, r, n=8)
+                for end in (-1, 1):
+                    self.blob((x + cx + end * 0.03 * co, y, z + cz - end * 0.03 * si), (0.01, 0.004, 0.01), c, r, n=6)
+        elif kind == 'butts':                                  # cigarette ends, filter and all
+            for _ in range(r.integers(2, 7)):
+                a, px, pz = r.uniform(0, 6.28), x + r.uniform(-0.1, 0.1), z + r.uniform(-0.1, 0.1)
+                L = r.uniform(0.012, 0.03)
+                self.cyl((px, y + 0.0045, pz), 0.0042, L, 'offwhite', axis='x', yaw=a, sides=5)
+                self.cyl((px - math.cos(a) * 0.016, y + 0.0045, pz + math.sin(a) * 0.016), 0.0045, 0.016, 'tan', axis='x', yaw=a, sides=5)
+        elif kind == 'battery':
+            for _ in range(r.integers(1, 3)):
+                a, px, pz = r.uniform(0, 6.28), x + r.uniform(-0.05, 0.05), z + r.uniform(-0.05, 0.05)
+                self.cyl((px, y + 0.007, pz), 0.007, 0.05, ['black', 'ledamber', 'charcoal'][r.integers(3)], axis='x', yaw=a, sides=6)
+        elif kind == 'lighter':
+            col = ['red', 'blue', 'yellow', 'lime', 'pink', 'teal'][r.integers(6)]
+            self.rbox((x, y + 0.006, z), (0.022, 0.012, 0.062), col, ch=0.004, yaw=yaw)
+            self.box(local(0, 0.034, 0.006), (0.02, 0.01, 0.012), 'steel', yaw=yaw)
+        elif kind == 'rag':                                    # an old cloth, flattened into the floor
+            m = self.M['cloth_' + ['khaki', 'denim', 'red', 'white', 'navy'][r.integers(5)]]
+            self.blob((x, y, z), (0.13, 0.012, 0.1), None, r, n=12, mat=m)
+        elif kind == 'receipt':                                # a curl of till roll
+            L, curl = r.uniform(0.15, 0.3), r.uniform(1.5, 4.0)
+            def fn(u, v, L=L, curl=curl):
+                a = u * curl
+                rr = L / curl
+                return local((math.sin(a) * rr) - L / 2, (v - 0.5) * 0.06, rr * (1 - math.cos(a)) * 0.6 + 0.002)
+            self.surface(fn, 10, 1, 'paper')
         elif kind == 'wire':
-            pts = [np.array([x, y + 0.008, z])]
+            pts = [np.array([x, y + 0.006, z])]
             a = yaw
-            for _ in range(5):
+            for _ in range(6):
                 a += r.uniform(-0.8, 0.8)
-                pts.append(pts[-1] + np.array([math.cos(a) * 0.12, 0, math.sin(a) * 0.12]))
+                pts.append(pts[-1] + np.array([math.cos(a) * 0.1, 0, math.sin(a) * 0.1]))
+            col = ['black', 'red', 'orange', 'white'][r.integers(4)]
             for p, q in zip(pts[:-1], pts[1:]):
-                self.tube(p, q, 0.005, ['black', 'red', 'orange'][r.integers(3)], sides=4, caps=False)
-        elif kind == 'wrapper':
-            self.box((x, y + 0.004, z), (0.12, 0.008, 0.07), ['yellow', 'red', 'blue', 'orange'][r.integers(4)], yaw=yaw)
-        elif kind == 'butts':
-            for _ in range(r.integers(2, 6)):
-                self.cyl((x + r.uniform(-0.1, 0.1), y + 0.005, z + r.uniform(-0.1, 0.1)), 0.006, 0.03, 'offwhite',
-                         axis='x', yaw=r.uniform(0, 6.28), sides=4, caps=False)
+                self.tube(p, q, 0.004, col, sides=4, caps=False)
 
     def scatter(self, r, n, area, avoid=(), y=0.0):
         """Scatter n debris items inside area=(x0, x1, z0, z1), away from `avoid` points (x, z, radius)."""

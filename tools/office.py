@@ -15,6 +15,18 @@ def build(ctx, door_x):
     decal = ctx['room_wall_decal']
     r = np.random.default_rng(4)
 
+    def party_cup(x, y, z, col='red'):
+        """A plastic party cup: open, tapered, white inside, a rolled rim (not a can)."""
+        P.lathe((x, y, z), [(0.0, 0.0), (0.03, 0.0), (0.045, 0.115), (0.047, 0.118)], col, sides=12, caps=False)
+        P.lathe((x, y + 0.004, z), [(0.0, 0.0), (0.028, 0.0), (0.043, 0.112)], 'white', sides=12, caps=False)
+
+    def bottle(x, y, z, col):
+        """A drinks bottle: shoulders, a neck and a cap, so it reads as a bottle."""
+        P.lathe((x, y, z), [(0.0, 0.0), (0.04, 0.0), (0.043, 0.012), (0.043, 0.16), (0.035, 0.2), (0.016, 0.235),
+                           (0.014, 0.27), (0.0, 0.27)], col, sides=12)
+        P.lathe((x, y + 0.27, z), [(0.0, 0.0), (0.016, 0.0), (0.016, 0.018), (0.0, 0.018)], 'white', sides=10)
+        P.lathe((x, y + 0.06, z), [(0.0436, 0.0), (0.0436, 0.07)], 'paper', sides=12, caps=False)    # label
+
     wall = Mat('office_wall', T.cinderblock(), tile=0.8)
     floor = Mat('office_floor', T.vct_floor(), tile=1.2)
     ceil = Mat('office_ceiling', T.ceiling_tile(), tile=1.2)
@@ -54,9 +66,9 @@ def build(ctx, door_x):
     pcyl((sx + 0.12, 0.85, sz - 0.1), 0.07, 0.03, 'charcoal', sides=8)
     W.light((sx + 0.12, 0.8, sz - 0.1), (1.0, 0.68, 0.36), 0.55, 4.8, radius=0.05, name='lantern', flicker='candle',
             runtime_intensity=1.0)
-    for (dx, dz, col) in [(-0.2, 0.15, 'canred'), (-0.05, 0.28, 'cangreen'), (0.25, 0.18, 'steel'), (-0.28, -0.12, 'canred'),
-                          (0.3, -0.15, 'red')]:
-        pcyl((sx + dx, 0.68, sz + dz), 0.033, 0.12, col, sides=7)
+    for (dx, dz, col) in [(-0.2, 0.15, 'red'), (-0.05, 0.28, 'blue'), (0.25, 0.18, 'red'), (-0.28, -0.12, 'red'),
+                          (0.3, -0.15, 'blue')]:
+        party_cup(sx + dx, 0.68, sz + dz, col)
     pbox((sx - 0.1, 0.69, sz - 0.3), (0.09, 0.01, 0.06), 'black', yaw=0.4)  # someone's phone
 
     def crate(c, color, yaw=0.0):
@@ -94,10 +106,10 @@ def build(ctx, door_x):
     W.collider_box((tx, 0, tz), 0.66, 0.32, 0, 0, 0.75)
     for k in range(9):
         x, z = tx + r.uniform(-0.55, 0.55), tz + r.uniform(-0.22, 0.22)
-        pcyl((x, 0.735, z), 0.04, 0.11, 'red', sides=6)
+        party_cup(x, 0.735, z)
     for k, (dx, col) in enumerate([(-0.35, 'yellow'), (0.3, 'blue')]):
         pbox((tx + dx, 0.8, tz + 0.05), (0.2, 0.12, 0.08), col, yaw=0.3 * k, roll=0.2)
-    pcyl((tx + 0.05, 0.735, tz - 0.05), 0.045, 0.25, 'green', sides=7)  # soda bottle
+    bottle(tx + 0.05, 0.735, tz - 0.05, 'bottlegreen')  # soda bottle
 
     # mattress on the floor by the south wall, with a blanket
     mx, mz = 0.55, 2.45
@@ -110,12 +122,7 @@ def build(ctx, door_x):
         x, z = r.uniform(-2.8, 1.8), r.uniform(-2.5, 1.8)
         if math.hypot(x - sx, z - sz) < 0.65 or abs(x - tx) < 0.75 and z < tz + 0.4:
             continue
-        if i % 3 == 0:
-            pcyl((x, 0.033, z), 0.033, 0.12, ['canred', 'cangreen', 'steel'][i % 3], axis='x', yaw=r.uniform(0, 6.28), sides=7)
-        elif i % 3 == 1:
-            pbox((x, 0.008, z), (r.uniform(0.12, 0.22), 0.016, r.uniform(0.1, 0.2)), 'paper', yaw=r.uniform(0, 6.28))
-        else:
-            pcyl((x, 0.0, z), 0.04, 0.11, 'red', sides=6, axis='x', yaw=r.uniform(0, 6.28))  # tipped cup
+        P.debris(r, x, z, ['can', 'flyer', 'cup', 'chips', 'butts', 'caps'][i % 6])
 
     # extension cord from the door to a power strip by the boombox
     path = [(door_x - 0.3, Z0 + 0.05), (door_x - 0.6, Z0 + 0.7), (-0.6, -1.7), (-1.9, -1.2), (-2.1, -1.05)]
