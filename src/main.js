@@ -151,6 +151,16 @@ async function start() {
   camera.add(meView.root);
   let thirdPerson = params.get('view') === '3p' || (resumed && mine.view === '3p');
   let fireLatch = false, doorAim = null, doorCheckAt = 0, cleanTarget = null, cleanCheckAt = 0;   // set by the click that picks something up, until the button is let go
+  // things you've done at least once (remembered in this browser): their hints stop showing
+  let learned = new Set();
+  try { learned = new Set(JSON.parse(localStorage.getItem('111k:learned') || '[]')); } catch {}
+  const learnHooks = [];
+  function learn(c) {
+    if (learned.has(c)) return;
+    learned.add(c);
+    try { localStorage.setItem('111k:learned', JSON.stringify([...learned])); } catch {}
+    for (const f of learnHooks) f();
+  }
   // while you emote the camera swings round you on a boom (first person too) and you hold still
   let orbiting = false, emoteYaw = 0, boom = thirdPerson, wasBoom = thirdPerson;
   let relock = false, lastPunch = 0, lastShot = 0, lastSpray = 0, shake = 0, menuRelease = false;
@@ -424,7 +434,7 @@ async function start() {
   }
   function grab() {
     const t = lookTarget();
-    if (t) { network.send({type: 'pickup', id: t.state.id}); fireLatch = true; return true; }   // this click doesn't fire what you picked up
+    if (t) { network.send({type: 'pickup', id: t.state.id}); learn(`pickup:${t.state.type}`); fireLatch = true; return true; }   // this click doesn't fire what you picked up
     return false;
   }
   // the lap timer's button, if the crosshair is on it and it's in reach
@@ -443,17 +453,17 @@ async function start() {
   }
   function primary() {
     if (chat.open || !emoteMenu.hidden) return;
-    if (onButton()) { machine.press(); network.send({type: 'button'}); return; }
+    if (onButton()) { machine.press(); network.send({type: 'button'}); learn('button'); return; }
     const h = held();
     if (!h && !lookTarget()) {
       const door = doorTarget();
-      if (door !== null) { doors.close(door); network.send({type: 'door', i: door}); return; }
+      if (door !== null) { doors.close(door); network.send({type: 'door', i: door}); learn('door'); return; }
     }
-    if (h?.state.type === 'flashlight') { network.send({type: 'toggle', id: h.state.id, on: !h.state.on}); return; }
+    if (h?.state.type === 'flashlight') { network.send({type: 'toggle', id: h.state.id, on: !h.state.on}); learn('flashlight'); return; }
     if (h?.state.type === 'paintball') { shoot(); return; }
     if (h?.state.type === 'spray') { spray(); return; }
     if (h?.state.type === 'bucket') {
-      if (cleanTarget) { network.send({type: 'erase', kind: cleanTarget.kind, id: cleanTarget.id}); items.scrub(h.state.id); }
+      if (cleanTarget) { network.send({type: 'erase', kind: cleanTarget.kind, id: cleanTarget.id}); items.scrub(h.state.id); learn('scrub'); }
       return;
     }
     if (grab()) return;
@@ -466,6 +476,7 @@ async function start() {
     const h = held();
     if (!h) return;
     const yaw = controls.state.yaw;
+    learn('drop');
     toggleGallery(false);
     camera.updateMatrixWorld();
     const o = camera.getWorldPosition(new THREE.Vector3()), d = camera.getWorldDirection(new THREE.Vector3());
@@ -514,6 +525,7 @@ async function start() {
     const now = performance.now(), gun = held();
     if (!gun || now - lastShot < SHOT_INTERVAL_MS) return;
     lastShot = now;
+    learn('fire');
     camera.updateMatrixWorld(); items.frame(frameArgs(0));
     const muzzle = items.tip(gun);
     const aim = aimPoint(60, true);
@@ -616,6 +628,7 @@ async function start() {
       gallery.setAttribute('aria-label', paint ? 'paint to load' : 'pieces to spray');
       gallery.querySelector('h2').textContent = paint ? 'paint' : 'tags';
       if (paint) buildPaints(); else buildGallery();
+      learn(paint ? 'paints' : 'pieces');
       gallery.querySelector(paint ? '.paints .chosen' : '.list .chosen')?.scrollIntoView({block: 'nearest'});
     }
     gallery.hidden = !open;
@@ -689,6 +702,7 @@ async function start() {
     if (!msg) return;
     lastSpray = now;
     network.send(msg);
+    learn('spray');
     rollSpray();
     previewKey = '';
   }
@@ -892,17 +906,11 @@ async function start() {
   // bar goes for good (remembered in this browser)
   {
     const hintEl = $('hint'), cmds = [...hintEl.querySelectorAll('[data-cmd]')].map(el => el.dataset.cmd);
-    let learned = new Set();
-    try { learned = new Set(JSON.parse(localStorage.getItem('111k:learned') || '[]')); } catch {}
     const show = () => {
       for (const el of hintEl.querySelectorAll('[data-cmd]')) el.classList.toggle('used', learned.has(el.dataset.cmd));
       hintEl.hidden = isTouch || cmds.every(c => learned.has(c));
     };
-    const learn = c => {
-      if (learned.has(c)) return;
-      learned.add(c); show();
-      try { localStorage.setItem('111k:learned', JSON.stringify([...learned])); } catch {}
-    };
+    learnHooks.push(show);
     const KEYS = {KeyW: 'move', KeyA: 'move', KeyS: 'move', KeyD: 'move', ShiftLeft: 'run', ShiftRight: 'run', Space: 'jump',
       KeyC: 'crouch', Enter: 'chat', KeyE: 'emotes', KeyV: 'view'};
     addEventListener('keydown', e => {
@@ -1188,11 +1196,15 @@ async function start() {
     if (h || t || frozen || pushable) doorAim = null;
     else if (now - doorCheckAt > 120) { doorCheckAt = now; doorAim = doorTarget(); }
     const type = h?.state.type;
-    const hint = isTouch ? '' : pushable ? 'click: push the button' : doorAim !== null ? 'click: close the door' : h ? (type === 'flashlight' ? `click: ${h.state.on ? 'turn off' : 'turn on'}  ·  right-click: drop`
-      : type === 'paintball' ? 'click: fire  ·  right-click: drop'
-      : type === 'bucket' ? (cleanTarget ? 'click: scrub it off  ·  right-click: drop' : 'aim at paint or graffiti to scrub it  ·  right-click: drop')
-      : 'click a wall: spray  ·  esc: pick a piece  ·  right-click: drop')
-      : t ? `click: pick up ${ITEM_NAMES[t.state.type] || 'it'}` : '';
+    // what you can do right now, leaving out whatever you've already done at least once
+    const drop = ['drop', 'right-click: drop'];
+    const parts = isTouch ? [] : pushable ? [['button', 'click: push the button']] : doorAim !== null ? [['door', 'click: close the door']]
+      : h ? (type === 'flashlight' ? [['flashlight', `click: ${h.state.on ? 'turn off' : 'turn on'}`], drop]
+        : type === 'paintball' ? [['fire', 'click: fire'], drop]
+        : type === 'bucket' ? [['scrub', cleanTarget ? 'click: scrub it off' : 'aim at paint or graffiti to scrub it'], drop]
+        : [['spray', 'click a wall: spray'], ['pieces', 'esc: pick a piece'], drop])
+      : t ? [[`pickup:${t.state.type}`, `click: pick up ${ITEM_NAMES[t.state.type] || 'it'}`]] : [];
+    const hint = parts.filter(([k]) => !learned.has(k)).map(([, text]) => text).join('  ·  ');
     if (prompt.textContent !== hint) prompt.textContent = hint;
     document.body.classList.toggle('holding', !!h);
     tagLabel.hidden = (type !== 'spray' && now > tagFlashUntil) || !chosenPiece;

@@ -363,7 +363,7 @@ export function createItems({scene, camera, hits, shadows = null}) {
       if (fall && hits && !state.holder) {
         const f = simulateFall(hits, fall.p, fall.v);
         f.path[f.path.length - 1].set(state.x, state.y, state.z);   // the server's resting spot is the word
-        it.fall = {path: f.path, t: 0, spin: (state.yaw * 7.3) % 1 > .5 ? 1 : -1};
+        it.fall = {path: f.path, t: 0};
       } else it.fall = null;
     },
     // which item (if any) shows the pick-up glow
@@ -416,14 +416,13 @@ export function createItems({scene, camera, hits, shadows = null}) {
           if (u.upright) { m.rotation.set(Math.PI / 2, s.yaw, 0, 'YXZ'); m.position.y = s.y + u.ground; }
           if (u.standing) { m.rotation.set(0, s.yaw, 0); m.position.y = s.y; }
           u.dock?.();
-          if (it.fall) {                      // still on its way down: follow the path, tumbling, settling into its rest pose
+          if (it.fall) {                      // still on its way down: follow the path, already in its rest pose (no tumbling)
             const f = it.fall; f.t += dt;
             const at = f.t / FALL_DT, i = Math.floor(at), last = f.path.length - 1;
             if (i >= last) it.fall = null;
             else {
-              const k = at - i, togo = Math.min(1, (last - at) / 24);
+              const k = at - i;
               m.position.lerpVectors(f.path[i], f.path[i + 1], k); m.position.y += u.ground;
-              m.rotation.x += togo * togo * 5 * f.spin; m.rotation.z += togo * 1.2 * f.spin;
             }
           }
           m.updateMatrixWorld();
