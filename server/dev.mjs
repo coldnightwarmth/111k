@@ -111,7 +111,10 @@ function close(c) {
   if (![...clients].some(o => o.player.id === c.player.id)) {
     broadcast({type: 'leave', id: c.player.id});
     if (!clients.size) items = freshItems();
-    else for (const {msg} of releaseItems(items, c.player)) broadcast(msg);
+    else setTimeout(() => {   // a refresh comes back within a few seconds: keep their item for them
+      if ([...clients].some(o => o.player.id === c.player.id)) return;
+      for (const {msg} of releaseItems(items, c.player)) broadcast(msg);
+    }, 8000);
   }
 }
 

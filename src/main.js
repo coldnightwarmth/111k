@@ -639,16 +639,16 @@ async function start() {
       // over the right shoulder, close in: you see past yourself to what you're aiming at
       const yaw = input.yaw, pitch = input.pitch;
       const rx = Math.cos(yaw), rz = -Math.sin(yaw);
-      const sideRoom = collider.raycast(player.x, player.z, rx, rz, 1, player.y, .12) - .2;
-      const wantSide = Math.max(.12, Math.min(.68, sideRoom));
+      const sideRoom = collider.raycast(player.x, player.z, rx, rz, 1.1, player.y, .12) - .2;
+      const wantSide = Math.max(.12, Math.min(.8, sideRoom));
       camSide += (wantSide - camSide) * damp(wantSide < camSide ? 25 : 5, dt);
-      const head = Math.min(player.y + .2, ceilingAt(player.x, player.z) - .28);
+      const head = Math.min(player.y + .3, ceilingAt(player.x, player.z) - .25);   // big heads: look over them
       pivot.set(player.x + rx * camSide, head, player.z + rz * camSide);
       if (firstFrame) smoothPivot.copy(pivot);
       smoothPivot.lerp(pivot, damp(22, dt));
       smoothPivot.x = pivot.x; smoothPivot.z = pivot.z;    // only ease the height (jumps, crouches)
       dir.set(Math.sin(yaw) * Math.cos(pitch), -Math.sin(pitch), Math.cos(yaw) * Math.cos(pitch));
-      const want = 1.95;
+      const want = 1.85;
       // walls: the horizontal part of the boom, tested from three points across the camera's width
       const flat = Math.hypot(dir.x, dir.z) || 1e-6;
       let free = want;

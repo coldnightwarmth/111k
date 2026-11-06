@@ -52,7 +52,11 @@ export class Room {
   broadcast(msg) { const data = JSON.stringify(msg); for (const ws of this.sockets()) this.send(ws, data); }
   async scheduleAlarm() {
     const live = this.players().filter(p => !p.inactive);
-    if (live.length) await this.ctx.storage.setAlarm(Math.min(...live.map(p => p.lastActive)) + INACTIVE_MS + 1000);
+    if (!live.length) return;
+    let at = Math.min(...live.map(p => p.lastActive)) + INACTIVE_MS + 1000;
+    const pending = await this.ctx.storage.getAlarm?.();
+    if (pending && pending > Date.now() && pending < at) at = pending;   // keep a sooner one (dropped items)
+    await this.ctx.storage.setAlarm(at);
   }
 
   async fetch(request) {
@@ -90,6 +94,7 @@ export class Room {
 
   async alarm() {
     const now = Date.now();
+    await this.releaseOrphans();
     for (const ws of this.sockets()) {
       const p = ws.deserializeAttachment();
       if (!p || p.inactive || now - p.lastActive < INACTIVE_MS) continue;
@@ -113,8 +118,20 @@ export class Room {
       // last one out: everything goes back where it started
       this.items = freshItems(); await this.saveItems(); return;
     }
-    const dropped = releaseItems(items, p);
-    for (const {msg} of dropped) this.broadcast(msg);
-    if (dropped.length) await this.saveItems();
+    // a refresh reconnects within a few seconds as the same player: keep their item for them,
+    // and let an alarm (which survives hibernation) drop it if they don't come back
+    const soon = Date.now() + 9000, current = await this.ctx.storage.getAlarm?.();
+    if (!current || current > soon) await this.ctx.storage.setAlarm(soon);
+  }
+  // items held by someone who is no longer connected go down where they were
+  async releaseOrphans() {
+    const items = await this.loadItems(), here = new Set(this.players().map(p => p.id));
+    let changed = false;
+    for (const it of Object.values(items)) {
+      if (!it.holder || here.has(it.holder)) continue;
+      for (const {msg} of releaseItems(items, {id: it.holder, pose: null})) this.broadcast(msg);
+      changed = true;
+    }
+    if (changed) await this.saveItems();
   }
 }
