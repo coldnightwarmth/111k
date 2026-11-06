@@ -95,7 +95,9 @@ export function releaseItems(items, player) {
 // room: {items, players: () => [player records]}
 export function handleMessage(player, data, now, room = {items: {}, players: () => []}) {
   const out = [];
-  if (typeof data !== 'string' || data.length > 4096) return {out, changed: false, close: 'Message too large'};
+  // voice connection offers carry a session description, so they get more room than everything else
+  if (typeof data !== 'string' || data.length > 16384) return {out, changed: false, close: 'Message too large'};
+  if (data.length > 4096 && !data.startsWith('{"type":"rtc"')) return {out, changed: false, close: 'Message too large'};
   let m;
   try { m = JSON.parse(data); } catch { return {out, changed: false}; }
   if (!m || typeof m !== 'object') return {out, changed: false};
@@ -134,6 +136,19 @@ export function handleMessage(player, data, now, room = {items: {}, players: () 
     const returning = player.inactive;
     player.lastActive = now; player.inactive = false;
     return {out, changed: true, returning};
+  }
+
+  // ------------------------------------------------- voice (peer to peer)
+  // Browsers set up voice links directly; the room only passes their setup notes along.
+  if (m.type === 'rtc') {
+    if (typeof m.to !== 'string' || m.to === player.id || !m.d || typeof m.d !== 'object') return {out, changed: false};
+    const second = Math.floor(now / 1000);
+    if (player.rtcSecond !== second) { player.rtcSecond = second; player.rtcCount = 0; }
+    if (++player.rtcCount > 80) return {out, changed: false};
+    const to = room.players().find(p => p && p.id === m.to);
+    if (!to) return {out, changed: false};
+    out.push({to: m.to, msg: {type: 'rtc', from: player.id, d: m.d}});
+    return {out, changed: false};
   }
 
   // ---------------------------------------------------------- lap timer

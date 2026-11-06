@@ -301,3 +301,18 @@ test('lap timer: start, busy for others, laps either way then the same way, fini
   // too far from the button: nothing happens
   pose(b, at(R.MACHINE_ANGLE + 1)); press(b); assert.equal(race.state, 'cancelled');
 });
+
+test('voice: setup notes go only to the named player, big offers allowed, others still capped', async () => {
+  const {room, sockets} = makeRoom();
+  await join(room, S1); await join(room, S2);
+  const [a, b] = sockets;
+  const idA = a.messages()[0].id, idB = b.messages()[0].id;
+  const offer = {type: 'rtc', to: idB, d: {sdp: {type: 'offer', sdp: 'v=0 ' + 'x'.repeat(6000)}}};
+  await room.webSocketMessage(a, JSON.stringify(offer));
+  const got = b.messages().find(m => m.type === 'rtc');
+  assert.equal(got.from, idA); assert.equal(got.d.sdp.type, 'offer');
+  assert.equal(a.messages().filter(m => m.type === 'rtc').length, 0, 'not echoed to the sender');
+  // a big non-voice message is still refused
+  await room.webSocketMessage(a, JSON.stringify({type: 'chat', text: 'y'.repeat(6000)}));
+  assert.equal(a.closed?.reason, 'Message too large');
+});

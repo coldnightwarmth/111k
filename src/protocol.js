@@ -60,12 +60,13 @@ export function sanitizePose(p) {
     typing: p.typing === true,
     punchTime: Number.isFinite(p.punchTime) ? round(Math.max(-1, Math.min(PUNCH_DURATION, p.punchTime))) : -1,
     punchHand: p.punchHand === 1 ? 1 : 0,        // which fist: combos alternate
+    vc: p.vc === 1 ? 1 : 0,                      // in voice chat
   };
 }
 
 export function samePose(a, b) {
   if (!a || !b) return false;
-  for (const k of ['x', 'y', 'z', 'g', 'pc', 'yaw', 'pitch', 'room', 'crouch', 'jumpTime', 'jumpPower', 'emote', 'emoteTime', 'typing', 'punchTime', 'punchHand'])
+  for (const k of ['x', 'y', 'z', 'g', 'pc', 'yaw', 'pitch', 'room', 'crouch', 'jumpTime', 'jumpPower', 'emote', 'emoteTime', 'typing', 'punchTime', 'punchHand', 'vc'])
     if (a[k] !== b[k]) return false;
   return true;
 }

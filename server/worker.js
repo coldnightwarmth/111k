@@ -99,7 +99,11 @@ export class Room {
     const result = handleMessage(player, data, now, {items, marks, race, players: () => this.players()});
     if (result.close) { ws.close(1009, result.close); return; }
     if (result.changed) ws.serializeAttachment(player);
-    for (const {to, msg} of result.out) to === 'all' ? this.broadcast(msg) : this.send(ws, msg);
+    for (const {to, msg} of result.out) {
+      if (to === 'all') this.broadcast(msg);
+      else if (to === 'self') this.send(ws, msg);
+      else for (const other of this.sockets()) if (other.deserializeAttachment()?.id === to) this.send(other, msg);
+    }
     if (result.itemsChanged) { await this.saveItems(); await this.scheduleAlarm(); }
     if (result.marksChanged) this.saveMarksSoon();
     if (result.raceChanged) await this.saveRace();

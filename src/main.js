@@ -3,7 +3,7 @@ import {serverUrl, isTouch, lowPower} from './config.js';
 import {loadLevel, createAvatarLights, createFlicker, lighting, ghost} from './level.js';
 import {createCollider, STEP_UP} from './physics.js';
 import {createAvatar, preloadLook, AVATAR_SCALE} from './avatar.js';
-import {createVerticalMovement, createPoseBuffer, EYE_HEIGHT} from './motion.js';
+import {createVerticalMovement, createPoseBuffer, EYE_HEIGHT, jumpHeight} from './motion.js';
 import {connectRoom} from './net.js';
 import {createChatUI, createBubble} from './chat.js';
 import {createControls} from './controls.js';
@@ -13,6 +13,7 @@ import {MACHINE_COLLIDER, BUTTON, BUTTON_RANGE, RACE_LAPS} from './race.js';
 import {createWorldHits, cutDecal, createBatch, markMaterial, splatAtlas, splatCell, PAINT_COLORS, PAINT_ROWS, RANDOM_PAINT, rgbOf} from './decals.js';
 import {createDoors} from './doors.js';
 import {pickAvatar} from './picker.js';
+import {createVoice, voicePanel} from './voice.js';
 import {randomLook, cleanLook} from './looks.js';
 import {EMOTES, EMOTE_DURATION, PUNCH_COOLDOWN_MS, PUNCH_DURATION, PUNCH_COMBO_MS, SHOT_INTERVAL_MS, SPRAY_INTERVAL_MS, SPRAY_RANGE,
   MAX_SPLATS, MAX_SPRAYS, SPLAT_LIFE_MS, sanitizePose, sanitizeName, cleanSplat, cleanSpray} from './protocol.js';
@@ -31,6 +32,7 @@ const store = (s, key) => ({
   set(v) { try { s.setItem(key, JSON.stringify(v)); } catch {} },
 });
 const tabMe = store(sessionStorage, '111k:me'), lastMe = store(localStorage, '111k:last');
+const voice = createVoice();   // proximity voice: set up on the start screen or the Esc screen
 
 // --------------------------------------------------------------- renderer
 const canvas = $('view');
@@ -75,7 +77,7 @@ async function chooseYourself() {
   await wait(900);                     // a moment of "going down…" first
   loading.classList.add('done');
   const last = lastMe.get();
-  const pick = await pickAvatar({previous: last?.look ? cleanLook(last.look) : null, name: last?.name || ''});
+  const pick = await pickAvatar({previous: last?.look ? cleanLook(last.look) : null, name: last?.name || '', extra: voicePanel(voice)});
   loading.classList.remove('done');
   return {look: pick.look, name: sanitizeName(pick.name)};
 }
@@ -619,7 +621,7 @@ async function start() {
   }
   function removePeer(id) {
     const p = peers.get(id); if (!p) return;
-    p.avatar?.dispose(); p.bubble?.dispose(); p.typing?.dispose(); peers.delete(id); updateCount();
+    p.avatar?.dispose(); p.bubble?.dispose(); p.typing?.dispose(); p.speakEl?.remove(); peers.delete(id); updateCount();
   }
   function applyPose(id, pose, time) {
     const p = peer(id); if (!p) return;
@@ -665,6 +667,7 @@ async function start() {
       target.bubble?.dispose(); target.bubble = bubble; target.bubbleExpires = m.expiresAt;
     },
     onMessage: m => {
+      if (m.type === 'rtc') { voice.signal(m.from, m.d); return; }
       if (m.type === 'look' && m.id !== network.id) setLook(peer(m.id), m.look);
       else if (m.type === 'marks') resetMarks(m);
       else if (m.type === 'shot') {
@@ -698,6 +701,20 @@ async function start() {
         if (p?.avatar) p.sprayed = performance.now();
       }
     },
+  });
+
+  // ------------------------------------------------------------- voice
+  voice.attach(m => network.send(m), () => network.id || '');
+  if (voice.enabled && !voice.hasMic) voice.setEnabled(true);    // on from last time (or just switched on at the door)
+  const bubbleLayer = $('bubbles'), micBtn = $('micBtn'), voiceDock = $('voiceDock');
+  voiceDock.append(voicePanel(voice));
+  micBtn.addEventListener('click', () => {
+    if (isTouch) { voiceDock.classList.toggle('open'); return; }
+    if (!voice.enabled) voice.setEnabled(true); else voice.setMuted(!voice.muted);
+  });
+  addEventListener('keydown', e => {
+    if (e.code !== 'KeyM' || e.repeat || chat.open || e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement) return;
+    if (voice.enabled) voice.setMuted(!voice.muted);
   });
 
   // --------------------------------------------------------- flicker
@@ -861,7 +878,7 @@ async function start() {
     if (now - sentAt >= 1000 / 15 && network.online) {
       const pose = sanitizePose({x: player.x, y: player.y, z: player.z, g: player.ground, pc: chosenPaint, yaw: input.yaw, pitch: input.pitch, room: 'office',
         crouch: motion.crouch, jumpTime: motion.jumpTime, jumpPower: motion.jumpPower, emote: player.emote, emoteTime: player.emoteTime,
-        typing: chat.typing, punchTime: player.punchTime, punchHand: player.punchHand});
+        typing: chat.typing, punchTime: player.punchTime, punchHand: player.punchHand, vc: voice.enabled ? 1 : 0});
       const key = JSON.stringify(pose);
       if (key !== lastSent) settle = 3;
       if (key !== lastSent || settle > 0) { network.sendPose(pose); if (key === lastSent) settle--; lastSent = key; }
@@ -891,6 +908,24 @@ async function start() {
         p.typing?.update(at.x, top, show);
       }
     }
+    // voice: link up with nearby talkers, place their voices, and mark who's speaking
+    voice.update({camera, hits, peers: [...peers.values()].filter(p => p.last).map(p => ({id: p.id, vc: p.last.vc,
+      x: p.last.x, y: (p.last.g || 0) + 1.25 + jumpHeight(p.last.jumpTime ?? -1, p.last.jumpPower), z: p.last.z}))});
+    for (const p of peers.values()) {
+      const level = p.last && p.avatar ? voice.levelOf(p.id) : 0;
+      if (level > .05 || p.speakEl) {
+        if (!p.speakEl) { p.speakEl = document.createElement('div'); p.speakEl.className = 'speaking'; p.speakEl.innerHTML = '<i></i><i></i><i></i>'; bubbleLayer.append(p.speakEl); }
+        p.speakLevel = Math.max(level, (p.speakLevel || 0) * .9);
+        const at = project(p.last, (p.last.g || 0) + 1.78 + jumpHeight(p.last.jumpTime ?? -1, p.last.jumpPower));
+        const show = at.visible && p.speakLevel > .04;
+        p.speakEl.hidden = !show;
+        if (show) {
+          p.speakEl.style.transform = `translate(${at.x.toFixed(1)}px, ${at.y.toFixed(1)}px) translate(-50%, -100%)`;
+          [...p.speakEl.children].forEach((bar, i) => { bar.style.transform = `scaleY(${(.25 + Math.min(1, p.speakLevel * (1.6 - i * .3) * 2.2)).toFixed(2)})`; });
+        }
+      }
+    }
+    micBtn.dataset.state = !voice.enabled ? 'off' : voice.muted ? 'muted' : !voice.hasMic ? 'listen' : voice.talking ? 'talking' : 'live';
     if (myBubble) {
       if (serverNow > myBubbleExpires) { myBubble.dispose(); myBubble = null; }
       else { const at = project(player, player.ground + 2.0); myBubble.update(at.x, at.y, at.visible && thirdPerson); }
@@ -966,7 +1001,7 @@ async function start() {
   });
   document.body.classList.add('ready');
   window.__111k = {scene, camera, player, peers, network, renderer, items, controls, hits, doors, me, meView, vertical,
-    splatMarks, addSplat, doorBatches, setView: v => { thirdPerson = v; }, primary, secondary, shoot, spray, choosePiece, choosePaint, toggleGallery, get pieces() { return pieces; }};
+    voice, splatMarks, addSplat, doorBatches, setView: v => { thirdPerson = v; }, primary, secondary, shoot, spray, choosePiece, choosePaint, toggleGallery, get pieces() { return pieces; }};
 }
 
 start().catch(err => {

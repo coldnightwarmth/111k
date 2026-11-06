@@ -103,7 +103,11 @@ function onText(c, text) {
   const now = Date.now();
   const result = handleMessage(c.player, text, now, {items, marks, race, players});
   if (result.close) { close(c); return; }
-  for (const {to, msg} of result.out) to === 'all' ? broadcast(msg) : send(c, msg);
+  for (const {to, msg} of result.out) {
+    if (to === 'all') broadcast(msg);
+    else if (to === 'self') send(c, msg);
+    else for (const other of clients) if (other.player.id === to) send(other, msg);
+  }
   if (result.returning) broadcast(snapshot(players(), now, items));
 }
 

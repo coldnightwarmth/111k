@@ -46,7 +46,7 @@ function studio() {
   return s;
 }
 
-export function pickAvatar({previous = null, name = ''} = {}) {
+export function pickAvatar({previous = null, name = '', extra = null} = {}) {
   const root = document.getElementById('picker');
   const looks = Object.fromEntries(KINDS.map(([kind]) => [kind, Array.from({length: 6}, () => randomLook(kind))]));
   let kind = previous?.character === 'drilady' ? 'drilady' : 'drifella';
@@ -58,9 +58,11 @@ export function pickAvatar({previous = null, name = ''} = {}) {
       ${previous ? '<div class="previous"><button type="button" class="card" data-id="previous"><canvas width="240" height="320"></canvas><span>last time</span></button><p>keep your look from last time, or pick a new one</p></div>' : ''}
       <div class="grid"></div>
       <div class="tabs" role="tablist">${KINDS.map(([k, label]) => `<button type="button" role="tab" data-kind="${k}">${label}</button>`).join('')}</div>
+      <div class="extra"></div>
       <button type="button" class="go" disabled>go down</button>
     </div>`;
   root.hidden = false;
+  if (extra) root.querySelector('.extra').append(extra);
   const input = root.querySelector('input'), grid = root.querySelector('.grid'), go = root.querySelector('.go');
   input.value = name || '';
   for (const type of ['keydown', 'keyup']) input.addEventListener(type, e => e.stopPropagation());
@@ -111,7 +113,7 @@ export function pickAvatar({previous = null, name = ''} = {}) {
       if (!chosen) return;
       const look = chosen === 'previous' ? previous : looks[chosen.split(':')[0]][Number(chosen.split(':')[1])];
       root.classList.add('done');
-      setTimeout(() => { root.hidden = true; root.innerHTML = ''; portraits.dispose(); }, 600);
+      setTimeout(() => { root.hidden = true; extra?.remove(); root.innerHTML = ''; portraits.dispose(); }, 600);
       resolve({look, name: input.value.trim()});
     };
     go.addEventListener('click', finish);
