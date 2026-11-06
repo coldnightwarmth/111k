@@ -241,6 +241,21 @@ def _clip(poly, nx, ny, lim):
     return out
 
 
+_SEG_A0 = np.array([a0 for a0, _ in SEGS])
+
+
+def wall_P(aa, x, y):
+    """Like P, but on the lining as built: flat panels between the loop's segment bounds, not the
+    true circle (which runs up to ~1.2 cm behind the outer wall mid-panel, and would bury a decal)."""
+    aa = aa % (2 * math.pi)
+    k = int(np.searchsorted(_SEG_A0, aa, side='right')) - 1
+    a0, a1 = SEGS[k]
+    if aa < a0:
+        aa += 2 * math.pi
+    f = (aa - a0) / (a1 - a0)
+    return P(a0, x, y) * (1 - f) + P(a1, x, y) * f
+
+
 def tunnel_decal(name, a, side, y, scale=1.0, eps=0.012, rot=0.0):
     """A decal conforming to the curved wall, optionally turned by `rot` radians on the wall:
     a grid over (angle, arc length) cells, each clipped to the turned rectangle."""
@@ -274,7 +289,7 @@ def tunnel_decal(name, a, side, y, scale=1.0, eps=0.012, rot=0.0):
                     aa, ss = a + X / rr, sc + Y
                     x, yy = prof_at(ss)
                     n = np.array([-x, CY - yy]); n /= np.linalg.norm(n)
-                    quad.append(P(aa, x + n[0] * eps, yy + n[1] * eps))
+                    quad.append(wall_P(aa, x + n[0] * eps, yy + n[1] * eps))
                     lx, ly = X * c + Y * s_, -X * s_ + Y * c
                     fu, fv = lx / w + 0.5, ly / h + 0.5
                     fu = 1 - fu if side > 0 else fu
@@ -553,6 +568,94 @@ for k in range(10):
     ITEMS.append({'type': 'spray', **{c: round(float(v), 3) for c, v in zip('xyz', at(a, x, 0.03))},
                   'yaw': round(float(can_r.uniform(0, 6.28)), 3)})
 
+# ------------------------------------------- what's in front of the walls (for placing graffiti)
+# Every triangle built so far (all of the level but the decals), so a piece can check that the
+# patch of wall it would cover is bare: nothing mounted in front of it (a tray, a mirror, a board,
+# a sink) and real wall right behind it (not a doorway or the edge of the wall).
+def _gather_tris():
+    out = []
+    for (part, _), g in W.geo.items():
+        if part == 'decals' or not g['f']:
+            continue
+        V = np.asarray(g['v'], float)
+        idx = [(f[0], f[k], f[k + 1]) for f in g['f'] for k in range(1, len(f) - 1)]
+        if idx:
+            out.append(V[np.asarray(idx)])
+    return np.concatenate(out)
+
+
+SCENE_TRIS = _gather_tris()
+SCENE_MID = SCENE_TRIS.mean(1)
+SCENE_RAD = np.linalg.norm(SCENE_TRIS - SCENE_MID[:, None], axis=2).max(1)
+print(f'graffiti clearance: {len(SCENE_TRIS)} triangles')
+
+
+def _ray_hits(O, D, far, T):
+    """For each ray (origin O[i], unit direction D[i]): does it meet a triangle of T within far?"""
+    if not len(T):
+        return np.zeros(len(O), bool)
+    e1, e2 = T[:, 1] - T[:, 0], T[:, 2] - T[:, 0]
+    res = np.zeros(len(O), bool)
+    for i, (o, d) in enumerate(zip(O, D)):
+        pv = np.cross(d, e2)
+        det = (e1 * pv).sum(1)
+        ok = np.abs(det) > 1e-12
+        inv = np.where(ok, 1 / np.where(ok, det, 1), 0)
+        sv = o - T[:, 0]
+        u = (sv * pv).sum(1) * inv
+        qv = np.cross(sv, e1)
+        v = (qv @ d) * inv
+        t = (e2 * qv).sum(1) * inv
+        res[i] = np.any(ok & (u >= 0) & (v >= 0) & (u + v <= 1) & (t > 1e-4) & (t < far))
+    return res
+
+
+def wall_clear(points, normals, reach=0.5, backing=0.06):
+    """Share of sample points on a would-be piece (on the wall, normals pointing out of it) that
+    have something within `reach` in front of them, or no wall within `backing` behind."""
+    points, normals = np.asarray(points, float), np.asarray(normals, float)
+    c = points.mean(0)
+    r = np.linalg.norm(points - c, axis=1).max() + reach
+    near = np.linalg.norm(SCENE_MID - c, axis=1) < r + SCENE_RAD
+    T = SCENE_TRIS[near]
+    front = _ray_hits(points + normals * 0.003, normals, reach, T)
+    behind = _ray_hits(points + normals * 0.003, -normals, backing, T)
+    return float(np.mean(front | ~behind))
+
+
+def _grid(w, h, nx=9, ny=6):
+    return [(X, Y) for X in np.linspace(-w / 2 * 0.99, w / 2 * 0.99, nx) for Y in np.linspace(-h / 2 * 0.99, h / 2 * 0.99, ny)]
+
+
+def tunnel_clear(name, a, side, y, scale=1.0, rot=0.0):
+    w, h = rects[name]['size'][0] * scale, rects[name]['size'][1] * scale
+    c, s_ = math.cos(rot), math.sin(rot)
+    sc = s_for_height(y, side)
+    rr = RL + prof_at(sc)[0]
+    pts, nrm = [], []
+    for X, Y in _grid(w, h):
+        Xr, Yr = X * c - Y * s_, X * s_ + Y * c
+        aa, ss = a + Xr / rr, sc + Yr
+        x, yy = prof_at(ss)
+        n2 = np.array([-x, CY - yy]); n2 /= np.linalg.norm(n2)
+        pts.append(wall_P(aa, x, yy))
+        nrm.append(u_(aa) * n2[0] + np.array([0, n2[1], 0]))
+    return wall_clear(pts, nrm)
+
+
+def room_clear(name, wall, along, y, scale=1.0, rot=0.0):
+    """In the current room frame, like room_wall_decal."""
+    w, h = rects[name]['size'][0] * scale, rects[name]['size'][1] * scale
+    base_, right, inward = (np.array(v, float) for v in WALL_SPEC[wall])
+    up = np.array([0.0, 1.0, 0.0])
+    if rot:
+        right, up = right * math.cos(rot) + up * math.sin(rot), -right * math.sin(rot) + up * math.cos(rot)
+    R = W.frames[-1][0]
+    centre = base_ + np.asarray(WALL_SPEC[wall][1], float) * along + np.array([0, y, 0])
+    pts = [W.T(np.array([centre + right * X + up * Y]))[0] for X, Y in _grid(w, h)]
+    return wall_clear(pts, [R @ inward] * len(pts))
+
+
 # ------------------------------------------------------ graffiti placement
 with W.using('decals', density=0.6):
     gr = np.random.default_rng(33)
@@ -567,9 +670,18 @@ with W.using('decals', density=0.6):
             ('sc_wecould', -0.12, 1, 2.3), ('tu_creamy', -0.17, -1, 1.5), ('hs_drifella', 0.13, 1, 1.9),
             ('buff_grey', 0.24, -1, 1.4), ('tag_mute', 0.242, -1, 1.5)]
     used = set()
-    for name, da, side, y in plan:
+    # (each nudged up, down or along a little if something's in front of the planned spot)
+    nudges = [(0, 0)] + [(dy, dx) for dx in (0, 0.2, -0.2, 0.4, -0.4) for dy in (-0.1, 0.1, -0.2, 0.2, -0.3) if (dy, dx) != (0, 0)]
+    for k, (name, da, side, y) in enumerate(plan):
         if name in rects:
-            tunnel_decal(name, party_a + da, side, y, eps=0.012 + 0.004 * (name == 'tag_mute'))
+            for dy, dx in nudges:
+                if tunnel_clear(name, party_a + da + dx / RL, side, y + dy) == 0:
+                    break
+            else:
+                dy, dx = 0, 0
+                print(f'graffiti: planned {name} has something in front of it wherever it goes')
+            plan[k] = (name, da + dx / RL, side, y + dy)
+            tunnel_decal(name, party_a + da + dx / RL, side, y + dy, eps=0.012 + 0.004 * (name == 'tag_mute'))
             used.add(name)
     # everything else, at least once, spread round the loop. Each piece looks for a patch of wall
     # that's mostly free; only now and then does one go over another (as tags do).
@@ -614,10 +726,15 @@ with W.using('decals', density=0.6):
             y = min(y, 3.05 - h / 2)
             ov = min(overlap(side, aa * RL, y, w / 2, h / 2), overlap(side, aa * RL + loop_len, y, w / 2, h / 2),
                      overlap(side, aa * RL - loop_len, y, w / 2, h / 2))
+            if ov <= (best[0] if best else allow + 0.25) and tunnel_clear(name, aa, side, y, scale, rot_) > 0:
+                continue                 # something's in front of that bit of wall (or it runs off it)
             if best is None or ov < best[0]:
                 best = (ov, aa, side, y)
             if ov <= allow:
                 break
+        if best is None:
+            print(f'graffiti: no bare wall for {name}, left out')
+            continue
         ov, aa, side, y = best
         if ov > allow + 0.25:
             continue                     # nowhere decent left for it
@@ -636,11 +753,16 @@ with W.using('decals', density=0.6):
             for j in range(n):
                 name = gr.choice(room_pool)
                 w = rects[name]['size'][0]
-                wall = gr.choice(['S', 'W', 'E'] if i != CONTROL else ['S'])
-                span = (X1 - X0) if wall == 'S' else (Z1 - Z0)
-                along = gr.uniform(-span / 2 + w / 2 + 0.2, max(-span / 2 + w / 2 + 0.25, span / 2 - w / 2 - 0.2))
-                room_wall_decal(name, wall, along, float(gr.uniform(0.9, 2.3)), scale=float(gr.uniform(0.8, 1.2)),
-                                eps=0.012 + 0.002 * j, rot=float(gr.normal(0, 0.06)))
+                for attempt in range(30):          # a bare patch of wall: nothing mounted in front of it
+                    wall = gr.choice(['S', 'W', 'E'] if i != CONTROL else ['S'])
+                    span = (X1 - X0) if wall == 'S' else (Z1 - Z0)
+                    along = gr.uniform(-span / 2 + w / 2 + 0.2, max(-span / 2 + w / 2 + 0.25, span / 2 - w / 2 - 0.2))
+                    y_, sc_, rot_ = float(gr.uniform(0.9, 2.3)), float(gr.uniform(0.8, 1.2)), float(gr.normal(0, 0.06))
+                    if room_clear(name, wall, along, y_, sc_, rot_) == 0:
+                        room_wall_decal(name, wall, along, y_, scale=sc_, eps=0.012 + 0.002 * j, rot=rot_)
+                        break
+                else:
+                    print(f'graffiti: no bare wall in room {i} for {name}, left out')
             if i == BATHROOM:  # tags on the stall partitions and doors
                 for j, z in enumerate((-2.2, -1.2, -0.2)):
                     name = gr.choice(cat('mk_', 'ex_', 'tag_'))
