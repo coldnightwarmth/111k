@@ -138,11 +138,11 @@ body.touch #hint { display: none; }
 #buttons button:active, #buttons button.on { background: rgba(233, 230, 220, .25); }
 #btnJump { --x: 66px; --y: 66px; --s: 100px; border-width: 2px !important; }
 #btnAct { --x: 180px; --y: 54px; --s: 78px; }
-#btnCrouch { --x: 164px; --y: 146px; --s: 52px; }
-#btnView { --x: 238px; --y: 126px; --s: 48px; }
+#btnCrouch { --x: 164px; --y: 146px; --s: 50px; }
+#btnView { --x: 238px; --y: 126px; --s: 50px; }
 #btnDrop { --x: 34px; --y: 182px; --s: 54px; }
 #btnGallery { --x: 226px; --y: 196px; --s: 48px; }
-#btnEmote { --x: 98px; --y: 184px; --s: 58px; }
+#btnEmote { --x: 98px; --y: 184px; --s: 50px; }
 #btnChat { --x: 40px; --y: 246px; --s: 44px; }
 @media (min-width: 700px) and (min-height: 500px) {
   #buttons { transform: scale(1.18); transform-origin: bottom right; }
