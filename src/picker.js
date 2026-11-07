@@ -23,42 +23,64 @@ function createPortraits() {
   const key = new THREE.DirectionalLight(0xfff1e0, 2.4); key.position.set(1.4, 2.6, 2.2); scene.add(key);
   const rim = new THREE.DirectionalLight(0xff79c0, 1.6); rim.position.set(-2, 1.6, -1.8); scene.add(rim);
   const camera = new THREE.PerspectiveCamera(24, W / H, .1, 30);
-  const box = new THREE.Box3(), feet = new THREE.Vector3();
   const tan = Math.tan(THREE.MathUtils.degToRad(camera.fov / 2));
-  function frame() {
-    const top = box.max.y + .02, bottom = Math.min(0, box.min.y);
-    const cx = (box.min.x + box.max.x) / 2, halfW = (box.max.x - box.min.x) / 2 + .06;
+  const v = new THREE.Vector3();
+  const loaded = new Set();
+  // how far the avatar reaches from the axis it turns on, and from its feet to the top of its head (the
+  // skinned, posed vertices: the quick bounding boxes are off), so it fits the card at every angle
+  function extent(root) {
+    let reach = 0, top = -Infinity, bottom = Infinity;
+    root.traverse(o => {
+      if (!o.isMesh) return;
+      const pos = o.geometry.attributes.position;
+      for (let i = 0; i < pos.count; i++) {
+        v.fromBufferAttribute(pos, i);
+        if (o.isSkinnedMesh) o.applyBoneTransform(i, v);
+        v.applyMatrix4(o.matrixWorld);
+        reach = Math.max(reach, Math.hypot(v.x, v.z)); top = Math.max(top, v.y); bottom = Math.min(bottom, v.y);
+      }
+    });
+    return {reach, top, bottom};
+  }
+  function framing({reach, top, bottom}) {
+    top += .02; bottom = Math.min(0, bottom);
     let span = Math.max(MIN_SPAN, (top - bottom) / (1 - FOOT - HEAD));
-    span = Math.max(span, 2 * halfW / camera.aspect);
+    span = Math.max(span, 2 * (reach + .04) / camera.aspect);
     const cy = bottom - FOOT * span + span / 2;
-    // measured a little in front of the body's middle, so heads that stick out toward you still fit
-    const dist = span / 2 / tan + Math.max(0, box.max.z) * .6;
-    camera.position.set(cx, cy + .18, dist); camera.lookAt(cx, cy, 0);
-    camera.updateMatrixWorld();
-    return feet.set(cx, bottom, 0).project(camera);
+    // measured a little in front of the axis, so whatever swings toward you still fits
+    const dist = span / 2 / tan + reach * .6;
+    camera.position.set(0, cy + .18, dist); camera.lookAt(0, cy, 0); camera.updateMatrixWorld();
+    return {pos: camera.position.clone(), quat: camera.quaternion.clone(), feet: new THREE.Vector3(0, bottom, 0).project(camera)};
   }
   return {
-    async draw(look, canvas) {
+    // an avatar, set up to be drawn (and turned) on its card
+    async load(look) {
       const a = await createAvatar(look);
-      a.root.rotation.y = Math.PI + .38;
+      a.root.rotation.y = Math.PI;
       a.update(1 / 30, 0, {});
-      scene.add(a.root);
       a.root.updateMatrixWorld(true);
-      box.setFromObject(a.root, true);      // exact: the skinned, posed vertices (the quick box is off)
-      const f = frame();
+      const entry = {a, yaw: .38, frame: framing(extent(a.root))};
+      loaded.add(entry);
+      return entry;
+    },
+    paint(entry, canvas) {
+      const {a, frame} = entry;
+      a.root.rotation.y = Math.PI + entry.yaw;
+      camera.position.copy(frame.pos); camera.quaternion.copy(frame.quat); camera.updateMatrixWorld();
+      scene.add(a.root);
       renderer.render(scene, camera);
+      scene.remove(a.root);
       const ctx = canvas.getContext('2d'), w = canvas.width, h = canvas.height;
       ctx.clearRect(0, 0, w, h);
       // a soft shadow to stand on
-      const x = (f.x + 1) / 2 * w, y = (1 - f.y) / 2 * h, rx = w * .3, ry = h * .028;
+      const x = (frame.feet.x + 1) / 2 * w, y = (1 - frame.feet.y) / 2 * h, rx = w * .3, ry = h * .028;
       ctx.save(); ctx.translate(x, y); ctx.scale(1, ry / rx);
       const g = ctx.createRadialGradient(0, 0, 0, 0, 0, rx);
       g.addColorStop(0, 'rgba(0, 0, 0, .55)'); g.addColorStop(1, 'rgba(0, 0, 0, 0)');
       ctx.fillStyle = g; ctx.beginPath(); ctx.arc(0, 0, rx, 0, Math.PI * 2); ctx.fill(); ctx.restore();
       ctx.drawImage(renderer.domElement, 0, 0, w, h);
-      scene.remove(a.root); a.dispose();
     },
-    dispose() { renderer.dispose(); pmrem.dispose(); renderer.forceContextLoss?.(); },
+    dispose() { for (const e of loaded) e.a.dispose(); loaded.clear(); renderer.dispose(); pmrem.dispose(); renderer.forceContextLoss?.(); },
   };
 }
 
@@ -83,7 +105,7 @@ export function pickAvatar({previous = null, name = '', extra = null} = {}) {
     <div class="sheet">
       <label class="name"><span>name</span><input type="text" maxlength="24" placeholder="anon" autocomplete="off" spellcheck="false"></label>
       <div class="tabs" role="tablist" aria-label="who">${KINDS.map(([k, label]) => `<button type="button" role="tab" data-kind="${k}">${label}</button>`).join('')}</div>
-      ${previous ? `<div class="previous"><button type="button" class="card" data-id="previous"><canvas width="${W}" height="${H}"></canvas></button><p>last time</p></div>` : ''}
+      ${previous ? `<div class="previous"><p>last time</p><button type="button" class="card" data-id="previous"><canvas width="${W}" height="${H}"></canvas></button></div>` : ''}
       <div class="grid"></div>
       <div class="extra"></div>
       <div class="foot"><button type="button" class="go" disabled>enter the tunnel ${LADDER}</button></div>
@@ -94,10 +116,61 @@ export function pickAvatar({previous = null, name = '', extra = null} = {}) {
   input.value = name || '';
   for (const type of ['keydown', 'keyup']) input.addEventListener(type, e => e.stopPropagation());
   const portraits = createPortraits();
-  const drawn = new Map();
+  const drawn = new Map(), entries = new Map();
   // one portrait at a time keeps the GPU and network calm
   let queue = Promise.resolve();
-  const draw = (look, canvas) => { queue = queue.then(() => portraits.draw(look, canvas)).catch(err => console.warn('portrait', err)); return queue; };
+  const draw = (look, card) => {
+    queue = queue.then(() => portraits.load(look)).then(e => { entries.set(card, e); portraits.paint(e, card.querySelector('canvas')); })
+      .catch(err => console.warn('portrait', err));
+    return queue;
+  };
+  // drag across a card to turn whoever's on it (a click without a drag still picks them); it spins on a
+  // little when you let go
+  let spinning = null;
+  function turnable(card) {
+    let down = null, moved = false, frame = 0, swallow = false;
+    const paint = () => { frame = 0; const e = entries.get(card); if (e) portraits.paint(e, card.querySelector('canvas')); };
+    card.addEventListener('pointerdown', e => {
+      if (e.button !== 0) return;
+      down = {x: e.clientX, t: performance.now(), vel: 0}; moved = false;
+      if (spinning?.card === card) { cancelAnimationFrame(spinning.raf); spinning = null; }
+      card.setPointerCapture(e.pointerId);
+    });
+    card.addEventListener('pointermove', e => {
+      if (!down) return;
+      const dx = e.clientX - down.x, now = performance.now();
+      if (!moved && Math.abs(dx) < 4) return;
+      moved = true; card.classList.add('turning');
+      const ent = entries.get(card);
+      if (ent) ent.yaw += dx * .012;
+      down.vel = dx * .012 / Math.max(8, now - down.t); down.x = e.clientX; down.t = now;
+      if (!frame) frame = requestAnimationFrame(paint);
+    });
+    const up = () => {
+      if (!down) return;
+      const ent = entries.get(card);
+      card.classList.remove('turning');
+      if (moved) {
+        swallow = true;
+        let vel = performance.now() - down.t < 80 ? down.vel : 0, last = performance.now();
+        const spin = now => {
+          const dt = Math.min(50, now - last); last = now;
+          vel *= Math.exp(-dt / 260);
+          if (!ent || Math.abs(vel) < .0004) { spinning = null; return; }
+          ent.yaw += vel * dt; portraits.paint(ent, card.querySelector('canvas'));
+          spinning = {card, raf: requestAnimationFrame(spin)};
+        };
+        if (spinning) cancelAnimationFrame(spinning.raf);
+        spinning = {card, raf: requestAnimationFrame(spin)};
+      }
+      down = null;
+    };
+    card.addEventListener('pointerup', up);
+    card.addEventListener('pointercancel', () => { down = null; card.classList.remove('turning'); });
+    // the click that ends a drag doesn't pick
+    card.addEventListener('click', e => { if (swallow) { swallow = false; e.stopImmediatePropagation(); } }, true);
+    card.addEventListener('dblclick', e => { if (moved) e.stopImmediatePropagation(); }, true);
+  }
 
   const cards = {};
   for (const [k] of KINDS) {
@@ -105,6 +178,7 @@ export function pickAvatar({previous = null, name = '', extra = null} = {}) {
       const b = document.createElement('button');
       b.type = 'button'; b.className = 'card loading'; b.dataset.id = `${k}:${i}`;
       b.innerHTML = `<canvas width="${W}" height="${H}"></canvas>`;
+      turnable(b);
       b.addEventListener('click', () => select(b.dataset.id));
       return b;
     });
@@ -115,7 +189,7 @@ export function pickAvatar({previous = null, name = '', extra = null} = {}) {
     for (const t of root.querySelectorAll('.tabs button')) t.setAttribute('aria-selected', t.dataset.kind === k);
     cards[k].forEach((b, i) => {
       if (drawn.has(b)) return;
-      drawn.set(b, draw(looks[k][i], b.querySelector('canvas')).then(() => b.classList.remove('loading')));
+      drawn.set(b, draw(looks[k][i], b).then(() => b.classList.remove('loading')));
     });
   }
   function select(id) {
@@ -126,8 +200,9 @@ export function pickAvatar({previous = null, name = '', extra = null} = {}) {
   for (const t of root.querySelectorAll('.tabs button')) t.addEventListener('click', () => show(t.dataset.kind));
   if (previous) {
     const card = root.querySelector('.previous .card');
+    turnable(card);
     card.addEventListener('click', () => select('previous'));
-    draw(previous, card.querySelector('canvas'));
+    draw(previous, card);
   }
   show(kind);
   if (chosen) select(chosen);
@@ -140,7 +215,8 @@ export function pickAvatar({previous = null, name = '', extra = null} = {}) {
       if (!chosen) return;
       const look = chosen === 'previous' ? previous : looks[chosen.split(':')[0]][Number(chosen.split(':')[1])];
       root.classList.add('done');
-      setTimeout(() => { root.hidden = true; extra?.remove(); root.innerHTML = ''; portraits.dispose(); }, 600);
+      if (spinning) cancelAnimationFrame(spinning.raf);
+      setTimeout(() => { root.hidden = true; extra?.remove(); root.innerHTML = ''; queue.then(() => portraits.dispose()); }, 600);
       resolve({look, name: input.value.trim()});
     };
     go.addEventListener('click', finish);
