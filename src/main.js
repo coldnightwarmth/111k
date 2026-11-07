@@ -245,7 +245,15 @@ async function start() {
     }
     return doorBatches.get(k);
   }
-  const pieces = level.meta.graffiti || [];
+  // The tags menu (and scrolling through tags) goes word by word: names are style_word[_variant], so every
+  // take on a word sits together (words A to Z; within one, tags first, then throw-ups, pieces and the rest,
+  // each plain before its variants).
+  const STYLE_ORDER = ['tag', 'tu', 'pc', 'hs', 'fx', 'rl', 'sc', 'sn', 'mk', 'ex', 'dd'];
+  const pieceKey = name => { const [style, word = '', ...rest] = name.split('_'), k = STYLE_ORDER.indexOf(style);
+    return [word, k < 0 ? STYLE_ORDER.length : k, rest.join('_')]; };
+  const byWord = (a, b) => { const x = pieceKey(a.name), y = pieceKey(b.name);
+    return x[0].localeCompare(y[0], undefined, {numeric: true}) || x[1] - y[1] || x[2].localeCompare(y[2]); };
+  const pieces = [...(level.meta.graffiti || [])].sort(byWord);
   const pieceByName = new Map(pieces.map(p => [p.name, p]));
   const pageBatches = new Map();
   function pageBatch(page) {
