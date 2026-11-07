@@ -9,7 +9,7 @@ import {EYE_HEIGHT} from './motion.js';
 import {PAINT_COLORS, RANDOM_PAINT} from './decals.js';
 
 const BEAM_COLOR = new THREE.Color(1, .93, .8);
-export const ITEM_NAMES = {flashlight: 'flashlight', paintball: 'paintball marker', spray: 'spray can', bucket: 'bucket and sponge'};
+export const ITEM_NAMES = {flashlight: 'flashlight', paintball: 'paintball marker', spray: 'spray can', bucket: 'bucket and sponge', crown: 'golden crown'};
 
 const std = (color, roughness = .55, metalness = .2, extra = {}) => new THREE.MeshStandardMaterial({color, roughness, metalness, ...extra});
 function part(g, geo, mat, [x, y, z] = [0, 0, 0], [rx, ry, rz] = [0, 0, 0]) {
@@ -243,7 +243,56 @@ function bucketModel(id) {
   return g;
 }
 
-const MODELS = {flashlight: flashlightModel, paintball: paintballModel, spray: sprayModel, bucket: bucketModel};
+// ---------------------------------------------------------------- the crown
+// A gold band rising into eight points, each tipped with a pearl, red and blue stones round the
+// band and a velvet cap inside. Worn, it sits on the head (king of the hill).
+const CROWN_R = .075, CROWN_BAND = .03, CROWN_PEAK = .045, CROWN_POINTS = 8, CROWN_SCALE = 2;   // 30 cm across: these are big heads
+// where it sits in the head bone's space: hats start about 1.15 up the bone, on every head
+export const CROWN_ON_HEAD = {y: 1.0, z: 0, scale: 2.5, tilt: 0};
+function crownModel() {
+  const g = new THREE.Group(), c = new THREE.Group();
+  c.scale.setScalar(CROWN_SCALE); g.add(c);
+  const gold = std(0xffcf55, .28, .8, {emissive: 0x7a5000, emissiveIntensity: .6, side: THREE.DoubleSide});
+  const goldSolid = std(0xffcf55, .3, .8, {emissive: 0x7a5000, emissiveIntensity: .6});
+  // the band: an open cylinder whose top edge zigzags up into the points, flaring a touch
+  const seg = CROWN_POINTS * 8, top = CROWN_BAND + CROWN_PEAK;
+  const band = new THREE.CylinderGeometry(1, 1, 1, seg, 3, true);
+  const bp = band.attributes.position;
+  for (let i = 0; i < bp.count; i++) {
+    const x = bp.getX(i), y = bp.getY(i) + .5, z = bp.getZ(i);
+    const a = Math.atan2(x, z), f = ((a / (2 * Math.PI)) * CROWN_POINTS % 1 + 1) % 1;
+    const rise = Math.abs(2 * f - 1);                                   // 1 at a point, 0 between
+    // rows: the bottom edge, the top of the plain band, partway up the point, the zigzag edge
+    const h = y < .01 ? 0 : y < .34 ? CROWN_BAND * .75 : y < .67 ? CROWN_BAND + CROWN_PEAK * rise * .45 - .006 * (1 - rise) : CROWN_BAND + CROWN_PEAK * rise;
+    const r = CROWN_R * (1 + .1 * h / top);
+    bp.setXYZ(i, Math.sin(a) * r, h, Math.cos(a) * r);
+  }
+  band.computeVertexNormals();
+  part(c, band, gold);
+  // rims round the bottom and the top of the plain band
+  part(c, new THREE.TorusGeometry(CROWN_R * 1.005, .0055, 8, 48), goldSolid, [0, .004, 0], [Math.PI / 2, 0, 0]);
+  part(c, new THREE.TorusGeometry(CROWN_R * (1 + .1 * CROWN_BAND / top) + .001, .0035, 6, 48), goldSolid, [0, CROWN_BAND, 0], [Math.PI / 2, 0, 0]);
+  // a pearl on every point, a stone below each, alternating ruby and sapphire
+  const pearl = std(0xfff6e6, .25, .1), stones = [std(0xc0142c, .12, .2, {emissive: 0x3a0008}), std(0x1d4fd6, .12, .2, {emissive: 0x060f3a})];
+  for (let k = 0; k < CROWN_POINTS; k++) {
+    const a = 2 * Math.PI * k / CROWN_POINTS, rt = CROWN_R * 1.1 + .001;
+    part(c, new THREE.SphereGeometry(.0085, 12, 8), pearl, [Math.sin(a) * rt, top + .006, Math.cos(a) * rt]);
+    const rb = CROWN_R * (1 + .1 * CROWN_BAND * .45 / top) + .003;
+    const gem = part(c, new THREE.SphereGeometry(.009, 12, 8), stones[k % 2], [Math.sin(a) * rb, CROWN_BAND * .45, Math.cos(a) * rb]);
+    gem.scale.set(1, 1.15, .5); gem.rotation.y = a;
+    // a little gold setting round the stone
+    const set = part(c, new THREE.TorusGeometry(.0098, .0018, 5, 16), goldSolid, [Math.sin(a) * (rb - .001), CROWN_BAND * .45, Math.cos(a) * (rb - .001)]);
+    set.rotation.y = a; set.scale.y = 1.15;
+  }
+  // the velvet cap inside, with a gold button on top
+  const cap = part(c, new THREE.SphereGeometry(CROWN_R * .95, 24, 10, 0, Math.PI * 2, 0, Math.PI / 2), std(0x7d0f22, .92, 0), [0, CROWN_BAND * .2, 0]);
+  cap.scale.y = .62;
+  part(c, new THREE.SphereGeometry(.011, 12, 8), goldSolid, [0, CROWN_BAND * .2 + CROWN_R * .95 * .62 + .006, 0]);
+  g.userData = {tip: new THREE.Vector3(0, top * CROWN_SCALE, 0), ground: 0, groundRoll: 0, standing: true};
+  return g;
+}
+
+const MODELS = {flashlight: flashlightModel, paintball: paintballModel, spray: sprayModel, bucket: bucketModel, crown: crownModel};
 export const ITEM_MODELS = MODELS;   // for previews
 
 // ------------------------------------------------------------------- falling
@@ -309,6 +358,9 @@ export function addOutline(model) {
   return shells;
 }
 
+const worn = s => s.type === 'crown' && s.on;
+const _m = new THREE.Matrix4(), _onHead = new THREE.Matrix4();
+
 export function createItems({scene, camera, hits, shadows = null}) {
   const items = new Map();          // id -> {state, model, kick}
   const spots = [];                 // real spotlights so avatars catch the beams
@@ -368,7 +420,9 @@ export function createItems({scene, camera, hits, shadows = null}) {
     },
     // which item (if any) shows the pick-up glow
     highlight(id) { highlighted = id; },
-    heldBy(id) { for (const it of items.values()) if (it.state.holder === id) return it; return null; },
+    heldBy(id) { for (const it of items.values()) if (it.state.holder === id && !worn(it.state)) return it; return null; },
+    // the crown on this player's head, if they have it on
+    wornBy(id) { for (const it of items.values()) if (it.state.holder === id && worn(it.state)) return it; return null; },
     // recoil / shake for your own view model
     kick(id, amount = 1) { const it = items.get(id); if (it) it.kick = amount; },
     shake(id) { const it = items.get(id); if (it) it.shake = .5; },
@@ -428,6 +482,18 @@ export function createItems({scene, camera, hits, shadows = null}) {
           m.updateMatrixWorld();
           origin = m.localToWorld(tmpV.copy(u.tip)).clone();
           dir = new THREE.Vector3(0, 0, -1).applyQuaternion(m.getWorldQuaternion(tmpQ));
+        } else if (worn(s)) {
+          // on its wearer's head (yours folds away in first person, and the crown with it)
+          const avatar = s.holder === myId ? me : avatarOf(s.holder);
+          if (m.parent !== scene) scene.add(m);
+          if (avatar?.head) {
+            avatar.head.updateWorldMatrix(true, false);
+            _onHead.makeRotationX(CROWN_ON_HEAD.tilt).setPosition(0, CROWN_ON_HEAD.y, CROWN_ON_HEAD.z || 0);
+            _onHead.scale(tmpV.setScalar(CROWN_ON_HEAD.scale));
+            _m.multiplyMatrices(avatar.head.matrixWorld, _onHead).decompose(m.position, m.quaternion, m.scale);
+            m.visible = avatar.root.visible && avatar.model.visible !== false && m.scale.x > .01;
+          } else m.visible = false;
+          continue;
         } else if (s.holder === myId && !thirdPerson) {
           if (m.parent !== view) view.add(m);
           m.visible = true;
@@ -450,6 +516,10 @@ export function createItems({scene, camera, hits, shadows = null}) {
             const sc = it.scrub > 0 ? Math.sin(it.scrub * 40) * .03 : 0;
             u.sponge.position.set(-.02 + sc, -.03 + bob + Math.abs(sc) * .4, -.06 - (it.scrub > 0 ? .06 : 0));
             u.sponge.rotation.set(-.9, -.25, .15 + sc * 3);
+          } else if (s.type === 'crown') {
+            m.scale.setScalar(.45);
+            m.position.set(-.05, -.02 + bob, -.1);
+            m.rotation.set(.3, .3, -.05);
           } else {
             m.position.set(0, bob, 0);
             m.rotation.set(.04, -.06, 0);
@@ -477,7 +547,7 @@ export function createItems({scene, camera, hits, shadows = null}) {
           dir = new THREE.Vector3(-Math.sin(yaw) * Math.cos(pitch), Math.sin(pitch), -Math.cos(yaw) * Math.cos(pitch));
           // gripped in the right hand, aimed where its holder is looking
           if (s.type === 'spray') m.rotation.set(-.35 + pitch * .5, yaw, 0, 'YXZ');
-          else if (s.type === 'bucket') m.rotation.set(0, yaw, 0);
+          else if (s.type === 'bucket' || s.type === 'crown') m.rotation.set(0, yaw, 0);
           else m.rotation.set(pitch, yaw, 0, 'YXZ');
           if (s.type === 'bucket' && avatar?.handL && socket) {
             m.scale.setScalar(1);
@@ -493,6 +563,7 @@ export function createItems({scene, camera, hits, shadows = null}) {
             socket.getWorldPosition(m.position);
             if (s.type === 'paintball') m.position.addScaledVector(dir, .08).y += .06;
             else if (s.type === 'spray') m.position.y -= .07 * CAN_SCALE;
+            else if (s.type === 'crown') m.position.addScaledVector(dir, .1).y -= .1;   // held by the band, out in front
             else if (avatar.hand) {
               // a torch in a fist: the middle of the barrel sits in the closed hand, just ahead of the wrist
               avatar.hand.getWorldPosition(m.position);

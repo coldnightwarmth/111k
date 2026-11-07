@@ -341,3 +341,86 @@ test('bucket: scrubbing splats, tags and the level graffiti, only with the bucke
   assert.deepEqual(marksMessage(validMarks(structuredClone(marks))).erased, ['graffiti_0:1.00,2.00,3.00'], 'kept and sent to newcomers');
   assert.equal(erase('nonsense', 'x').out.length, 0);
 });
+
+test('king of the hill: start with the crown, grace, knocked off by punch and paintball, cumulative times, a winner', async () => {
+  const {handleMessage, newPlayer, kothTick, kothNext} = await import('../room.js');
+  const K = await import('../../src/koth.js');
+  const {ITEM_SPAWNS} = await import('../../src/world-items.js');
+  const items = Object.fromEntries(ITEM_SPAWNS.map(s => [s.id, {...s, holder: null, on: false}]));
+  const crown = items.cr1, gun = items.pb1;
+  assert.equal(crown.type, 'crown');
+  const koth = K.freshKoth();
+  const a = newPlayer('aaa', 0), b = newPlayer('bbb', 0);
+  a.name = 'alice'; b.name = 'bob';
+  const players = [a, b];
+  const room = {items, marks: null, race: null, koth, players: () => players};
+  let now = 1_000_000;
+  const send = (p, m, dt = 300) => { now += dt; p.lastPunch = 0; p.lastShot = 0; return handleMessage(p, JSON.stringify(m), now, room); };
+  const tick = dt => { now += dt; return kothTick(room, now).out.map(o => o.msg); };
+  const events = r => r.out.filter(o => o.msg.type === 'koth').map(o => o.msg.event);
+  a.pose = {x: crown.x, y: 1.45, z: crown.z, yaw: 0, pitch: 0, g: 0};
+  b.pose = {x: crown.x + .5, y: 1.45, z: crown.z, yaw: 0, pitch: 0, g: 0};
+
+  assert.equal(send(a, {type: 'koth'}).out.length, 0, 'no crown in hand, no game');
+  send(a, {type: 'pickup', id: 'cr1'});
+  assert.equal(crown.holder, 'aaa'); assert.equal(crown.on, false, 'picked up normally: in the hand');
+  let r = send(a, {type: 'koth'});
+  assert.deepEqual(events(r), ['start']);
+  assert.equal(koth.state, 'grace'); assert.equal(crown.on, true); assert.equal(koth.wearer, 'aaa');
+  assert.equal(send(a, {type: 'drop', id: 'cr1', x: crown.x, z: crown.z}).out.length, 0, 'no taking it off mid-game');
+  // hands are free while it's on your head
+  items.pb1.holder = null; a.pose.x = gun.x; a.pose.z = gun.z; b.pose.x = gun.x + .5; b.pose.z = gun.z;
+  send(a, {type: 'pickup', id: 'pb1'});
+  assert.equal(gun.holder, 'aaa');
+  assert.ok(kothNext(koth) <= koth.graceEnds);
+  assert.deepEqual(tick(K.KOTH_GRACE_MS).map(m => m.event), ['grace']);
+  assert.equal(koth.state, 'running');
+  // 5 s on, then punched: it comes off with a pop, and the loss says how long they've had it
+  now = koth.graceEnds + 5000;
+  r = send(b, {type: 'punch', target: 'aaa'}, 0);
+  const lost = r.out.find(o => o.msg.type === 'koth' && o.msg.event === 'lost').msg;
+  assert.equal(lost.by, 'aaa'); assert.equal(lost.time, 5000); assert.equal(lost.how, 'punch');
+  assert.equal(crown.holder, null); assert.equal(crown.on, false);
+  assert.ok(r.out.find(o => o.msg.type === 'item' && o.msg.item.id === 'cr1').msg.fall, 'pops off the head');
+  // picking it up mid-game puts it straight on, even with full hands
+  items.fl1.holder = 'bbb';
+  b.pose.x = crown.x; b.pose.z = crown.z;
+  r = send(b, {type: 'pickup', id: 'cr1'}, 1000);
+  assert.equal(crown.holder, 'bbb'); assert.equal(crown.on, true); assert.equal(koth.wearer, 'bbb');
+  assert.deepEqual(events(r), ['take']);
+  // a paintball knocks it off when it lands, not when it's fired
+  a.pose.x = b.pose.x + 5; a.pose.z = b.pose.z; gun.holder = "aaa";   // (the punch knocked the marker out of her hand too)
+  r = send(a, {type: 'shoot', o: [a.pose.x, 1.3, a.pose.z], v: [-20, 0, 0], c: 0xff0000, s: 1, t: .25, target: 'bbb', local: {p: [0, 1, 0], n: [1, 0, 0]}}, 2000);
+  assert.ok(r.out.some(o => o.msg.type === "shot"), JSON.stringify(r.out)); assert.equal(koth.hits.length, 1);
+  assert.equal(crown.holder, 'bbb', 'still on while the ball is in the air');
+  const msgs = tick(300);
+  const shot = msgs.find(m => m.event === 'lost');
+  assert.equal(shot.how, 'paintball'); assert.equal(shot.by, 'bbb');
+  assert.equal(shot.time, 2250, 'banked up to when the ball landed');
+  assert.equal(crown.on, false);
+  // alice takes it back and her time carries on from where it was
+  a.pose.x = crown.x; a.pose.z = crown.z; gun.holder = null;
+  send(a, {type: 'pickup', id: 'cr1'}, 100);
+  assert.equal(koth.wearer, 'aaa');
+  assert.equal(K.kothTime(koth, 'aaa', now + 1000), 6000);
+  const due = kothNext(koth);
+  assert.equal(due, now + 55000);
+  assert.equal(tick(54000).length, 0);
+  const win = tick(1000);
+  assert.deepEqual(win.map(m => m.event), ['win']);
+  assert.equal(win[0].by, 'aaa'); assert.equal(win[0].byName, 'alice');
+  assert.equal(koth.state, 'done'); assert.equal(crown.on, true, 'the winner keeps it on');
+  assert.equal(kothNext(koth), null);
+  // after the game the winner can take it off and start another
+  send(a, {type: 'drop', id: 'cr1', x: a.pose.x, z: a.pose.z});
+  assert.equal(crown.holder, null);
+  send(a, {type: 'pickup', id: 'cr1'});
+  assert.equal(crown.on, false);
+  assert.deepEqual(events(send(a, {type: 'koth'})), ['start']);
+  assert.deepEqual(koth.times, {}, 'a new game starts everyone from zero');
+  // left lying too long, the game is called off
+  items.pb1.holder = 'bbb'; b.pose.x = a.pose.x + .5; b.pose.z = a.pose.z;
+  send(b, {type: 'punch', target: 'aaa'});
+  assert.deepEqual(tick(K.KOTH_UNCLAIMED_MS).map(m => m.event), ['grace', 'cancel']);
+  assert.equal(koth.state, 'cancelled');
+});

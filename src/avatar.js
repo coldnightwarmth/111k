@@ -98,7 +98,8 @@ function createLookPose(model) {
 export async function createAvatar(look) {
   look = normalizeAppearance(look);
   const name = characterId(look), c = await character(name);
-  const needed = partsFor(look, c.index);
+  // the hatless look's parts too: a crown takes the place of any hat (and shows the hair under it)
+  const needed = [...new Set([...partsFor(look, c.index), ...partsFor({...look, hat: 'none'}, c.index)])];
   const parts = await Promise.all(needed.map(p => part(name, c.index.parts[p].file)));
   const model = cloneRig(c.scene);
   needed.forEach((p, i) => attachPart(model, parts[i], p, c.index.parts[p].parent));
@@ -136,12 +137,20 @@ export async function createAvatar(look) {
   let lastPt = -1, lastHand = 0, tail = null;
   const punchCurve = k => Math.max(0, Math.min(1, k / .08, (1 - k) / .3));
   const head = model.getObjectByName('Head');
-  let moving = false, speed = 0, walkBlend = 0, holdBlend = 0, hideHead = false;
+  let moving = false, speed = 0, walkBlend = 0, holdBlend = 0, hideHead = false, crowned = false;
 
   return {
     root, model, socket, hand: model.getObjectByName('HandR') || model.getObjectByName('Hand.R'),
     handL: model.getObjectByName('HandL') || model.getObjectByName('Hand.L'), look, scale: AVATAR_SCALE, eye: 1.45, pitch: 0,
     setVisible(v) { model.visible = v; },
+    head,
+    // wearing the crown: their hat comes off for it
+    setCrowned(on) {
+      if (on === crowned) return;
+      crowned = on;
+      wardrobe.setAppearance(on ? {...look, hat: 'none'} : look);
+      wardrobe.applyHeadScale();
+    },
     // first person: keep the body (so you see your own punch) but fold the head away
     setHeadless(v) { hideHead = v; },
     // velocity: horizontal speed (m/s); motion: {crouch, jumpTime, jumpPower, emote, emoteTime, pitch, punchTime, holding}

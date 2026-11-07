@@ -253,3 +253,17 @@ body.touch #chat .log { max-height: min(30vh, calc(100vh - 260px)); }
 /* stopped on exactly 111: it blinks through the hold */
 #speedo.on.blink { animation: speedo-blink .32s steps(1, end) infinite; }
 @keyframes speedo-blink { 0% { opacity: .95; } 50% { opacity: .08; } }
+
+/* king of the hill: who has the crown and how long they've had it, top middle while a game is on */
+#koth { position: fixed; left: 50%; top: max(12px, env(safe-area-inset-top)); transform: translateX(-50%); margin: 0;
+  display: flex; align-items: baseline; gap: 8px; padding: 5px 12px; border-radius: 999px; background: rgba(10, 10, 12, .55);
+  color: var(--ink, #e9e6dc); text-shadow: 0 1px 2px #000; white-space: nowrap; pointer-events: none;
+  font-variant-numeric: tabular-nums; opacity: 0; transition: opacity .6s; }
+#koth.on { opacity: 1; }
+#koth svg { width: 18px; height: 12px; fill: #f2b93a; align-self: center; filter: drop-shadow(0 0 4px rgba(242, 185, 58, .6)); }
+#koth span { font-size: 13px; }
+#koth b { font-size: 18px; font-weight: 600; color: #f6c654; min-width: 2.6em; text-align: right; }
+#koth b:empty { display: none; }
+#koth small { font-size: 11px; color: var(--dim); }
+#koth small:empty { display: none; }
+#koth.grace b { color: var(--ink, #e9e6dc); }

@@ -228,6 +228,11 @@ def build(ctx, door_x):
     ctx['ITEMS'].append({'type': 'paintball', 'x': round(float(p[0]), 3), 'y': 0.03, 'z': round(float(p[2]), 3),
                          'yaw': round(float(0.9 + W.yaw), 3)})
 
+    # the golden crown, on top of the stacked boxes in the corner (king of the hill)
+    p = W.T((3.05, 0.9, 2.6))
+    ctx['ITEMS'].append({'type': 'crown', 'x': round(float(p[0]), 3), 'y': 0.9, 'z': round(float(p[2]), 3),
+                         'yaw': round(float(-0.97 + W.yaw), 3)})
+
     # spawn points (world space), facing the door
     for x, z in [(0.0, 1.5), (0.6, 1.3), (-0.4, 1.8), (0.9, 1.9), (0.2, 0.9)]:
         p = W.T((x, 0, z))

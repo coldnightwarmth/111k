@@ -3,7 +3,8 @@
 // WebSockets plus automatic ping/pong mean an idle room costs nothing.
 import {INACTIVE_MS, IDLE_RESET_MS, MAX_PLAYERS} from '../src/protocol.js';
 import {freshRace, publicRace} from '../src/race.js';
-import {handleMessage, newPlayer, snapshot, freshItems, validItems, releaseItems, validMarks, marksMessage, itemsAtSpawn} from './room.js';
+import {handleMessage, newPlayer, snapshot, freshItems, validItems, releaseItems, validMarks, marksMessage, itemsAtSpawn,
+  kothTick, kothNext, freshKoth, publicKoth} from './room.js';
 
 function allowedOrigins(env) {
   const list = (env.ALLOWED_ORIGINS || '').split(',').map(s => s.trim()).filter(Boolean);
@@ -49,6 +50,21 @@ export class Room {
     return this.race;
   }
   async saveRace() { await this.ctx.storage.put?.('race', this.race); }
+  // king of the hill (survives the room sleeping too)
+  async loadKoth() {
+    if (!this.koth) { const k = await this.ctx.storage.get?.('koth'); this.koth = k && typeof k.state === 'string' && k.times ? k : freshKoth(); }
+    return this.koth;
+  }
+  async saveKoth() { await this.ctx.storage.put?.('koth', this.koth); }
+  // move the game along (the grace running out, a paintball landing, someone getting to a minute)
+  async runKoth(now, cause) {
+    const koth = await this.loadKoth();
+    if (cause) koth.cause = cause;
+    const r = kothTick({items: await this.loadItems(), koth, players: () => this.players()}, now);
+    for (const {msg} of r.out) this.broadcast(msg);
+    if (r.itemsChanged) await this.saveItems();
+    if (r.kothChanged) await this.saveKoth();
+  }
   saveMarksSoon() {
     if (this.marksTimer) return;
     this.marksTimer = setTimeout(() => { this.marksTimer = null; this.ctx.storage.put?.('marks', this.marks); }, 4000);
@@ -63,6 +79,8 @@ export class Room {
     if (live.length) times.push(Math.min(...live.map(p => p.lastActive)) + INACTIVE_MS + 1000);
     // items out of place: put them back once the room has been idle long enough
     if (everyone.length && !itemsAtSpawn(await this.loadItems())) times.push(Math.max(...everyone.map(p => p.lastActive)) + IDLE_RESET_MS + 500);
+    const koth = kothNext(await this.loadKoth());
+    if (koth !== null && everyone.length) times.push(koth + 20);
     if (!times.length) return;
     let at = Math.min(...times);
     const pending = await this.ctx.storage.getAlarm?.();
@@ -86,6 +104,7 @@ export class Room {
     this.send(server, snapshot(this.players(), now, await this.loadItems()));
     this.send(server, marksMessage(await this.loadMarks()));
     this.send(server, {type: 'race', race: publicRace(await this.loadRace(), now)});
+    this.send(server, {type: 'koth', koth: publicKoth(await this.loadKoth(), now)});
     await this.scheduleAlarm();
     return new Response(null, {status: 101, webSocket: client});
   }
@@ -95,8 +114,8 @@ export class Room {
     if (!player) return;
     const now = Date.now();
     const items = await this.loadItems(), marks = await this.loadMarks();
-    const race = await this.loadRace();
-    const result = handleMessage(player, data, now, {items, marks, race, players: () => this.players()});
+    const race = await this.loadRace(), koth = await this.loadKoth();
+    const result = handleMessage(player, data, now, {items, marks, race, koth, players: () => this.players()});
     if (result.close) { ws.close(1009, result.close); return; }
     if (result.changed) ws.serializeAttachment(player);
     for (const {to, msg} of result.out) {
@@ -107,6 +126,8 @@ export class Room {
     if (result.itemsChanged) { await this.saveItems(); await this.scheduleAlarm(); }
     if (result.marksChanged) this.saveMarksSoon();
     if (result.raceChanged) await this.saveRace();
+    if (result.kothChanged) await this.saveKoth();
+    if (result.kothChanged && !result.itemsChanged) await this.scheduleAlarm();
     if (result.returning) { this.broadcast(snapshot(this.players(), now, items)); await this.scheduleAlarm(); }
   }
 
@@ -120,8 +141,9 @@ export class Room {
       this.broadcast({type: 'leave', id: p.id});
       const dropped = releaseItems(await this.loadItems(), p);
       for (const {msg} of dropped) this.broadcast(msg);
-      if (dropped.length) await this.saveItems();
+      if (dropped.length) { await this.saveItems(); await this.runKoth(now, 'left'); }
     }
+    await this.runKoth(now);
     // nobody connected has done anything for a while: tidy up
     const everyone = this.players();
     const lastActive = everyone.length ? Math.max(...everyone.map(p => p.lastActive)) : 0;
@@ -131,6 +153,7 @@ export class Room {
   async resetItems() {
     this.items = freshItems(); await this.saveItems();
     for (const item of Object.values(this.items)) this.broadcast({type: 'item', item});
+    await this.runKoth(Date.now(), 'reset');
   }
 
   async webSocketClose(ws) { await this.depart(ws); }
@@ -141,8 +164,9 @@ export class Room {
     this.broadcast({type: 'leave', id: p.id});
     const items = await this.loadItems();
     if (!this.sockets().some(o => o !== ws)) {
-      // last one out: everything goes back where it started
-      this.items = freshItems(); await this.saveItems(); return;
+      // last one out: everything goes back where it started (and any game is off)
+      this.items = freshItems(); await this.saveItems();
+      this.koth = freshKoth(); await this.saveKoth(); return;
     }
     // a refresh reconnects within a few seconds as the same player: keep their item for them,
     // and let an alarm (which survives hibernation) drop it if they don't come back
@@ -158,6 +182,6 @@ export class Room {
       for (const {msg} of releaseItems(items, {id: it.holder, pose: null})) this.broadcast(msg);
       changed = true;
     }
-    if (changed) await this.saveItems();
+    if (changed) { await this.saveItems(); await this.runKoth(Date.now(), 'left'); }
   }
 }

@@ -12,6 +12,7 @@ import {createMachine} from './machine.js';
 import {createShelves, SHELF_COLLIDERS} from './shelves.js';
 import {createCleaning} from './cleaning.js';
 import {MACHINE_COLLIDER, BUTTON, BUTTON_RANGE, RACE_LAPS} from './race.js';
+import {KOTH_GRACE_MS, KOTH_WIN_MS, kothActive, kothTime} from './koth.js';
 import {createMimic} from './mimic.js';
 import {createBeamShadows, castsBeamShadow} from './beamshadows.js';
 import {createWorldHits, cutDecal, createBatch, markMaterial, splatAtlas, splatCell, PAINT_COLORS, PAINT_ROWS, RANDOM_PAINT, rgbOf} from './decals.js';
@@ -182,7 +183,7 @@ async function start() {
     },
     onPrimary: () => primary(),
     onSecondary: () => secondary(),
-    onUse: () => { held() ? secondary() : grab(); },
+    onUse: () => { held() ? secondary() : grab() || secondary(); },
     onGallery: () => toggleGallery(),
   });
   // let go of the mouse for one of our own menus (not the gallery's Esc)
@@ -425,6 +426,29 @@ async function start() {
 
   // ------------------------------------------------------------- items
   const items = createItems({scene, camera, hits, shadows: beamShadows});
+  // king of the hill, as the server last told it (and when, to run its clocks on)
+  let koth = null, kothAt = 0, kothWonAt = -1e9;
+  const kothNow = () => koth ? koth.now + (performance.now() - kothAt) : 0;
+  const kothEl = $('koth'), kothWho = kothEl.querySelector('span'), kothClock = kothEl.querySelector('b'), kothMine = kothEl.querySelector('small');
+  const nameOf = id => id === network.id ? 'you' : (koth?.names?.[id] || 'anon');
+  const secs = ms => `${(Math.floor(ms / 100) / 10).toFixed(1)}`;
+  // top of the screen while a game's on: who has the crown and their time, and yours if it's not you
+  function updateKoth(now) {
+    const live = kothActive(koth), won = koth?.state === 'done' && now - kothWonAt < 8000;
+    kothEl.classList.toggle('on', live || won);
+    if (!live && !won) return;
+    const t = kothNow();
+    let who, clock, mine = '';
+    if (won) { who = `${nameOf(koth.winner)} ${koth.winner === network.id ? 'win' : 'wins'}`; clock = secs(KOTH_WIN_MS); }
+    else if (koth.state === 'grace') { who = koth.wearer ? `${nameOf(koth.wearer)} · grace` : 'grace'; clock = Math.max(0, Math.ceil((koth.graceEnds - t) / 1000)) + ''; }
+    else if (koth.wearer) { who = nameOf(koth.wearer); clock = secs(Math.min(KOTH_WIN_MS, kothTime(koth, koth.wearer, t))); }
+    else { who = 'crown up for grabs'; clock = ''; }
+    if (live && koth.state === 'running' && koth.wearer !== network.id && koth.times?.[network.id]) mine = `you ${secs(koth.times[network.id])}`;
+    if (kothWho.textContent !== who) kothWho.textContent = who;
+    if (kothClock.textContent !== clock) kothClock.textContent = clock;
+    if (kothMine.textContent !== mine) kothMine.textContent = mine;
+    kothEl.classList.toggle('grace', koth.state === 'grace');
+  }
   const prompt = $('prompt'), btnAct = $('btnAct');
   const held = () => network.id ? items.heldBy(network.id) : null;
   const heldType = () => held()?.state.type || '';
@@ -464,6 +488,7 @@ async function start() {
     if (h?.state.type === 'flashlight') { network.send({type: 'toggle', id: h.state.id, on: !h.state.on}); learn('flashlight'); return; }
     if (h?.state.type === 'paintball') { shoot(); return; }
     if (h?.state.type === 'spray') { spray(); return; }
+    if (h?.state.type === 'crown') { if (!kothActive(koth)) network.send({type: 'koth'}); learn('koth'); return; }
     if (h?.state.type === 'bucket') {
       if (cleanTarget) { network.send({type: 'erase', kind: cleanTarget.kind, id: cleanTarget.id}); items.scrub(h.state.id); learn('scrub'); }
       return;
@@ -475,7 +500,8 @@ async function start() {
   // front of you and it falls (everyone replays the same fall to the spot it settles on)
   const DROP_REACH = 2.8;
   function secondary() {
-    const h = held();
+    // hands empty, a game over and the crown still on: right-click takes it off
+    const h = held() || (!kothActive(koth) && network.id ? items.wornBy(network.id) : null);
     if (!h) return;
     const yaw = controls.state.yaw;
     learn('drop');
@@ -846,6 +872,17 @@ async function start() {
             burst(end, new THREE.Vector3(0, 1, 0), m.c);
           }
         }, from);
+      } else if (m.type === 'koth') {
+        koth = m.koth; kothAt = performance.now();
+        const who = m.by === network.id ? 'you' : (m.byName || 'anon');
+        const say = text => chat.record(text, {system: true});
+        if (m.event === 'start') say(`${who} started king of the hill: ${KOTH_GRACE_MS / 1000}s grace, then whoever wears the crown longest (a minute in all) wins`);
+        else if (m.event === 'grace') say(m.by ? `grace period over: ${m.by === network.id ? 'you have' : `${m.byName || 'anon'} has`} the crown, the clock's running` : `grace period over: the crown's up for grabs`);
+        else if (m.event === 'lost') {
+          const how = {punch: ' to a punch', paintball: ' to a paintball', left: ' (left)'}[m.how] || '';
+          say(`${who} lost the crown${how} · ${formatRace(m.time)} of ${formatRace(KOTH_WIN_MS)}`);
+        } else if (m.event === 'win') { say(`${who} ${m.by === network.id ? 'win' : 'wins'} king of the hill!`); kothWonAt = performance.now(); }
+        else if (m.event === 'cancel') say(`king of the hill called off: nobody picked the crown back up`);
       } else if (m.type === 'race') {
         machine.setRace(m.race);
         if (m.by && m.by !== network.id) machine.press();
@@ -1183,6 +1220,10 @@ async function start() {
       }
     }
 
+    // crowns on heads (their hats come off for it), and the king of the hill clock
+    me.setCrowned(!!network.id && !!items.wornBy(network.id));
+    for (const p of peers.values()) p.avatar?.setCrowned(!!items.wornBy(p.id));
+    updateKoth(now);
     // held items and what you can do right now
     items.frame(frameArgs(dt));
     // with the bucket: the paint or graffiti under the crosshair, glowing
@@ -1216,8 +1257,10 @@ async function start() {
       : h ? (type === 'flashlight' ? [['flashlight', `click: ${h.state.on ? 'turn off' : 'turn on'}`], drop]
         : type === 'paintball' ? [['fire', 'click: fire'], drop]
         : type === 'bucket' ? [['scrub', cleanTarget ? 'click: scrub it off' : 'aim at paint or graffiti to scrub it'], drop]
+        : type === 'crown' ? (kothActive(koth) ? [] : [['koth', 'click: start king of the hill'], drop])
         : [['spray', 'click a wall: spray'], ['pieces', 'esc: pick a piece'], drop])
-      : t ? [[`pickup:${t.state.type}`, `click: pick up ${ITEM_NAMES[t.state.type] || 'it'}`]] : [];
+      : t ? (t.state.type === 'crown' && kothActive(koth) ? [['pickup:crown:on', 'click: put on the crown']]
+        : [[`pickup:${t.state.type}`, `click: pick up ${ITEM_NAMES[t.state.type] || 'it'}`]]) : [];
     const hint = parts.filter(([k]) => !learned.has(k)).map(([, text]) => text).join('  ·  ');
     if (prompt.textContent !== hint) prompt.textContent = hint;
     document.body.classList.toggle('holding', !!h);
@@ -1226,7 +1269,7 @@ async function start() {
     const galleryLabel = type === 'paintball' ? 'paint' : 'tags';
     if (btnGallery.textContent !== galleryLabel) btnGallery.textContent = galleryLabel;
     const act = pushable ? 'push' : doorAim !== null ? 'close' : h ? (type === 'flashlight' ? (h.state.on ? 'light off' : 'light on')
-      : type === 'paintball' ? 'fire' : type === 'bucket' ? 'scrub' : 'spray') : t ? 'grab' : 'punch';
+      : type === 'paintball' ? 'fire' : type === 'bucket' ? 'scrub' : type === 'crown' ? 'start' : 'spray') : t ? 'grab' : 'punch';
     if (btnAct.textContent !== act) btnAct.textContent = act;
     document.body.classList.toggle('can-grab', !!t);
     // first person: say which emote you're doing, since you can't see yourself

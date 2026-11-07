@@ -8,6 +8,7 @@ import {CHAT_INTERVAL_MS, CHAT_TTL_MS, POSE_INTERVAL_MS, PICKUP_RANGE, PUNCH_RAN
   sanitizeChat, sanitizePose, samePose, cleanItem, sanitizeLook, sanitizeName, cleanSplat, cleanSpray} from '../src/protocol.js';
 import {ITEM_SPAWNS} from '../src/world-items.js';
 import {RACE_LAPS, RACE_TIMEOUT_MS, BUTTON, BUTTON_RANGE, MACHINE, LAP_ZONE, LAP_SLACK, loopAngle, freshRace, publicRace} from '../src/race.js';
+import {KOTH_GRACE_MS, KOTH_WIN_MS, KOTH_UNCLAIMED_MS, freshKoth, publicKoth, kothActive, kothTime} from '../src/koth.js';
 
 export function newPlayer(id, now) {
   return {id, pose: null, lastPose: 0, lastChat: 0, lastActive: now, lastPunch: 0, lastShot: 0, lastSpray: 0,
@@ -63,7 +64,11 @@ function dropAt(item, pose, dx = 0, dz = 0, y = null) {
   item.holder = null;
   item.x = pose.x + dx; item.z = pose.z + dz; item.y = y ?? (pose.g || 0) + .03;   // on whatever they stood on
   item.yaw = pose.yaw || 0;
+  if (item.type === 'crown') item.on = false;   // a crown on the ground isn't on anyone's head
 }
+// a worn crown sits on its wearer's head, leaving their hands free
+const worn = it => it.type === 'crown' && it.on;
+const handsFull = (items, id) => Object.values(items).some(it => it.holder === id && !worn(it));
 
 // The runner's way round the loop: unwrapped angle since the start. A lap counts back at the
 // machine after a full turn; the first lap can go either way, later ones must keep to it.
@@ -90,8 +95,11 @@ export function releaseItems(items, player) {
   const out = [];
   for (const it of Object.values(items)) {
     if (it.holder !== player.id) continue;
+    const head = worn(it) && player.pose;
     dropAt(it, player.pose || it, 0, 0);
-    out.push({to: 'all', msg: {type: 'item', item: cleanItem(it)}});
+    // a crown knocked off pops up off the head and falls at their feet
+    const fall = head ? {p: [player.pose.x, Math.round((player.pose.y + .12) * 1000) / 1000, player.pose.z], v: [0, 1.4, 0]} : undefined;
+    out.push({to: 'all', msg: {type: 'item', item: cleanItem(it), fall}});
   }
   return out;
 }
@@ -99,6 +107,15 @@ export function releaseItems(items, player) {
 // Returns {out: [{to: 'all' | 'self' | <player id>, msg}], changed, itemsChanged, returning, close}.
 // room: {items, players: () => [player records]}
 export function handleMessage(player, data, now, room = {items: {}, players: () => []}) {
+  const result = handle(player, data, now, room);
+  if (!room.koth || result.close) return result;
+  const k = kothTick(room, now);
+  result.out.push(...k.out);
+  if (k.itemsChanged) result.itemsChanged = true;
+  if (k.kothChanged) result.kothChanged = true;
+  return result;
+}
+function handle(player, data, now, room) {
   const out = [];
   // voice connection offers carry a session description, so they get more room than everything else
   if (typeof data !== 'string' || data.length > 16384) return {out, changed: false, close: 'Message too large'};
@@ -202,18 +219,36 @@ export function handleMessage(player, data, now, room = {items: {}, players: () 
     return {out, changed: true, raceChanged: true};
   }
 
+  // ---------------------------------------------------------- king of the hill
+  // clicking with the crown in your hand starts a game: it goes on your head
+  if (m.type === 'koth') {
+    const k = room.koth, crown = Object.values(items).find(it => it.type === 'crown' && it.holder === player.id && !it.on);
+    if (!k || !crown || kothActive(k) || !player.pose || player.inactive) return {out, changed: false};
+    player.lastActive = now;
+    Object.assign(k, freshKoth(), {state: 'grace', starter: player.id, starterName: player.name || '', startedAt: now,
+      graceEnds: now + KOTH_GRACE_MS, wearer: player.id, since: now + KOTH_GRACE_MS, names: {[player.id]: player.name || ''}});
+    crown.on = true;
+    out.push({to: 'all', msg: {type: 'item', item: cleanItem(crown)}});
+    out.push({to: 'all', msg: {type: 'koth', koth: publicKoth(k, now), event: 'start', by: player.id, byName: player.name || ''}});
+    return {out, changed: true, itemsChanged: true, kothChanged: true};
+  }
+
   // ---------------------------------------------------------------- items
   const item = typeof m.id === 'string' ? items[m.id] : null;
   if (m.type === 'pickup') {
     if (!item || item.holder || !player.pose || player.inactive) return {out, changed: false};
-    if (Object.values(items).some(it => it.holder === player.id)) return {out, changed: false};
+    // while a game is on, the crown goes straight on your head, whatever's in your hands
+    const crowning = item.type === 'crown' && kothActive(room.koth);
+    if (!crowning && handsFull(items, player.id)) return {out, changed: false};
     if (flat(player.pose, item) > PICKUP_RANGE) return {out, changed: false};
     item.holder = player.id; player.lastActive = now;
+    if (crowning) { item.on = true; room.koth.names[player.id] = player.name || ''; }
     out.push({to: 'all', msg: {type: 'item', item: cleanItem(item)}});
     return {out, changed: true, itemsChanged: true};
   }
   if (m.type === 'drop') {
     if (!item || item.holder !== player.id || !player.pose) return {out, changed: false};
+    if (worn(item) && kothActive(room.koth)) return {out, changed: false};   // no taking it off mid-game
     // put down where they aimed, or tossed and settled nearby: never far from them
     let dx = Number(m.x) - player.pose.x, dz = Number(m.z) - player.pose.z;
     if (!Number.isFinite(dx) || !Number.isFinite(dz)) { dx = 0; dz = 0; }
@@ -231,7 +266,7 @@ export function handleMessage(player, data, now, room = {items: {}, players: () 
     return {out, changed: true, itemsChanged: true};
   }
   if (m.type === 'toggle') {
-    if (!item || item.holder !== player.id) return {out, changed: false};
+    if (!item || item.holder !== player.id || item.type === 'crown') return {out, changed: false};
     item.on = m.on === true;
     out.push({to: 'all', msg: {type: 'item', item: cleanItem(item)}});
     return {out, changed: false, itemsChanged: true};
@@ -243,6 +278,7 @@ export function handleMessage(player, data, now, room = {items: {}, players: () 
     if (!target || target.id === player.id || flat(player.pose, target.pose) > PUNCH_RANGE) return {out, changed: true};
     const dx = target.pose.x - player.pose.x, dz = target.pose.z - player.pose.z, len = Math.hypot(dx, dz) || 1;
     out.push({to: 'all', msg: {type: 'punch', from: player.id, target: target.id, dir: [dx / len, dz / len], time: now}});
+    if (room.koth) room.koth.cause = 'punch';
     const dropped = releaseItems(items, target);
     out.push(...dropped);
     return {out, changed: true, itemsChanged: dropped.length > 0};
@@ -264,15 +300,21 @@ export function handleMessage(player, data, now, room = {items: {}, players: () 
     const t = Number.isFinite(m.t) ? Math.round(Math.max(0, Math.min(2.5, m.t)) * 1000) / 1000 : 1;
     out.push({to: 'all', msg: {type: 'shot', from: player.id, o, v, c, s, t, hit: target ? null : hit, target: target?.id || '',
       local: target ? local : null, time: now}});
-    let marksChanged = false, itemsChanged = false;
+    let marksChanged = false, itemsChanged = false, kothChanged = false;
+    // a paintball knocks the crown off when it lands
+    if (target && kothActive(room.koth) && Object.values(items).some(it => worn(it) && it.holder === target.id)) {
+      const k = room.koth;
+      k.hits = [...(k.hits || []), {target: target.id, at: now + Math.round(t * 1000)}].slice(-20);
+      kothChanged = true;
+    }
     if (hit && !target && room.marks) {
       pruneSplats(room.marks, now);
       room.marks.splats.push({...hit, at: now});
       if (room.marks.splats.length > MAX_SPLATS) room.marks.splats.splice(0, room.marks.splats.length - MAX_SPLATS);
       marksChanged = true;
     }
-    // a paintball knocks you back (on your own screen) but you keep hold of what you've got
-    return {out, changed: true, marksChanged, itemsChanged};
+    // a paintball knocks you back (on your own screen) but you keep hold of what you've got (bar a crown)
+    return {out, changed: true, marksChanged, itemsChanged, kothChanged};
   }
   if (m.type === 'spray') {
     const can = Object.values(items).find(it => it.holder === player.id && it.type === 'spray');
@@ -291,3 +333,76 @@ export function handleMessage(player, data, now, room = {items: {}, players: () 
   }
   return {out, changed: false};
 }
+
+// ------------------------------------------------------------------ king of the hill
+// Moves a game along: the grace period running out, paintballs landing, the crown changing heads,
+// someone reaching a minute. Runs after every message and whenever the room's timer goes off.
+// room: {items, koth, players: () => [player records]}
+export function kothTick(room, now) {
+  const out = [], k = room.koth, items = room.items || {};
+  if (!kothActive(k)) { if (k) { delete k.cause; delete k.lostAt; } return {out, kothChanged: false, itemsChanged: false}; }
+  const crown = Object.values(items).find(it => it.type === 'crown');
+  const players = room.players ? room.players() : [];
+  const nameOf = id => players.find(p => p && p.id === id)?.name || k.names[id] || '';
+  const send = (event, extra = {}) => out.push({to: 'all', msg: {type: 'koth', koth: publicKoth(k, now), event, ...extra}});
+  let kothChanged = false, itemsChanged = false;
+  // the grace period's over: whoever has it on starts banking from that moment
+  if (k.state === 'grace' && now >= k.graceEnds) {
+    k.state = 'running'; k.since = k.graceEnds; kothChanged = true;
+    send('grace', {by: k.wearer, byName: k.wearer ? nameOf(k.wearer) : ''});
+  }
+  // the wearer got there (judged before any knock this moment: they had it on until now)
+  if (k.state === 'running' && k.wearer && kothTime(k, k.wearer, now) >= KOTH_WIN_MS) {
+    k.times[k.wearer] = KOTH_WIN_MS; k.since = now;
+    Object.assign(k, {state: 'done', winner: k.wearer, winnerName: nameOf(k.wearer), endedAt: now, hits: []});
+    delete k.cause; delete k.lostAt;
+    send('win', {by: k.winner, byName: k.winnerName, time: KOTH_WIN_MS});
+    return {out, kothChanged: true, itemsChanged};
+  }
+  // paintballs that have landed knock it off their target
+  if (k.hits?.length) {
+    const due = k.hits.filter(h => h.at <= now);
+    if (due.length) {
+      k.hits = k.hits.filter(h => h.at > now); kothChanged = true;
+      for (const h of due) {
+        if (!crown || crown.holder !== h.target || !crown.on) continue;
+        const target = players.find(p => p && p.id === h.target);
+        k.cause = 'paintball'; k.lostAt = h.at;   // it came off when the ball landed
+        for (const o of releaseItems({[crown.id]: crown}, target || {id: h.target, pose: null})) out.push(o);
+        itemsChanged = true;
+      }
+    }
+  }
+  // the crown came off its wearer's head (punched, shot, left, or put back by the room)
+  if (k.wearer && (!crown || crown.holder !== k.wearer || !crown.on)) {
+    const id = k.wearer;
+    const end = Math.min(now, k.lostAt ?? now);
+    if (k.state === 'running') k.times[id] = (k.times[id] || 0) + Math.max(0, end - k.since);
+    k.wearer = ''; k.droppedAt = now; kothChanged = true;
+    send('lost', {by: id, byName: nameOf(id), time: k.times[id] || 0, how: k.cause || ''});
+  }
+  // someone put it on
+  if (!k.wearer && crown?.holder && crown.on) {
+    k.wearer = crown.holder; k.since = Math.max(now, k.graceEnds); k.names[crown.holder] = nameOf(crown.holder);
+    kothChanged = true;
+    send('take', {by: crown.holder, byName: k.names[crown.holder], time: k.times[crown.holder] || 0});
+  }
+  // nobody's picked it up in ages: the game's off
+  if (!k.wearer && now - k.droppedAt >= KOTH_UNCLAIMED_MS) {
+    Object.assign(k, {state: 'cancelled', endedAt: now, hits: []}); kothChanged = true;
+    send('cancel');
+  }
+  delete k.cause; delete k.lostAt;
+  return {out, kothChanged, itemsChanged};
+}
+// when the game next needs a look even if nobody does anything (ms since epoch), or null
+export function kothNext(k) {
+  if (!kothActive(k)) return null;
+  const at = [];
+  if (k.state === 'grace') at.push(k.graceEnds);
+  if (k.wearer) at.push(Math.max(k.since, k.graceEnds) + KOTH_WIN_MS - (k.times[k.wearer] || 0));
+  else at.push(k.droppedAt + KOTH_UNCLAIMED_MS);
+  for (const h of k.hits || []) at.push(h.at);
+  return Math.min(...at);
+}
+export {freshKoth, publicKoth};

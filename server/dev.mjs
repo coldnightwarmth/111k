@@ -9,7 +9,7 @@ import {extname, join, normalize, resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {INACTIVE_MS, IDLE_RESET_MS, MAX_PLAYERS} from '../src/protocol.js';
 import {freshRace, publicRace} from '../src/race.js';
-import {handleMessage, newPlayer, snapshot, freshItems, releaseItems, freshMarks, marksMessage, itemsAtSpawn} from './room.js';
+import {handleMessage, newPlayer, snapshot, freshItems, releaseItems, freshMarks, marksMessage, itemsAtSpawn, kothTick, freshKoth, publicKoth} from './room.js';
 
 const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const PORT = Number(process.env.PORT || 8000);
@@ -45,6 +45,12 @@ function broadcast(msg) { const data = JSON.stringify(msg); for (const c of clie
 const players = () => [...clients].map(c => c.player);
 let items = freshItems();
 const race = freshRace();
+let koth = freshKoth();
+// move a king of the hill game along (grace running out, paintballs landing, a winner)
+function runKoth(cause) {
+  if (cause) koth.cause = cause;
+  for (const {msg} of kothTick({items, koth, players}, Date.now()).out) broadcast(msg);
+}
 const marks = freshMarks();
 
 server.on('upgrade', (req, socket) => {
@@ -65,6 +71,7 @@ server.on('upgrade', (req, socket) => {
   send(c, snapshot(players(), now, items));
   send(c, marksMessage(marks));
   send(c, {type: 'race', race: publicRace(race, now)});
+  send(c, {type: 'koth', koth: publicKoth(koth, now)});
   socket.on('data', chunk => { c.buffer = Buffer.concat([c.buffer, chunk]); parse(c); });
   socket.on('close', () => close(c));
   socket.on('error', () => close(c));
@@ -101,7 +108,7 @@ function parse(c) {
 function onText(c, text) {
   if (text === 'ping') { send(c, 'pong'); return; }
   const now = Date.now();
-  const result = handleMessage(c.player, text, now, {items, marks, race, players});
+  const result = handleMessage(c.player, text, now, {items, marks, race, koth, players});
   if (result.close) { close(c); return; }
   for (const {to, msg} of result.out) {
     if (to === 'all') broadcast(msg);
@@ -117,10 +124,11 @@ function close(c) {
   try { c.socket.end(Buffer.from([0x88, 0])); } catch {}
   if (![...clients].some(o => o.player.id === c.player.id)) {
     broadcast({type: 'leave', id: c.player.id});
-    if (!clients.size) items = freshItems();
+    if (!clients.size) { items = freshItems(); koth = freshKoth(); }
     else setTimeout(() => {   // a refresh comes back within a few seconds: keep their item for them
       if ([...clients].some(o => o.player.id === c.player.id)) return;
       for (const {msg} of releaseItems(items, c.player)) broadcast(msg);
+      runKoth('left');
     }, 8000);
   }
 }
@@ -131,13 +139,16 @@ setInterval(() => {
     if (c.player.inactive || now - c.player.lastActive < INACTIVE_MS) continue;
     c.player.inactive = true; broadcast({type: 'leave', id: c.player.id});
     for (const {msg} of releaseItems(items, c.player)) broadcast(msg);
+    runKoth('left');
   }
   // nobody's done anything for a while: every item goes back where it started
   const last = Math.max(0, ...[...clients].map(c => c.player.lastActive));
   if (clients.size && now - last >= (Number(process.env.IDLE_RESET_MS) || IDLE_RESET_MS) && !itemsAtSpawn(items)) {
     items = freshItems();
     for (const item of Object.values(items)) broadcast({type: 'item', item});
+    runKoth('reset');
   }
 }, Number(process.env.IDLE_RESET_MS) ? 1000 : 5000);
+setInterval(runKoth, 100);
 
 server.listen(PORT, () => console.log(`111k dev server: http://localhost:${PORT}  (multiplayer on the same port)`));

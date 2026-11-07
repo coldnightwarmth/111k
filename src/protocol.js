@@ -20,7 +20,7 @@ export const SPRAY_RANGE = 3.2;        // metres from a player to the wall they 
 export const SPLAT_LIFE_MS = 60000;    // paint fades away after a minute
 export const MAX_SPLATS = 400;         // paint marks the room remembers (oldest go first)
 export const MAX_SPRAYS = 150;
-export const ITEM_TYPES = ['flashlight', 'paintball', 'spray', 'bucket'];
+export const ITEM_TYPES = ['flashlight', 'paintball', 'spray', 'bucket', 'crown'];
 
 // Emotes map to Pose_<id> clips in the avatar model.
 export const EMOTES = Object.freeze([
