@@ -246,9 +246,9 @@ function bucketModel(id) {
 // ---------------------------------------------------------------- the crown
 // A gold band rising into eight points, each tipped with a pearl, red and blue stones round the
 // band and a velvet cap inside. Worn, it sits on the head (king of the hill).
-const CROWN_R = .075, CROWN_BAND = .03, CROWN_PEAK = .045, CROWN_POINTS = 8, CROWN_SCALE = 2;   // 30 cm across: these are big heads
+const CROWN_R = .075, CROWN_BAND = .03, CROWN_PEAK = .045, CROWN_POINTS = 8, CROWN_SCALE = 2.2;   // 33 cm across: these are big heads
 // where it sits in the head bone's space: hats start about 1.15 up the bone, on every head
-export const CROWN_ON_HEAD = {y: 1.0, z: 0, scale: 2.5, tilt: 0};
+export const CROWN_ON_HEAD = {y: 1.13, z: 0, scale: 2.55, tilt: 0};
 function crownModel() {
   const g = new THREE.Group(), c = new THREE.Group();
   c.scale.setScalar(CROWN_SCALE); g.add(c);
@@ -517,8 +517,8 @@ export function createItems({scene, camera, hits, shadows = null}) {
             u.sponge.position.set(-.02 + sc, -.03 + bob + Math.abs(sc) * .4, -.06 - (it.scrub > 0 ? .06 : 0));
             u.sponge.rotation.set(-.9, -.25, .15 + sc * 3);
           } else if (s.type === 'crown') {
-            m.scale.setScalar(.45);
-            m.position.set(-.05, -.02 + bob, -.1);
+            m.scale.setScalar(.62);
+            m.position.set(-.07, -.02 + bob, -.15);
             m.rotation.set(.3, .3, -.05);
           } else {
             m.position.set(0, bob, 0);
