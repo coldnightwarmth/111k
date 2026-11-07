@@ -21,7 +21,8 @@ import {pickAvatar} from './picker.js';
 import {createVoice, voicePanel} from './voice.js';
 import {randomLook, cleanLook} from './looks.js';
 import {EMOTES, EMOTE_DURATION, PUNCH_COOLDOWN_MS, PUNCH_DURATION, PUNCH_COMBO_MS, SHOT_INTERVAL_MS, SPRAY_INTERVAL_MS, SPRAY_RANGE,
-  MAX_SPLATS, MAX_SPRAYS, SPLAT_LIFE_MS, sanitizePose, sanitizeName, cleanSplat, cleanSpray} from './protocol.js';
+  MAX_SPLATS, MAX_SPRAYS, SPLAT_LIFE_MS, sanitizePose, sanitizeName, cleanSplat, cleanSpray, splatId, sprayId} from './protocol.js';
+import {paintingSize, paintingMatrix, paintingTris} from './paintings.js';
 
 const params = new URLSearchParams(location.search);
 const $ = id => document.getElementById(id);
@@ -255,25 +256,94 @@ async function start() {
   const PUNCH_IMPACT = .2;   // seconds into the punch when the fist is all the way out (frame 6 of 15)
   const SPRAY_FADE_IN = .28, PAINT_FADE_MS = 4000, HOP_GRACE = .2;
   let lastPaintCheck = 0;
-  function addSplat(s, fresh = false, age = 0) {
-    if (age >= SPLAT_LIFE_MS) return;
-    const point = new THREE.Vector3(...s.p), normal = new THREE.Vector3(...s.n);
-    const onDoor = s.d !== undefined ? doorBatch(s.d) : null;
-    if (s.d !== undefined && !onDoor) return;
-    const batch = onDoor ? onDoor.batch : splats;
+  // ------------------------------------------- paint on paintings
+  // Paint that lands on a painting is cut in the painting's own space and hung on it, so it goes wherever
+  // the painting goes. What lands round it stays put, with the painting's shape cut out of it for good
+  // (that bit of wall was behind the painting), so moving the painting away leaves a clean patch.
+  const trisByArt = new Map(), noUv = new THREE.Vector2();
+  const boxTris = art => { if (!trisByArt.has(art)) trisByArt.set(art, paintingTris(art)); return trisByArt.get(art); };
+  function paintingSurface(pi) {
+    const it = items.items.get(pi);
+    if (!it?.model.userData.painting) return null;
+    const {w, h, d} = paintingSize(it.state.art), c0 = new THREE.Vector3(0, 0, d / 2), r0 = Math.hypot(w, h, d) / 2;
+    const tris = boxTris(it.state.art).map(t => ({p: t.p, uv: [noUv, noUv, noUv], n: t.n}));
+    return {mesh: it.model, gather: (center, radius) => (center.distanceTo(c0) > radius + r0 ? [] : tris)};
+  }
+  // the level plus the paintings that stood in front of a mark when it went on (they take no paint here)
+  function withOccluders(occ) {
+    if (!occ?.length) return hits;
+    const extra = occ.map(([x, y, z, yaw, tilt, art]) => {
+      const m = paintingMatrix(x, y, z, yaw, tilt), {w, h, d} = paintingSize(art);
+      return {c: new THREE.Vector3(0, 0, d / 2).applyMatrix4(m), r: Math.hypot(w, h, d) / 2,
+        tris: boxTris(art).map(t => ({p: t.p.map(q => q.clone().applyMatrix4(m)), uv: [noUv, noUv, noUv], n: t.n.clone().transformDirection(m), noPaint: true}))};
+    });
+    return {gather: (center, radius) => [...hits.gather(center, radius), ...extra.filter(e => e.c.distanceTo(center) <= radius + e.r).flatMap(e => e.tris)]};
+  }
+  // marks hung on a painting: lit like the painting (not by the level's baked light, which stays behind)
+  const paintingBatches = new Map(), paintingMats = new Map();
+  function paintingBatch(pi, key, map) {
+    const k = `${pi}|${key}`;
+    if (!paintingBatches.has(k)) {
+      if (!paintingMats.has(key)) paintingMats.set(key, new THREE.MeshStandardMaterial({map, transparent: true, depthWrite: false, vertexColors: true,
+        roughness: .8, metalness: 0, polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -4}));
+      const b = createBatch(paintingMats.get(key), 2000);
+      b.mesh.renderOrder = 3; items.items.get(pi).model.add(b.mesh);
+      paintingBatches.set(k, b);
+    }
+    return paintingBatches.get(k);
+  }
+  // The pieces of a mark (in the world) that land on paintings, each in that painting's own space;
+  // the paintings it touched are noted on the mark itself, so the wall keeps their outline clean.
+  function paintingParts(kind, base, piece = null) {
+    if (base.d !== undefined) return [];
+    const p = new THREE.Vector3(...base.p), n = new THREE.Vector3(...base.n);
+    const half = kind === 'spray' ? base.size * Math.max(1, piece.h / piece.w) / 2 : .2, reach = kind === 'spray' ? 1.6 : .7;
+    const parts = [], occ = [];
+    for (const it of items.paintings()) {
+      const u = it.model.userData;
+      it.model.updateMatrixWorld();
+      const c = new THREE.Vector3(0, 0, u.d / 2).applyMatrix4(it.model.matrixWorld);
+      if (c.distanceTo(p) > half * 1.5 + Math.hypot(u.w, u.h) / 2 + reach) continue;
+      const inv = it.model.matrixWorld.clone().invert(), dirIn = v => new THREE.Vector3(...v).transformDirection(inv).toArray().map(r3);
+      const local = {...base, pi: it.state.id, p: p.clone().applyMatrix4(inv).toArray().map(r3), n: dirIn(base.n)};
+      delete local.occ;
+      if (base.up) local.up = dirIn(base.up);
+      if (base.v) local.v = dirIn(base.v);
+      const surface = paintingSurface(it.state.id);
+      const verts = kind === 'spray' ? sprayVerts(local, piece, surface) : splatVerts(local, surface);
+      if (!verts.length) continue;
+      const s = it.state;
+      parts.push(local); occ.push([r3(s.x), r3(s.y), r3(s.z), r3(s.yaw), r3(s.tilt || 0), s.art || 1]);
+    }
+    if (occ.length) base.occ = occ;
+    return parts;
+  }
+  // a splat's patch: thrown along the ball's flight, it wraps the corner it can reach and lands round
+  // small things, never behind. Doors are thin: cut shallow so the paint stays on the face that was hit
+  function splatVerts(s, surface) {
+    const point = new THREE.Vector3(...s.p), normal = new THREE.Vector3(...s.n), thin = s.d !== undefined;
     const r = ((s.s >> 3) % 1000) / 1000, size = .2 + r * .16;
     const up = Math.abs(normal.y) > .9 ? new THREE.Vector3(Math.cos(s.s), 0, Math.sin(s.s)) : new THREE.Vector3(0, 1, 0);
     up.applyAxisAngle(normal, (s.s % 628) / 100);
-    // doors are thin: cut shallow so the paint stays on the face that was hit
-    // thrown along the ball's flight: wraps the corner it can reach, lands round small things, never behind
-    const verts = cutDecal(onDoor ? onDoor.surface : hits, {point, normal, up, width: size, height: size,
-      dir: s.v ? new THREE.Vector3(...s.v) : null, front: onDoor ? .03 : .3, back: onDoor ? .03 : .35});
+    const verts = cutDecal(surface || withOccluders(s.occ), {point, normal, up, width: size, height: size,
+      dir: s.v ? new THREE.Vector3(...s.v) : null, front: thin ? .03 : .3, back: thin ? .03 : .35});
     const [cu, cv] = splatCell(s.s);
     for (const q of verts) { q.u = cu + q.u / 4; q.v = cv + q.v / 2; }
+    return verts;
+  }
+  function addSplat(s, fresh = false, age = 0) {
+    if (age >= SPLAT_LIFE_MS) return;
+    const onDoor = s.d !== undefined ? doorBatch(s.d) : null;
+    if (s.d !== undefined && !onDoor) return;
+    const onPainting = s.pi ? paintingSurface(s.pi) : null;
+    if (s.pi && !onPainting) return;
+    const batch = onDoor ? onDoor.batch : onPainting ? paintingBatch(s.pi, 'splat', splats.mesh.material.map) : splats;
+    const verts = splatVerts(s, onDoor ? onDoor.surface : onPainting);
     const m = batch.add(verts, rgbOf(s.c));
-    splatMarks.push({batch, m, born: performance.now() - age, kind: 'splat', id: String(s.s), verts: m.verts});
+    splatMarks.push({batch, m, born: performance.now() - age, kind: 'splat', id: splatId(s), verts: m.verts});
     while (splatMarks.length > MAX_SPLATS) { const old = splatMarks.shift(); old.batch.remove(old.m); }
-    if (fresh) {
+    if (fresh && !onPainting) {      // (one puff per ball: the part on a painting comes with one on the world)
+      const point = new THREE.Vector3(...s.p), normal = new THREE.Vector3(...s.n);
       if (onDoor) { onDoor.surface.mesh.localToWorld(point); normal.transformDirection(onDoor.surface.mesh.matrixWorld); }
       burst(point, normal, s.c);
     }
@@ -293,11 +363,11 @@ async function start() {
   // how far along the throw a tag carries from what you hit: half a metre beyond it, and toward you
   // right up to the nozzle (1.5 m for tags sprayed before where you stood was sent along)
   const sprayReach = s => [.5, s.r !== undefined ? Math.max(.1, s.r - .05) : 1.5];
-  function sprayVerts(s, piece, onDoor) {
-    const point = new THREE.Vector3(...s.p), normal = new THREE.Vector3(...s.n), up = new THREE.Vector3(...s.up);
-    const verts = cutDecal(onDoor || hits, {point, normal, up, width: s.size, height: s.size * piece.h / piece.w,
-      dir: s.v ? new THREE.Vector3(...s.v) : null, front: onDoor ? .03 : .9, back: onDoor ? .03 : .5,
-      slab: onDoor ? null : sprayReach(s), thrower: s.r ?? null});
+  function sprayVerts(s, piece, surface = null) {
+    const point = new THREE.Vector3(...s.p), normal = new THREE.Vector3(...s.n), up = new THREE.Vector3(...s.up), thin = s.d !== undefined;
+    const verts = cutDecal(surface || withOccluders(s.occ), {point, normal, up, width: s.size, height: s.size * piece.h / piece.w,
+      dir: s.v ? new THREE.Vector3(...s.v) : null, front: thin ? .03 : .9, back: thin ? .03 : .5,
+      slab: thin ? null : sprayReach(s), thrower: s.r ?? null});
     const [u0, v0, u1, v1] = piece.uv;
     for (const q of verts) { q.u = u0 + q.u * (u1 - u0); q.v = v0 + q.v * (v1 - v0); }
     return verts;
@@ -307,10 +377,13 @@ async function start() {
     if (!piece) return;
     const onDoor = s.d !== undefined ? hits.door(s.d) : null;
     if (s.d !== undefined && !onDoor) return;
-    const verts = sprayVerts(s, piece, onDoor);
-    const batch = onDoor ? doorPageBatch(s.d, piece.page) : pageBatch(piece.page);
+    const onPainting = s.pi ? paintingSurface(s.pi) : null;
+    if (s.pi && !onPainting) return;
+    const verts = sprayVerts(s, piece, onDoor || onPainting);
+    const batch = onDoor ? doorPageBatch(s.d, piece.page) : onPainting ? paintingBatch(s.pi, `page${piece.page}`, pageBatch(piece.page).mesh.material.map)
+      : pageBatch(piece.page);
     const m = batch.add(verts, [255, 255, 255], fresh ? 0 : 1);
-    sprayMarks.push({batch, m, kind: 'spray', id: `${s.piece}@${s.p.join(',')}`, verts: m.verts});
+    sprayMarks.push({batch, m, kind: 'spray', id: sprayId(s), verts: m.verts});
     while (sprayMarks.length > MAX_SPRAYS) { const old = sprayMarks.shift(); old.batch.remove(old.m); }
     if (fresh) fades.push({batch, m, t: 0});
   }
@@ -328,6 +401,7 @@ async function start() {
     for (const d of doorBatches.values()) d.batch.clear();
     for (const b of pageBatches.values()) b.clear();
     for (const b of doorPages.values()) b.clear();
+    for (const b of paintingBatches.values()) b.clear();
     sprayMarks.length = 0;
     for (const s of list.splats || []) { const c = cleanSplat(s); if (c) addSplat(c, false, Number.isFinite(s.age) ? s.age : 0); }
     for (const s of list.sprays || []) { const c = cleanSpray(s); if (c) addSpray(c); }
@@ -404,6 +478,8 @@ async function start() {
       let best = null;
       const h = hits.raycast(prev, dir, len, true);
       if (h) best = {t: t - step + step * h.distance / len, point: h.point, normal: h.normal, d: h.distance, door: h.door, local: h.local, mesh: h.mesh};
+      const ph = items.paintingHit(prev, dir, len);
+      if (ph && (!best || ph.distance < best.d)) best = {t: t - step + step * ph.distance / len, point: ph.point, normal: ph.normal, d: ph.distance};
       for (const p of [...peers.values(), {id: network.id, last: {x: player.x, z: player.z}, avatar: me}]) {
         if (p.id === ignore || !p.last || !p.avatar) continue;
         // a capsule around each body: 0.28 m wide, feet to head
@@ -491,6 +567,7 @@ async function start() {
     if (h?.state.type === 'paintball') { shoot(); return; }
     if (h?.state.type === 'spray') { spray(); return; }
     if (h?.state.type === 'crown') { if (!kothActive(koth)) network.send({type: 'koth'}); learn('koth'); return; }
+    if (h?.state.type === 'painting') { const plan = planPlace(h); if (plan) placePainting(h, plan); return; }
     if (h?.state.type === 'bucket') {
       if (cleanTarget) { network.send({type: 'erase', kind: cleanTarget.kind, id: cleanTarget.id}); items.scrub(h.state.id); learn('scrub'); }
       return;
@@ -501,10 +578,77 @@ async function start() {
   // put it down where you're aiming if there's something within reach; otherwise let it go in
   // front of you and it falls (everyone replays the same fall to the spot it settles on)
   const DROP_REACH = 2.8;
+  // ------------------------------------------------------------- paintings
+  // Where a painting in your hands would go: on a wall, hung flat against it; on the floor (or a table)
+  // right in front of a wall, leant back against that wall; anywhere else flat, face up, the right
+  // way round for you. {x, y, z, yaw, tilt, how} or null (nothing in reach to put it on).
+  const PLACE_REACH = 3.2, LEAN = -.2;
+  function planPlace(h) {
+    const {w, h: ht, d} = paintingSize(h.state.art);
+    camera.updateMatrixWorld();
+    const o = camera.getWorldPosition(new THREE.Vector3()), dir = camera.getWorldDirection(new THREE.Vector3());
+    if (boom) o.addScaledVector(dir, camDist);
+    const hit = hits.raycast(o, dir, PLACE_REACH, true);
+    if (!hit || hit.door !== undefined) return null;
+    const n = hit.normal, P = hit.point;
+    if (Math.abs(n.y) < .35) {
+      // hung: its back on the wall, the picture facing out, kept clear of the floor and the ceiling
+      const tilt = -Math.asin(Math.max(-1, Math.min(1, n.y))), yaw = Math.atan2(n.x, n.z);
+      const at = P.clone().addScaledVector(n, .003);
+      const down = hits.raycast(at.clone().addScaledVector(n, .05), new THREE.Vector3(0, -1, 0), ht);
+      if (down && down.distance < ht / 2 + .03) at.y += ht / 2 + .03 - down.distance;
+      const up = hits.raycast(at.clone().addScaledVector(n, .05), new THREE.Vector3(0, 1, 0), ht);
+      if (up && up.distance < ht / 2 + .01) at.y -= ht / 2 + .01 - up.distance;
+      return {x: at.x, y: at.y, z: at.z, yaw, tilt, how: 'hang'};
+    }
+    if (n.y < .7) return null;                                   // too steep to put it down on, or a ceiling
+    // a wall just beyond where you're aiming: lean it there, picture facing you
+    const fwd = new THREE.Vector3(dir.x, 0, dir.z);
+    if (fwd.lengthSq() > 1e-6) {
+      fwd.normalize();
+      const wall = hits.raycast(P.clone().add(new THREE.Vector3(0, .3, 0)).addScaledVector(fwd, -.05), fwd, .55);
+      if (wall && Math.abs(wall.normal.y) < .35) {
+        const wn = new THREE.Vector3(wall.normal.x, 0, wall.normal.z).normalize();
+        const yaw = Math.atan2(wn.x, wn.z), sinT = Math.sin(LEAN), cosT = Math.cos(LEAN);
+        // the top of its back touches the wall, the bottom of its back sits on the floor
+        const out = .004 - (ht / 2) * sinT;
+        const along = P.clone().sub(wall.point); along.addScaledVector(wn, -along.dot(wn)); along.y = 0;
+        const at = wall.point.clone().add(along).addScaledVector(wn, out);
+        at.y = P.y + (ht / 2) * cosT + .002;
+        return {x: at.x, y: at.y, z: at.z, yaw, tilt: LEAN, how: 'lean'};
+      }
+    }
+    // flat, face up, its top away from you
+    return {x: P.x, y: P.y + .002, z: P.z, yaw: controls.state.yaw, tilt: -Math.PI / 2, how: 'lay'};
+  }
+  function placePainting(h, plan) {
+    network.send({type: 'drop', id: h.state.id, x: r3(plan.x), y: r3(plan.y), z: r3(plan.z), yaw: r3(plan.yaw), tilt: r3(plan.tilt)});
+    learn('place'); learn('drop');
+  }
+  // a faint outline of the painting where a click would put it
+  let placeGhost = null, placeGhostArt = 0, placeAt = 0, placePlan = null;
+  function updatePlaceGhost(now, h, frozen) {
+    if (h?.state.type !== 'painting' || frozen) { if (placeGhost) placeGhost.visible = false; placePlan = null; return; }
+    if (now - placeAt < 70) return;
+    placeAt = now;
+    placePlan = planPlace(h);
+    if (!placeGhost || placeGhostArt !== h.state.art) {
+      if (placeGhost) { placeGhost.removeFromParent(); placeGhost.traverse(o => { o.geometry?.dispose(); o.material?.dispose(); }); }
+      const {w, h: ht, d} = paintingSize(h.state.art);
+      const box = new THREE.BoxGeometry(w, ht, d).translate(0, 0, d / 2);
+      placeGhost = new THREE.Mesh(box, new THREE.MeshBasicMaterial({color: 0xfff2c8, transparent: true, opacity: .16, depthWrite: false, toneMapped: false}));
+      placeGhost.add(new THREE.LineSegments(new THREE.EdgesGeometry(box), new THREE.LineBasicMaterial({color: 0xffe08a, transparent: true, opacity: .7, toneMapped: false})));
+      placeGhost.renderOrder = 7; placeGhost.matrixAutoUpdate = false;
+      scene.add(placeGhost); placeGhostArt = h.state.art;
+    }
+    placeGhost.visible = !!placePlan;
+    if (placePlan) { paintingMatrix(placePlan.x, placePlan.y, placePlan.z, placePlan.yaw, placePlan.tilt, placeGhost.matrix); placeGhost.matrixWorldNeedsUpdate = true; }
+  }
   function secondary() {
     // hands empty, a game over and the crown still on: right-click takes it off
     const h = held() || (!kothActive(koth) && network.id ? items.wornBy(network.id) : null);
     if (!h) return;
+    if (h.state.type === 'painting') { const plan = planPlace(h); if (plan) { placePainting(h, plan); return; } }
     const yaw = controls.state.yaw;
     learn('drop');
     toggleGallery(false);
@@ -513,6 +657,7 @@ async function start() {
     if (boom) o.addScaledVector(d, camDist);
     const hit = hits.raycast(o, d, DROP_REACH);
     const msg = {type: 'drop', id: h.state.id, yaw};
+    if (h.state.type === 'painting') msg.tilt = -Math.PI / 2;    // let go of, it falls flat
     let start = null, vel = null;
     if (hit && hit.normal.y > .7) Object.assign(msg, {x: r3(hit.point.x), y: r3(hit.point.y), z: r3(hit.point.z)});   // set down right there
     else if (hit) { start = hit.point.clone().addScaledVector(hit.normal, .12); vel = new THREE.Vector3(); }          // against a wall: slides down it
@@ -548,7 +693,9 @@ async function start() {
   function aimPoint(far = 60, withDoors = false) {
     const o = camera.getWorldPosition(new THREE.Vector3()), d = camera.getWorldDirection(new THREE.Vector3());
     if (boom) o.addScaledVector(d, camDist);   // start the ray at your shoulder, not behind it
-    const h = hits.raycast(o, d, far, withDoors);
+    let h = hits.raycast(o, d, far, withDoors);
+    const ph = items.paintingHit(o, d, far);
+    if (ph && (!h || ph.distance < h.distance)) h = ph;           // a painting in front of the wall
     return {point: h ? h.point : o.clone().addScaledVector(d, far), hit: h, origin: o, dir: d};
   }
   function shoot() {
@@ -583,7 +730,13 @@ async function start() {
       if (land.door !== undefined) {
         fly.transformDirection(land.mesh.matrixWorld.clone().invert());
         msg.hit = {p: land.local.point.toArray().map(r3), n: land.local.normal.toArray().map(r3), d: land.door, v: fly.toArray().map(r3)};
-      } else if (land.normal) msg.hit = {p: land.point.toArray().map(r3), n: land.normal.toArray().map(r3), v: fly.toArray().map(r3)};
+      } else if (land.normal) {
+        msg.hit = {p: land.point.toArray().map(r3), n: land.normal.toArray().map(r3), v: fly.toArray().map(r3)};
+        // the bits that land on paintings (worked out with the ball's own seed, so both halves are one splat)
+        const parts = paintingParts('splat', Object.assign(msg.hit, {s: seed, c: color}));
+        delete msg.hit.s; delete msg.hit.c;
+        if (parts.length) msg.parts = parts.map(({s, c, ...p}) => p);
+      }
     }
     items.kick(gun.state.id);
     network.send(msg);
@@ -731,6 +884,8 @@ async function start() {
     items.shake(can.state.id);
     if (!msg) return;
     lastSpray = now;
+    const parts = paintingParts('spray', msg, pieceByName.get(msg.piece));
+    if (parts.length) msg.parts = parts;
     network.send(msg);
     learn('spray');
     rollSpray();
@@ -753,7 +908,12 @@ async function start() {
     const key = `${s.piece}|${s.d ?? ''}|${s.p}|${s.n}|${s.up}|${s.v}|${s.size}`;
     if (key === previewKey) return;
     const onDoor = s.d !== undefined ? hits.door(s.d) : null;
-    const verts = sprayVerts(s, piece, onDoor);
+    // the parts on paintings, brought back into the world for the ghost
+    const parts = paintingParts('spray', s, piece);
+    const verts = [...sprayVerts(s, piece, onDoor), ...parts.flatMap(part => {
+      const mw = items.items.get(part.pi).model.matrixWorld;
+      return sprayVerts(part, piece, paintingSurface(part.pi)).map(q => ({...q, p: q.p.clone().applyMatrix4(mw)}));
+    })];
     clearPreview(); previewKey = key;
     if (!verts.length) return;
     const position = [], uv = [], color = [];
@@ -858,6 +1018,7 @@ async function start() {
         const from = gun?.state.type === 'paintball' && gun.model.visible !== false ? items.tip(gun) : null;
         launch(o, v, m.c, m.t, () => {
           if (m.hit) { const s = cleanSplat(m.hit); if (s) addSplat({...s, c: m.c, s: m.s}, true); }
+          for (const part of m.parts || []) { const s = cleanSplat({...part, c: m.c, s: m.s}); if (s) addSplat(s, true); }
           if (m.target && m.local) {
             const local = {...m.local, c: m.c, s: m.s};
             const end = simulate(o, v, m.t);
@@ -906,6 +1067,7 @@ async function start() {
         } else if (m.event === 'cancel') say(m.race.runner === m.by ? `${whose} loop run was called off` : `${who} called off ${m.race.name || 'anon'}'s loop run`);
       } else if (m.type === 'spray') {
         addSpray(m.mark, true);
+        for (const part of m.parts || []) addSpray(part, true);
         const p = peers.get(m.from);
         if (p?.avatar) p.sprayed = performance.now();
       }
@@ -1247,6 +1409,7 @@ async function start() {
       mimic.update([{x: player.x, z: player.z}, ...[...peers.values()].filter(p => p.last).map(p => p.last)]);
     }
     updatePreview(now, h?.state.type === 'spray' && !!chosenPiece && !frozen && gallery.hidden);
+    updatePlaceGhost(now, h, frozen);
     const pushable = !frozen && onButton();
     machine.highlight(pushable);
     machine.update(dt);
@@ -1263,6 +1426,7 @@ async function start() {
         : type === 'paintball' ? [['fire', 'click: fire'], drop]
         : type === 'bucket' ? [['scrub', cleanTarget ? 'click: scrub it off' : 'aim at paint or graffiti to scrub it'], drop]
         : type === 'crown' ? (kothActive(koth) ? [] : [['koth', 'click: start king of the hill'], drop])
+        : type === 'painting' ? [['place', placePlan ? `click: ${{hang: 'hang it here', lean: 'lean it here', lay: 'lay it down'}[placePlan.how]}` : 'aim at a wall or the floor to put it there']]
         : [['spray', 'click a wall: spray'], ['pieces', 'esc: pick a piece'], drop])
       : t ? (t.state.type === 'crown' && kothActive(koth) ? [['pickup:crown:on', 'click: put on the crown']]
         : [[`pickup:${t.state.type}`, `click: pick up ${ITEM_NAMES[t.state.type] || 'it'}`]]) : [];
@@ -1274,7 +1438,7 @@ async function start() {
     const galleryLabel = type === 'paintball' ? 'paint' : 'tags';
     if (btnGallery.textContent !== galleryLabel) btnGallery.textContent = galleryLabel;
     const act = pushable ? 'push' : doorAim !== null ? 'close' : h ? (type === 'flashlight' ? (h.state.on ? 'light off' : 'light on')
-      : type === 'paintball' ? 'fire' : type === 'bucket' ? 'scrub' : type === 'crown' ? 'start' : 'spray') : t ? 'grab' : 'punch';
+      : type === 'paintball' ? 'fire' : type === 'bucket' ? 'scrub' : type === 'crown' ? 'start' : type === 'painting' ? 'place' : 'spray') : t ? 'grab' : 'punch';
     if (btnAct.textContent !== act) btnAct.textContent = act;
     document.body.classList.toggle('can-grab', !!t);
     // first person: say which emote you're doing, since you can't see yourself

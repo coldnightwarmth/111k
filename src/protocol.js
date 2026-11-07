@@ -20,7 +20,7 @@ export const SPRAY_RANGE = 3.2;        // metres from a player to the wall they 
 export const SPLAT_LIFE_MS = 60000;    // paint fades away after a minute
 export const MAX_SPLATS = 400;         // paint marks the room remembers (oldest go first)
 export const MAX_SPRAYS = 150;
-export const ITEM_TYPES = ['flashlight', 'paintball', 'spray', 'bucket', 'crown'];
+export const ITEM_TYPES = ['flashlight', 'paintball', 'spray', 'bucket', 'crown', 'painting'];
 
 // Emotes map to Pose_<id> clips in the avatar model.
 export const EMOTES = Object.freeze([
@@ -78,9 +78,32 @@ export function sanitizeChat(text) {
 
 // Held items (flashlights): shared room state. Positions are where they lie when nobody holds them.
 export function cleanItem(it) {
-  return {id: it.id, type: ITEM_TYPES.includes(it.type) ? it.type : 'flashlight', x: round(it.x), y: round(it.y), z: round(it.z), yaw: round(it.yaw),
+  const out = {id: it.id, type: ITEM_TYPES.includes(it.type) ? it.type : 'flashlight', x: round(it.x), y: round(it.y), z: round(it.z), yaw: round(it.yaw),
     holder: it.holder || null, on: it.on === true};
+  // a painting: how it tilts (0 hung upright, a little back leaning on a wall, -pi/2 lying face up) and which art
+  if (out.type === 'painting') {
+    out.tilt = Number.isFinite(it.tilt) ? round(Math.max(-1.571, Math.min(1.571, it.tilt))) : 0;
+    out.art = Number.isInteger(it.art) && it.art > 0 && it.art < 10000 ? it.art : 1;
+  }
+  return out;
 }
+// paintings are items pt1, pt2, ...: marks on one are kept in its own space and ride along with it
+export const PAINTING_ID = /^pt\d{1,4}$/;
+// Where a mark sits relative to paintings: `pi`, on that painting (p, n, up, v in its own space);
+// `occ`, the paintings that stood in front of it when it went on ([x, y, z, yaw, tilt, art] each),
+// which keep their shape cut out of it wherever they go afterwards.
+function paintingFields(s, out) {
+  if (typeof s.pi === 'string' && PAINTING_ID.test(s.pi)) { out.pi = s.pi; delete out.d; return out; }
+  if (Array.isArray(s.occ)) {
+    const occ = s.occ.slice(0, 6).map(a => Array.isArray(a) && a.length === 6 && a.every(Number.isFinite) && a.slice(0, 3).every(v => Math.abs(v) <= 500)
+      ? [...a.slice(0, 5).map(v => round(v)), Math.max(1, Math.min(9999, Math.round(a[5])))] : null).filter(Boolean);
+    if (occ.length) out.occ = occ;
+  }
+  return out;
+}
+// how clients and the server name a mark when asking to scrub it
+export const splatId = s => s.pi ? `${s.s}@${s.pi}` : String(s.s);
+export const sprayId = s => `${s.piece}@${s.p.join(',')}${s.pi ? '#' + s.pi : ''}`;
 
 // Names only ever show in the chat log.
 export function sanitizeName(name) {
@@ -120,7 +143,7 @@ export function cleanSplat(s) {
     if (d === null) return null;
     out.d = d;
   }
-  return out;
+  return paintingFields(s, out);
 }
 
 // A sprayed graffiti piece: which piece, where, facing, its up direction and size.
@@ -140,5 +163,5 @@ export function cleanSpray(s) {
     if (d === null) return null;
     out.d = d;
   }
-  return out;
+  return paintingFields(s, out);
 }

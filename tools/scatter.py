@@ -53,7 +53,7 @@ def scatter_buckets(colliders, items, count=3, seed=211):
     return out
 
 
-PREFIX = {'flashlight': 'fl', 'paintball': 'pb', 'spray': 'sp', 'bucket': 'bk', 'crown': 'cr'}
+PREFIX = {'flashlight': 'fl', 'paintball': 'pb', 'spray': 'sp', 'bucket': 'bk', 'crown': 'cr', 'painting': 'pt'}
 
 
 def write_spawns(path, items):

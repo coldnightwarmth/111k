@@ -5,7 +5,7 @@
 // items, which the caller keeps (Durable Object storage in production).
 import {CHAT_INTERVAL_MS, CHAT_TTL_MS, POSE_INTERVAL_MS, PICKUP_RANGE, PUNCH_RANGE, PUNCH_COOLDOWN_MS,
   SHOT_INTERVAL_MS, SPRAY_INTERVAL_MS, SPRAY_RANGE, MAX_SPLATS, MAX_SPRAYS, SPLAT_LIFE_MS,
-  sanitizeChat, sanitizePose, samePose, cleanItem, sanitizeLook, sanitizeName, cleanSplat, cleanSpray} from '../src/protocol.js';
+  sanitizeChat, sanitizePose, samePose, cleanItem, sanitizeLook, sanitizeName, cleanSplat, cleanSpray, splatId, sprayId} from '../src/protocol.js';
 import {ITEM_SPAWNS} from '../src/world-items.js';
 import {RACE_LAPS, RACE_TIMEOUT_MS, BUTTON, BUTTON_RANGE, MACHINE, LAP_ZONE, LAP_SLACK, loopAngle, freshRace, publicRace} from '../src/race.js';
 import {KOTH_GRACE_MS, KOTH_WIN_MS, KOTH_UNCLAIMED_MS, freshKoth, publicKoth, kothActive, kothTime} from '../src/koth.js';
@@ -37,8 +37,8 @@ export function snapshot(players, now, items = {}) {
 
 // Paint and sprayed pieces stay on the walls; the oldest go when there are too many.
 const MAX_ERASED = 600;   // pieces of the level's own graffiti scrubbed off
-// how clients name a sprayed tag when asking to scrub it
-export const sprayId = s => `${s.piece}@${s.p.join(',')}`;
+// how clients name a mark when asking to scrub it
+export {sprayId, splatId};
 export function freshMarks() { return {splats: [], sprays: [], erased: []}; }
 export function validMarks(stored) {
   if (!stored || !Array.isArray(stored.splats) || !Array.isArray(stored.sprays)) return freshMarks();
@@ -62,9 +62,10 @@ const flat = (a, b) => Math.hypot(a.x - b.x, a.z - b.z);
 // Put an item down where a player stands (or stood).
 function dropAt(item, pose, dx = 0, dz = 0, y = null) {
   item.holder = null;
-  item.x = pose.x + dx; item.z = pose.z + dz; item.y = y ?? (pose.g || 0) + .03;   // on whatever they stood on
+  item.x = pose.x + dx; item.z = pose.z + dz; item.y = y ?? (pose.g || 0) + (item.type === 'painting' ? .002 : .03);   // on whatever they stood on
   item.yaw = pose.yaw || 0;
   if (item.type === 'crown') item.on = false;   // a crown on the ground isn't on anyone's head
+  if (item.type === 'painting') item.tilt = -Math.PI / 2;   // a painting let go of falls flat, face up
 }
 // a worn crown sits on its wearer's head, leaving their hands free
 const worn = it => it.type === 'crown' && it.on;
@@ -123,6 +124,13 @@ export function releaseItems(items, player) {
     out.push({to: 'all', msg: {type: 'item', item: cleanItem(it), fall}});
   });
   return out;
+}
+
+// The pieces of a mark that landed on paintings (in each painting's own space): a few at most, each
+// on a painting that exists and within its reach.
+function paintingParts(list, clean, items) {
+  if (!Array.isArray(list)) return [];
+  return list.slice(0, 4).map(clean).filter(p => p && p.pi && items[p.pi]?.type === 'painting' && Math.hypot(...p.p) < 3);
 }
 
 // Returns {out: [{to: 'all' | 'self' | <player id>, msg}], changed, itemsChanged, returning, close}.
@@ -210,7 +218,7 @@ function handle(player, data, now, room) {
     if (!bucket || !id || !['splat', 'spray', 'baked'].includes(m.kind) || !room.marks || now - (player.lastErase || 0) < 150) return {out, changed: false};
     player.lastErase = now; player.lastActive = now;
     const marks = room.marks;
-    if (m.kind === 'splat') marks.splats = marks.splats.filter(s => String(s.s) !== id);
+    if (m.kind === 'splat') marks.splats = marks.splats.filter(s => splatId(s) !== id);
     else if (m.kind === 'spray') marks.sprays = marks.sprays.filter(s => sprayId(s) !== id);
     else if (!(marks.erased ||= []).includes(id)) { marks.erased.push(id); if (marks.erased.length > MAX_ERASED) marks.erased.shift(); }
     out.push({to: 'all', msg: {type: 'erase', kind: m.kind, id, by: player.id}});
@@ -278,6 +286,8 @@ function handle(player, data, now, room) {
     const y = Number.isFinite(m.y) ? Math.max(-.5, Math.min(4, m.y)) : null;
     dropAt(item, player.pose, dx, dz, y);
     if (Number.isFinite(m.yaw)) item.yaw = Math.round(m.yaw * 1000) / 1000;
+    // a painting hung on a wall, leant against one or laid down
+    if (item.type === 'painting' && Number.isFinite(m.tilt)) item.tilt = Math.round(Math.max(-Math.PI / 2, Math.min(Math.PI / 2, m.tilt)) * 1000) / 1000;
     // how it fell (start and velocity): everyone replays the same fall to where it came to rest
     const fp = m.fall && Array.isArray(m.fall.p) && m.fall.p.length === 3 && m.fall.p.every(Number.isFinite) ? m.fall.p : null;
     const fv = m.fall && Array.isArray(m.fall.v) && m.fall.v.length === 3 && m.fall.v.every(Number.isFinite) ? m.fall.v : null;
@@ -318,8 +328,9 @@ function handle(player, data, now, room) {
       local = target ? cleanSplat({...(m.local || {}), c, s}) : null;
       if (target && Math.hypot(target.pose.x - player.pose.x, target.pose.z - player.pose.z) > 70) target = null;
     }
+    const parts = target ? [] : paintingParts(m.parts, p => cleanSplat({...p, c, s}), items);
     const t = Number.isFinite(m.t) ? Math.round(Math.max(0, Math.min(2.5, m.t)) * 1000) / 1000 : 1;
-    out.push({to: 'all', msg: {type: 'shot', from: player.id, o, v, c, s, t, hit: target ? null : hit, target: target?.id || '',
+    out.push({to: 'all', msg: {type: 'shot', from: player.id, o, v, c, s, t, hit: target ? null : hit, parts, target: target?.id || '',
       local: target ? local : null, time: now}});
     let marksChanged = false, itemsChanged = false, kothChanged = false;
     // a paintball knocks the crown off when it lands
@@ -329,9 +340,9 @@ function handle(player, data, now, room) {
       k.names[player.id] = player.name || '';
       kothChanged = true;
     }
-    if (hit && !target && room.marks) {
+    if ((hit || parts.length) && !target && room.marks) {
       pruneSplats(room.marks, now);
-      room.marks.splats.push({...hit, at: now});
+      for (const sp of [hit, ...parts]) if (sp) room.marks.splats.push({...sp, at: now});
       if (room.marks.splats.length > MAX_SPLATS) room.marks.splats.splice(0, room.marks.splats.length - MAX_SPLATS);
       marksChanged = true;
     }
@@ -346,9 +357,10 @@ function handle(player, data, now, room) {
     if (mark.d !== undefined ? Math.hypot(...mark.p) > 3 : Math.hypot(mark.p[0] - player.pose.x, mark.p[2] - player.pose.z) > SPRAY_RANGE + 1)
       return {out, changed: false};
     player.lastSpray = now; player.lastActive = now;
-    out.push({to: 'all', msg: {type: 'spray', from: player.id, mark, time: now}});
+    const parts = paintingParts(m.parts, cleanSpray, items);
+    out.push({to: 'all', msg: {type: 'spray', from: player.id, mark, parts, time: now}});
     if (room.marks) {
-      room.marks.sprays.push(mark);
+      room.marks.sprays.push(mark, ...parts);
       if (room.marks.sprays.length > MAX_SPRAYS) room.marks.sprays.splice(0, room.marks.sprays.length - MAX_SPRAYS);
     }
     return {out, changed: true, marksChanged: !!room.marks};

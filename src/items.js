@@ -7,9 +7,10 @@ import {lighting, MAX_FLASHLIGHTS, MAX_SPOTLIGHTS, FAN_RANGE, packBeams, ghostMa
 const BEAM_FAR = 42, BEAM_FADE = 10;   // torches on the floor: full strength to 32 m, gone by 42 m
 import {EYE_HEIGHT} from './motion.js';
 import {PAINT_COLORS, RANDOM_PAINT} from './decals.js';
+import {ART, paintingSize} from './paintings.js';
 
 const BEAM_COLOR = new THREE.Color(1, .93, .8);
-export const ITEM_NAMES = {flashlight: 'flashlight', paintball: 'paintball marker', spray: 'spray can', bucket: 'bucket and sponge', crown: 'golden crown'};
+export const ITEM_NAMES = {flashlight: 'flashlight', paintball: 'paintball marker', spray: 'spray can', bucket: 'bucket and sponge', crown: 'golden crown', painting: 'painting'};
 
 const std = (color, roughness = .55, metalness = .2, extra = {}) => new THREE.MeshStandardMaterial({color, roughness, metalness, ...extra});
 function part(g, geo, mat, [x, y, z] = [0, 0, 0], [rx, ry, rz] = [0, 0, 0]) {
@@ -292,7 +293,104 @@ function crownModel() {
   return g;
 }
 
-const MODELS = {flashlight: flashlightModel, paintball: paintballModel, spray: sprayModel, bucket: bucketModel, crown: crownModel};
+// ------------------------------------------------------------- paintings
+// A stretched canvas: the picture on the front, its edge pixels running round the sides (gallery
+// wrapped, so the sides streak with the picture's own colours), and an open back: the canvas's raw
+// back, folded and stapled over a pine stretcher with a cross brace. Origin: the middle of the back;
+// the picture faces +z, its top is +y.
+const artTextures = new Map();
+function artTexture(art) {
+  if (!artTextures.has(art)) {
+    const t = new THREE.TextureLoader().setCrossOrigin('anonymous').load((ART[art] || ART[1]).url);
+    t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 8;
+    artTextures.set(art, t);
+  }
+  return artTextures.get(art);
+}
+let woodTex = null, linenTex = null;
+function grainTexture() {
+  const c = document.createElement('canvas'); c.width = 64; c.height = 256;
+  const g = c.getContext('2d');
+  g.fillStyle = '#c8a26a'; g.fillRect(0, 0, 64, 256);
+  let seed = 5; const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+  for (let i = 0; i < 40; i++) {                 // long grain lines down the bar, wavering a little
+    const x = rnd() * 64, w = .6 + rnd() * 1.8, a = .08 + rnd() * .16;
+    g.strokeStyle = `rgba(${rnd() < .7 ? '120,80,40' : '235,205,150'},${a})`; g.lineWidth = w;
+    g.beginPath(); g.moveTo(x, 0);
+    for (let y = 0; y <= 256; y += 16) g.lineTo(x + Math.sin(y * .03 + i) * 2.2, y);
+    g.stroke();
+  }
+  for (let i = 0; i < 2; i++) {                  // a knot or two
+    const x = 10 + rnd() * 44, y = 30 + rnd() * 200;
+    g.fillStyle = 'rgba(110,70,35,.35)'; g.beginPath(); g.ellipse(x, y, 3 + rnd() * 3, 7 + rnd() * 6, 0, 0, Math.PI * 2); g.fill();
+  }
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  return t;
+}
+function linenTexture() {
+  const c = document.createElement('canvas'); c.width = c.height = 128;
+  const g = c.getContext('2d');
+  g.fillStyle = '#ddd3c0'; g.fillRect(0, 0, 128, 128);
+  let seed = 3; const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+  for (let i = 0; i < 128; i += 2) {             // the weave
+    g.fillStyle = `rgba(150,135,110,${.05 + rnd() * .08})`; g.fillRect(0, i, 128, 1);
+    g.fillStyle = `rgba(150,135,110,${.05 + rnd() * .08})`; g.fillRect(i, 0, 1, 128);
+  }
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  return t;
+}
+function paintingModel(id, state) {
+  const art = state?.art || 1, {w, h, d} = paintingSize(art), x = w / 2, y = h / 2;
+  const a = ART[art] || ART[1], eu = .5 / a.w, ev = .5 / a.h;   // half a pixel in: the outermost row and column
+  const g = new THREE.Group();
+  // the picture: front, then each side taking its edge's pixels across the depth
+  const pos = [], uv = [], idx = [];
+  const quad = (p, t) => { const b = pos.length / 3; p.forEach(q => pos.push(...q)); t.forEach(q => uv.push(...q)); idx.push(b, b + 1, b + 2, b, b + 2, b + 3); };
+  quad([[-x, -y, d], [x, -y, d], [x, y, d], [-x, y, d]], [[0, 0], [1, 0], [1, 1], [0, 1]]);
+  quad([[-x, y, d], [x, y, d], [x, y, 0], [-x, y, 0]], [[0, 1 - ev], [1, 1 - ev], [1, 1 - ev], [0, 1 - ev]]);     // top
+  quad([[-x, -y, 0], [x, -y, 0], [x, -y, d], [-x, -y, d]], [[0, ev], [1, ev], [1, ev], [0, ev]]);                 // bottom
+  quad([[x, -y, d], [x, -y, 0], [x, y, 0], [x, y, d]], [[1 - eu, 0], [1 - eu, 0], [1 - eu, 1], [1 - eu, 1]]);     // right
+  quad([[-x, -y, 0], [-x, -y, d], [-x, y, d], [-x, y, 0]], [[eu, 0], [eu, 0], [eu, 1], [eu, 1]]);                 // left
+  const pic = new THREE.BufferGeometry();
+  pic.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); pic.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+  pic.setIndex(idx); pic.computeVertexNormals();
+  const canvasMat = new THREE.MeshStandardMaterial({map: artTexture(art), roughness: .82, metalness: 0});
+  const front = new THREE.Mesh(pic, canvasMat); front.name = 'canvas'; g.add(front);
+  // the back: raw canvas behind the picture, folded over the stretcher's back edge and stapled
+  woodTex ||= grainTexture(); linenTex ||= linenTexture();
+  const linen = new THREE.MeshStandardMaterial({map: linenTex, roughness: .95, metalness: 0, side: THREE.DoubleSide});
+  const wood = new THREE.MeshStandardMaterial({map: woodTex, roughness: .75, metalness: 0});
+  const staple = std(0x9a9ca0, .4, .8);
+  const back = part(g, new THREE.PlaneGeometry(w - .002, h - .002), linen, [0, 0, d - .0025], [0, Math.PI, 0]);
+  back.material = linen;
+  const bar = .042, deep = d - .004, fold = .016;
+  // stretcher bars round the edge (meeting at mitred-looking corners), then the cross brace
+  const barGeo = (len, across, depth, vertical) => {
+    const geo = new THREE.BoxGeometry(vertical ? across : len, vertical ? len : across, depth);
+    const uvs = geo.attributes.uv; for (let i = 0; i < uvs.count; i++) uvs.setXY(i, uvs.getX(i) * .25, uvs.getY(i) * len * 2);   // grain along the bar
+    return geo;
+  };
+  part(g, barGeo(w, bar, deep, false), wood, [0, y - bar / 2, deep / 2]);
+  part(g, barGeo(w, bar, deep, false), wood, [0, -y + bar / 2, deep / 2]);
+  part(g, barGeo(h - 2 * bar, bar, deep, true), wood, [x - bar / 2, 0, deep / 2]);
+  part(g, barGeo(h - 2 * bar, bar, deep, true), wood, [-x + bar / 2, 0, deep / 2]);
+  const braceDeep = deep * .7;
+  if (h > .5) part(g, barGeo(w - 2 * bar, bar * .85, braceDeep, false), wood, [0, 0, braceDeep / 2]);
+  if (w > .5) part(g, barGeo(h - 2 * bar, bar * .85, braceDeep, true), wood, [0, 0, braceDeep / 2 - .0005]);
+  // the canvas folded over the back of the bars, with staples every few centimetres
+  const folds = [[w, fold, 0, y - fold / 2], [w, fold, 0, -y + fold / 2], [fold, h - 2 * fold, x - fold / 2, 0], [fold, h - 2 * fold, -x + fold / 2, 0]];
+  for (const [fw, fh, fx, fy] of folds) part(g, new THREE.PlaneGeometry(fw, fh), linen, [fx, fy, -.0008], [0, Math.PI, 0]);
+  const stapleGeo = new THREE.BoxGeometry(.012, .0022, .001);
+  for (let s = -x + .05; s < x - .03; s += .075) for (const sy of [y - fold * .55, -y + fold * .55]) part(g, stapleGeo, staple, [s, sy, -.0014]);
+  for (let s = -y + .06; s < y - .03; s += .075) for (const sx of [x - fold * .55, -x + fold * .55]) part(g, stapleGeo, staple, [sx, s, -.0014], [0, 0, Math.PI / 2]);
+  // corner keys: little wedges tapped into the stretcher's inside corners
+  const key = new THREE.BoxGeometry(.03, .03, .006);
+  for (const [kx, ky] of [[1, 1], [1, -1], [-1, 1], [-1, -1]]) part(g, key, wood, [kx * (x - bar - .012), ky * (y - bar - .012), .004], [0, 0, Math.PI / 4]);
+  g.userData = {tip: new THREE.Vector3(0, 0, d), ground: .002, painting: true, w, h, d, art, canvas: front};
+  return g;
+}
+
+const MODELS = {flashlight: flashlightModel, paintball: paintballModel, spray: sprayModel, bucket: bucketModel, crown: crownModel, painting: paintingModel};
 export const ITEM_MODELS = MODELS;   // for previews
 
 // ------------------------------------------------------------------- falling
@@ -359,6 +457,7 @@ export function addOutline(model) {
 }
 
 const worn = s => s.type === 'crown' && s.on;
+const _inv = new THREE.Matrix4();
 const _m = new THREE.Matrix4(), _onHead = new THREE.Matrix4();
 
 export function createItems({scene, camera, hits, shadows = null}) {
@@ -396,7 +495,7 @@ export function createItems({scene, camera, hits, shadows = null}) {
     let it = items.get(state.id);
     if (!it || it.state.type !== state.type) {
       if (it) it.model.removeFromParent();
-      const model = (MODELS[state.type] || flashlightModel)(state.id);
+      const model = (MODELS[state.type] || flashlightModel)(state.id, state);
       model.traverse(o => { o.castShadow = false; o.frustumCulled = false; });
       it = {state, model, sway: 0, kick: 0, shake: 0, outline: addOutline(model), fall: null};
       // a crown dithers away with its wearer when the camera pushes into them
@@ -459,6 +558,31 @@ export function createItems({scene, camera, hits, shadows = null}) {
       }
       return best;
     },
+    // paintings that aren't in anyone's hands (on walls, leant, lying about)
+    paintings() { return [...items.values()].filter(it => it.model.userData.painting && !it.state.holder && it.model.visible); },
+    // the nearest painting along a ray: {point, normal (facing the ray), distance, painting, local: {point, normal}}
+    paintingHit(origin, dir, far) {
+      let best = null;
+      for (const it of this.paintings()) {
+        const u = it.model.userData;
+        it.model.updateMatrixWorld();
+        const inv = _inv.copy(it.model.matrixWorld).invert();
+        _ray.set(origin, dir).applyMatrix4(inv);
+        _box.min.set(-u.w / 2, -u.h / 2, 0); _box.max.set(u.w / 2, u.h / 2, u.d);
+        const lp = _ray.intersectBox(_box, new THREE.Vector3());
+        if (!lp) continue;
+        const wp = lp.clone().applyMatrix4(it.model.matrixWorld), dist = wp.distanceTo(origin);
+        if (dist > far || (best && dist >= best.distance)) continue;
+        // which face: the one the point sits on
+        const ln = new THREE.Vector3();
+        const gaps = [[u.w / 2 - lp.x, 'x', 1], [lp.x + u.w / 2, 'x', -1], [u.h / 2 - lp.y, 'y', 1], [lp.y + u.h / 2, 'y', -1], [u.d - lp.z, 'z', 1], [lp.z, 'z', -1]];
+        const [, axis, sgn] = gaps.reduce((a, b) => (b[0] < a[0] ? b : a));
+        ln[axis] = sgn;
+        const wn = ln.clone().transformDirection(it.model.matrixWorld);
+        best = {point: wp, normal: wn, distance: dist, painting: it, local: {point: lp, normal: ln}};
+      }
+      return best;
+    },
     // world position of an item's business end (muzzle, nozzle, lens)
     tip(it) { it.model.updateMatrixWorld(); return it.model.localToWorld(it.model.userData.tip.clone()); },
     // place every item: on the ground, in a hand, or in your view
@@ -482,6 +606,7 @@ export function createItems({scene, camera, hits, shadows = null}) {
           m.rotation.set(0, s.yaw, u.groundRoll, 'YXZ');
           if (u.upright) { m.rotation.set(Math.PI / 2, s.yaw, 0, 'YXZ'); m.position.y = s.y + u.ground; }
           if (u.standing) { m.rotation.set(0, s.yaw, 0); m.position.y = s.y; }
+          if (u.painting) { m.rotation.set(s.tilt || 0, s.yaw, 0, 'YXZ'); m.position.set(s.x, s.y, s.z); }   // hung, leant or laid as placed
           u.dock?.();
           if (it.fall) {                      // still on its way down: follow the path, already in its rest pose (no tumbling)
             const f = it.fall; f.t += dt;
@@ -530,6 +655,11 @@ export function createItems({scene, camera, hits, shadows = null}) {
             const sc = it.scrub > 0 ? Math.sin(it.scrub * 40) * .03 : 0;
             u.sponge.position.set(-.02 + sc, -.03 + bob + Math.abs(sc) * .4, -.06 - (it.scrub > 0 ? .06 : 0));
             u.sponge.rotation.set(-.9, -.25, .15 + sc * 3);
+          } else if (s.type === 'painting') {
+            // carried at your side, turned so you can see the picture
+            m.scale.setScalar(.5);
+            m.position.set(.1, -.2 + bob, -.16);
+            m.rotation.set(.08, -.95, .02);
           } else if (s.type === 'crown') {
             m.scale.setScalar(.62);
             m.position.set(-.07, -.02 + bob, -.15);
@@ -563,7 +693,13 @@ export function createItems({scene, camera, hits, shadows = null}) {
           if (s.type === 'spray') m.rotation.set(-.35 + pitch * .5, yaw, 0, 'YXZ');
           else if (s.type === 'bucket' || s.type === 'crown') m.rotation.set(0, yaw, 0);
           else m.rotation.set(pitch, yaw, 0, 'YXZ');
-          if (s.type === 'bucket' && avatar?.handL && socket) {
+          if (s.type === 'painting' && avatar?.hand) {
+            // carried at their side by the top of the stretcher, the picture facing out
+            m.rotation.set(0, yaw + Math.PI / 2, 0);
+            avatar.hand.getWorldPosition(m.position);
+            m.position.add(tmpV.set(Math.cos(yaw), 0, -Math.sin(yaw)).multiplyScalar(.05)).y -= u.h / 2 - .08;
+            m.visible = avatar.root.visible && avatar.model.visible !== false;
+          } else if (s.type === 'bucket' && avatar?.handL && socket) {
             m.scale.setScalar(1);
             avatar.handL.getWorldPosition(m.position); m.position.y -= .4;      // the bail's grip in the fist
             u.bail.rotation.x = 0;

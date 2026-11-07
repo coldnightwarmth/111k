@@ -453,3 +453,44 @@ test('leaving: what you held drops where you were if anyone else is here, otherw
   letGo(items, a, {others: false, koth: {...K.freshKoth(), state: 'done'}});
   assert.equal(items.cr1.x, ITEM_SPAWNS.find(s => s.id === 'cr1').x, 'after a game it goes home like anything else');
 });
+
+test('paintings: hung, leant and laid with a tilt, fall flat when let go, and paint on them kept in their own space', async () => {
+  const {handleMessage, newPlayer, freshMarks, sprayId, splatId, releaseItems} = await import('../room.js');
+  const {ITEM_SPAWNS} = await import('../../src/world-items.js');
+  const {cleanItem} = await import('../../src/protocol.js');
+  const items = Object.fromEntries(ITEM_SPAWNS.map(s => [s.id, {...s, holder: null, on: false}]));
+  const pt = items.pt1;
+  assert.equal(pt.type, 'painting');
+  assert.deepEqual([cleanItem(pt).tilt, cleanItem(pt).art], [0, 1]);
+  const marks = freshMarks();
+  const a = newPlayer('aaa', 0); a.pose = {x: pt.x, y: 1.45, z: pt.z + 1, yaw: 0, pitch: 0, g: 0};
+  const room = {items, marks, race: null, players: () => [a]};
+  let now = 10_000;
+  const send = m => { now += 400; a.lastShot = a.lastSpray = 0; return handleMessage(a, JSON.stringify(m), now, room); };
+  send({type: 'pickup', id: 'pt1'});
+  assert.equal(pt.holder, 'aaa');
+  send({type: 'drop', id: 'pt1', x: pt.x + 1, y: .5, z: pt.z + .3, yaw: 1, tilt: -.2});
+  assert.deepEqual([pt.holder, pt.tilt, pt.yaw], [null, -.2, 1], 'leant on a wall');
+  // a tag across the painting and the wall: the wall part remembers the painting's shape, the painting keeps its part
+  items.sp1.holder = 'aaa';
+  const tag = {p: [pt.x, 1.2, pt.z + .1], n: [0, 0, 1], up: [0, 1, 0], piece: 'tag_ruse', size: 1, occ: [[pt.x, pt.y, pt.z, 1, -.2, 1]]};
+  const r = send({type: 'spray', ...tag, parts: [{...tag, occ: undefined, p: [.1, .2, .04], pi: 'pt1'}, {...tag, p: [0, 0, 0], pi: 'pt99'}]});
+  const msg = r.out.find(o => o.msg.type === 'spray').msg;
+  assert.equal(msg.parts.length, 1, 'only parts on paintings that exist');
+  assert.deepEqual(msg.mark.occ, [[pt.x, pt.y, pt.z, 1, -.2, 1]]);
+  assert.equal(marks.sprays.length, 2);
+  assert.notEqual(sprayId(marks.sprays[0]), sprayId(marks.sprays[1]));
+  // scrubbing the part on the painting leaves the wall's part
+  items.sp1.holder = null; items.bk1.holder = 'aaa';
+  send({type: 'erase', kind: 'spray', id: sprayId(msg.parts[0])});
+  assert.deepEqual(marks.sprays.map(s => s.pi || 'wall'), ['wall']);
+  // a paintball's splat on it, the same way
+  items.bk1.holder = null; items.pb1.holder = 'aaa';
+  send({type: 'shoot', o: [a.pose.x, 1.3, a.pose.z], v: [0, 0, -10], c: 0xff0000, s: 77, t: .2,
+    hit: {p: [pt.x, 1.2, pt.z + .1], n: [0, 0, 1], occ: [[pt.x, pt.y, pt.z, 1, -.2, 1]]}, parts: [{p: [0, 0, .035], n: [0, 0, 1], pi: 'pt1'}]});
+  assert.deepEqual(marks.splats.map(splatId), ['77', '77@pt1']);
+  // knocked out of your hands it lands flat
+  items.pb1.holder = null; pt.holder = 'aaa';
+  releaseItems(items, a);
+  assert.equal(pt.tilt, -Math.PI / 2);
+});

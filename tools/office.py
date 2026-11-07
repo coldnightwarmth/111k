@@ -228,6 +228,11 @@ def build(ctx, door_x):
     ctx['ITEMS'].append({'type': 'paintball', 'x': round(float(p[0]), 3), 'y': 0.03, 'z': round(float(p[2]), 3),
                          'yaw': round(float(0.9 + W.yaw), 3)})
 
+    # a painting hung on the desk wall, over the buffed-out patch (it can be taken down and moved)
+    p = W.T((3.5 - 0.003, 1.55, 0.675))
+    ctx['ITEMS'].append({'type': 'painting', 'x': round(float(p[0]), 3), 'y': 1.55, 'z': round(float(p[2]), 3),
+                         'yaw': 0.0, 'tilt': 0.0, 'art': 1})
+
     # the golden crown, on top of the stacked boxes in the corner (king of the hill)
     p = W.T((3.05, 0.9, 2.6))
     ctx['ITEMS'].append({'type': 'crown', 'x': round(float(p[0]), 3), 'y': 0.9, 'z': round(float(p[2]), 3),

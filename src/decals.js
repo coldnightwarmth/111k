@@ -216,7 +216,8 @@ export function cutDecal(hits, {point, normal, up, width, height, dir = null, fr
       const a = piece[0].l;
       occ.push({id, src: poly, poly: piece, ...bounds(piece), maxZ: Math.max(...piece.map(q => q.l.z)), gx: -ln.x / ln.z, gy: -ln.y / ln.z, cz: a.z + (ln.x * a.x + ln.y * a.y) / ln.z});
     }
-    for (const piece of within(poly, front)) faces.push({id: -1, poly: piece, n, facing, src: poly});
+    // (something only standing in the way, like where a painting hung when the paint went on, takes none itself)
+    if (!t.noPaint) for (const piece of within(poly, front)) faces.push({id: -1, poly: piece, n, facing, src: poly});
   }
   // a painted piece mustn't be cut by the caster pieces of its own triangle
   for (const f of faces) f.own = new Set(occ.filter(o => o.src === f.src).map(o => o.id));
