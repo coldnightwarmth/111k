@@ -128,20 +128,39 @@ test('flashlights: pick up, toggle, drop, punched out of your hand', async () =>
   assert.equal(a.messages().filter(m => m.type === 'punch').length, 1);
 });
 
-test('items go home when the last player leaves', async () => {
+test('a refresh keeps what you hold (not the crown); items go home if the last player never comes back', async () => {
   const {ITEM_SPAWNS} = await import('../../src/world-items.js');
   const {room, sockets, ctx} = makeRoom();
   const store = new Map();
   ctx.storage.get = async k => store.get(k);
   ctx.storage.put = async (k, v) => { store.set(k, structuredClone(v)); };
+  ctx.storage.delete = async k => store.delete(k);
   await join(room, S1);
-  const [a] = sockets;
-  const spawn = ITEM_SPAWNS[0];
-  await room.webSocketMessage(a, JSON.stringify({type: 'pose', pose: {...pose, x: spawn.x, z: spawn.z}}));
-  await room.webSocketMessage(a, JSON.stringify({type: 'pickup', id: spawn.id}));
-  assert.equal(store.get('items')[spawn.id].holder !== null, true);
-  a.closed = {code: 1000};
-  await room.webSocketClose(a);
+  const spawn = ITEM_SPAWNS.find(s => s.type !== 'crown'), crown = ITEM_SPAWNS.find(s => s.type === 'crown');
+  const take = async (ws, s) => {
+    await room.webSocketMessage(ws, JSON.stringify({type: 'pose', pose: {...pose, x: s.x, z: s.z}}));
+    await new Promise(r => setTimeout(r, 1100));
+    await room.webSocketMessage(ws, JSON.stringify({type: 'pickup', id: s.id}));
+  };
+  await take(sockets[0], crown); await room.webSocketMessage(sockets[0], JSON.stringify({type: 'koth'}));   // on the head, hands free
+  await take(sockets[0], spawn);
+  const id = sockets[0].messages()[0].id;
+  assert.equal(store.get('items')[spawn.id].holder, id);
+  assert.equal(store.get('items')[crown.id].holder, id);
+  // refresh: the crown comes off straight away, the rest is still theirs when they're back
+  sockets[0].closed = {code: 1001};
+  await room.webSocketClose(sockets[0]);
+  assert.equal(store.get('items')[crown.id].holder, null);
+  assert.equal(store.get('items')[spawn.id].holder, id);
+  await join(room, S1);
+  assert.equal(sockets[1].messages().find(m => m.type === 'state').items.find(i => i.id === spawn.id).holder, id);
+  await room.alarm();
+  assert.equal(store.get('items')[spawn.id].holder, id, 'still held after the alarm');
+  // they leave for good: once the alarm comes round, it all goes home
+  sockets[1].closed = {code: 1000};
+  await room.webSocketClose(sockets[1]);
+  assert.equal(store.get('items')[spawn.id].holder, id);
+  await room.alarm();
   assert.equal(store.get('items')[spawn.id].holder, null);
   assert.equal(store.get('items')[spawn.id].x, spawn.x);
 });

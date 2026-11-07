@@ -64,6 +64,7 @@ export function createWorldHits(level, doors = []) {
       else { if (lp.center.distanceTo(center) > lp.radius + radius) continue; sphere.center.copy(center); }
       sphere.radius = radius;
       const pos = p.g.attributes.position, uv1 = p.g.attributes.uv1, idx = p.g.index, nor = p.g.attributes.normal;
+      const lit = p.uv1 || new THREE.Vector2();      // something built at runtime borrows a spot of the level's light
       p.bvh.shapecast({
         intersectsBounds: box => box.intersectsSphere(sphere),
         intersectsTriangle: (t, i) => {
@@ -71,7 +72,7 @@ export function createWorldHits(level, doors = []) {
           const v = [0, 1, 2].map(k => idx.getX(i * 3 + k));
           out.push({
             p: v.map(j => { const q = new THREE.Vector3().fromBufferAttribute(pos, j); return toWorld ? q.applyMatrix4(p.mesh.matrixWorld) : q; }),
-            uv: v.map(j => uv1 ? new THREE.Vector2(uv1.getX(j), uv1.getY(j)) : new THREE.Vector2()),
+            uv: v.map(j => uv1 ? new THREE.Vector2(uv1.getX(j), uv1.getY(j)) : lit.clone()),
             // which way the surface faces (its own normals, so it doesn't depend on winding)
             n: nor ? (() => { const q = new THREE.Vector3(); for (const j of v) q.x += nor.getX(j), q.y += nor.getY(j), q.z += nor.getZ(j);
               q.normalize(); return toWorld ? q.transformDirection(p.mesh.matrixWorld) : q; })() : null,
@@ -111,6 +112,36 @@ export function createWorldHits(level, doors = []) {
         parts.push({mesh, g, bvh: new MeshBVH(g, {maxLeafTris: 12}), inv: mesh.matrixWorld.clone().invert(),
           sphere: g.boundingSphere.clone().applyMatrix4(mesh.matrixWorld), solidOnly: true});
       });
+    },
+    // something built at runtime (the lap timer) that takes paint like the level does, all but the parts marked
+    // userData.noPaint (which still stop balls and sprays); `light` is the level's lightmap spot its paint borrows
+    addPaintable(object, light = null) {
+      object.updateMatrixWorld(true);
+      object.traverse(mesh => {
+        if (!mesh.isMesh || mesh.material.transparent || mesh.userData.noHit) return;
+        const g = mesh.geometry;
+        g.computeBoundingSphere();
+        parts.push({mesh, g, bvh: new MeshBVH(g, {maxLeafTris: 12}), inv: mesh.matrixWorld.clone().invert(),
+          sphere: g.boundingSphere.clone().applyMatrix4(mesh.matrixWorld), solidOnly: !!mesh.userData.noPaint, uv1: light});
+      });
+    },
+    // where the level's lightmap is at the first level surface along a ray (its uv1), or null
+    lightAt(origin, dir, far) {
+      let best = null, bp = null, bh = null;
+      for (const p of parts) {
+        if (p.solidOnly || p.uv1 !== undefined || !p.g.attributes.uv1) continue;
+        _ray.origin.copy(origin); _ray.direction.copy(dir);
+        if (_ray.distanceSqToPoint(p.sphere.center) > p.sphere.radius ** 2) continue;
+        _ray.applyMatrix4(p.inv);
+        const h = p.bvh.raycastFirst(_ray, THREE.DoubleSide, 0, far);
+        if (h && (!best || h.distance < best)) { best = h.distance; bp = p; bh = h; }
+      }
+      if (!bh) return null;
+      const i = bp.g.index, pos = bp.g.attributes.position, uv = bp.g.attributes.uv1;
+      const [a, b, c] = [0, 1, 2].map(k => i.getX(bh.faceIndex * 3 + k));
+      return THREE.Triangle.getInterpolation(bh.point, new THREE.Vector3().fromBufferAttribute(pos, a), new THREE.Vector3().fromBufferAttribute(pos, b),
+        new THREE.Vector3().fromBufferAttribute(pos, c), new THREE.Vector2().fromBufferAttribute(uv, a), new THREE.Vector2().fromBufferAttribute(uv, b),
+        new THREE.Vector2().fromBufferAttribute(uv, c), new THREE.Vector2());
     },
     // the same for one door, in its hinge space (null if there's no such door)
     door(k) {
@@ -157,7 +188,7 @@ function clipToDecal(poly, hx, hy) {
 // shape whatever angle it was thrown at, and faces joined to it (round a corner, along the tunnel's curve)
 // carry on from it without stretching. Faces it can't reach by its edges (separate things) are mapped
 // straight along the throw onto the hit face's plane. Returns triangle -> its three corners on the decal.
-function unfold(tris, point, nh, xh, yh, z) {
+function unfold(tris, point, nh, xh, yh, z, seen) {
   const out = new Map();
   const key = p => `${Math.round(p.x * 500)},${Math.round(p.y * 500)},${Math.round(p.z * 500)}`;
   const edges = new Map(), keys = [], facing = [];
@@ -167,7 +198,7 @@ function unfold(tris, point, nh, xh, yh, z) {
     n.crossVectors(e1.subVectors(t.p[1], t.p[0]), e2.subVectors(t.p[2], t.p[0]));
     const ok = n.lengthSq() > 1e-14;
     if (ok) { n.normalize(); if (t.n ? n.dot(t.n) < 0 : n.dot(z) < 0) n.negate(); }
-    facing.push(ok && n.dot(z) >= .03 ? n.clone() : null);
+    facing.push(ok && seen(n, t) >= .03 ? n.clone() : null);
     for (let e = 0; e < 3; e++) {
       const a = keys[i][e], b = keys[i][(e + 1) % 3], ek = a < b ? `${a}|${b}` : `${b}|${a}`;
       if (!edges.has(ek)) edges.set(ek, []);
@@ -277,7 +308,15 @@ export function cutDecal(hits, {point, normal, up, width, height, dir = null, fr
   const xh = new THREE.Vector3().crossVectors(yh, nh);
   // (gathered a little wider: an unfolded corner can reach further than the straight-on box)
   const tris = hits.gather(point, Math.hypot(hx, hy, reach) * 1.25);
-  const flatOn = unfold(tris, point, nh, xh, yh, z);
+  // how squarely a face is turned to the thrower: to where they stood when that's known (so the side of a
+  // doorway you can see from there takes paint even if the throw itself runs along it), else to the throw
+  const eye = thrower !== null ? point.clone().addScaledVector(z, thrower) : null;
+  const seen = (n, t) => {
+    if (!eye) return n.dot(z);
+    const c = _w.copy(t.p[0]).add(t.p[1]).add(t.p[2]).divideScalar(3);
+    return n.dot(c.sub(eye).negate().normalize());
+  };
+  const flatOn = unfold(tris, point, nh, xh, yh, z, seen);
   // Faces it doesn't reach by unfolding (separate things): each spot takes the piece from the unfolded surface
   // right behind it along the throw, so the piece carries straight across them as the thrower sees it.
   // With no unfolded surface behind, straight along the throw onto the hit face's plane.
@@ -374,8 +413,8 @@ export function cutDecal(hits, {point, normal, up, width, height, dir = null, fr
     if (n.lengthSq() < 1e-14) continue;
     n.normalize();
     if (t.n ? n.dot(t.n) < 0 : n.dot(z) < 0) n.negate();       // the way the surface faces
-    const facing = n.dot(z);
-    if (facing < .03) continue;                               // edge-on or turned away: no paint, no shadow
+    const square = n.dot(z), facing = seen(n, t);
+    if (facing < .03 && square < .03) continue;              // edge-on or turned away: no paint, no shadow
     const q = flatOn.get(t);
     let poly = t.p.map((p, k) => ({l: local(p), uv: t.uv[k], q: q ? q[k] : along(p)}));
     // a separate thing standing clear in front of the hit surface: left out (unless it's a painting's outline)
@@ -385,14 +424,14 @@ export function cutDecal(hits, {point, normal, up, width, height, dir = null, fr
     if (poly.length < 3) continue;
     const ln = new THREE.Vector3(n.dot(x), n.dot(y), n.dot(z));
     // the parts of it inside the reach (paint) and the slightly deeper reach that only casts shadows
-    for (const piece of within(poly, near)) {
+    if (square >= .03) for (const piece of within(poly, near)) {   // (edge-on to the throw: too thin to shadow anything)
       const id = faces.length + occ.length;
       // as a shadow caster: its plane in the box frame, z = cz + gx*x + gy*y
       const a = piece[0].l;
       occ.push({id, src: poly, poly: piece, ...bounds(piece), maxZ: Math.max(...piece.map(q => q.l.z)), gx: -ln.x / ln.z, gy: -ln.y / ln.z, cz: a.z + (ln.x * a.x + ln.y * a.y) / ln.z});
     }
     // (something only standing in the way, like where a painting hung when the paint went on, takes none itself)
-    if (!t.noPaint) for (const piece of within(poly, front)) faces.push({id: -1, poly: piece, n, facing, src: poly});
+    if (!t.noPaint && facing >= .03) for (const piece of within(poly, front)) faces.push({id: -1, poly: piece, n, facing, src: poly});
   }
   // a painted piece mustn't be cut by the caster pieces of its own triangle
   for (const f of faces) f.own = new Set(occ.filter(o => o.src === f.src).map(o => o.id));
@@ -414,7 +453,8 @@ export function cutDecal(hits, {point, normal, up, width, height, dir = null, fr
   // 2. cut each painted face by every caster in front of it: subtract the region where the caster
   //    covers it in the throw's view and is nearer the thrower
   const verts = [];
-  const fade = f => Math.min(1, (f - .03) / .3);
+  // only faces almost exactly edge-on to the thrower thin out (the piece isn't stretched on them any more)
+  const fade = f => Math.min(1, (f - .03) / .09);
   for (const f of faces) {
     let pieces = [f.poly];
     for (const o of occ) {

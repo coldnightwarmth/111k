@@ -124,9 +124,15 @@ function close(c) {
   try { c.socket.end(Buffer.from([0x88, 0])); } catch {}
   if (![...clients].some(o => o.player.id === c.player.id)) {
     broadcast({type: 'leave', id: c.player.id});
-    if (!clients.size) { items = freshItems(); koth = freshKoth(); }
-    else setTimeout(() => {   // a refresh comes back within a few seconds: keep their item for them
+    // the crown comes off now; anything else waits for a refresh to come back within a few seconds
+    const crowns = Object.fromEntries(Object.values(items).filter(it => it.holder === c.player.id && it.type === 'crown').map(it => [it.id, it]));
+    if (Object.keys(crowns).length) {
+      for (const {msg} of letGo(crowns, c.player, {others: [...clients].some(o => !o.player.inactive), koth})) broadcast(msg);
+      runKoth('left');
+    }
+    setTimeout(() => {
       if ([...clients].some(o => o.player.id === c.player.id)) return;
+      if (!clients.size) { items = freshItems(); koth = freshKoth(); return; }   // the last one out didn't come back
       const others = [...clients].some(o => !o.player.inactive);
       for (const {msg} of letGo(items, c.player, {others, koth})) broadcast(msg);
       runKoth('left');

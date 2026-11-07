@@ -109,7 +109,13 @@ async function start() {
   const doors = createDoors(level, collider);
   const hits = createWorldHits(level, doors.doors);
   const machine = createMachine(scene);
-  hits.addSolid(machine.root);
+  // the lap timer takes tags and paint (all but its display and its button); its paint borrows the baked
+  // light of the tunnel wall right beside it
+  {
+    machine.root.updateMatrixWorld(true);
+    const beside = machine.root.localToWorld(new THREE.Vector3(.95, 1.3, .4)), into = new THREE.Vector3(0, 0, -1).transformDirection(machine.root.matrixWorld);
+    hits.addPaintable(machine.root, hits.lightAt(beside, into, 3));
+  }
   const shelves = createShelves(THREE, scene);
   hits.addSolid(shelves);
   // what blocks flashlight beams: the level (doors included), the lap timer and the shelving
@@ -360,13 +366,13 @@ async function start() {
     return doorPages.get(key);
   }
   // the patch a tag covers: cut from whatever it lands on (a door's own surface for a door)
-  // how far along the throw a tag carries from what you hit: half a metre beyond it, and toward you
+  // how far along the throw a tag carries from what you hit: 60 cm beyond it (into a doorway's recess), and toward you
   // right up to the nozzle (1.5 m for tags sprayed before where you stood was sent along)
-  const sprayReach = s => [.5, s.r !== undefined ? Math.max(.1, s.r - .05) : 1.5];
+  const sprayReach = s => [.6, s.r !== undefined ? Math.max(.1, s.r - .05) : 1.5];
   function sprayVerts(s, piece, surface = null) {
     const point = new THREE.Vector3(...s.p), normal = new THREE.Vector3(...s.n), up = new THREE.Vector3(...s.up), thin = s.d !== undefined;
     const verts = cutDecal(surface || withOccluders(s.occ), {point, normal, up, width: s.size, height: s.size * piece.h / piece.w,
-      dir: s.v ? new THREE.Vector3(...s.v) : null, front: thin ? .03 : .9, back: thin ? .03 : .5,
+      dir: s.v ? new THREE.Vector3(...s.v) : null, front: thin ? .03 : .9, back: thin ? .03 : .6,
       slab: thin ? null : sprayReach(s), thrower: s.r ?? null, apart: s.pi ? null : undefined});   // (on a painting, the painting is all there is)
     const [u0, v0, u1, v1] = piece.uv;
     for (const q of verts) { q.u = u0 + q.u * (u1 - u0); q.v = v0 + q.v * (v1 - v0); }

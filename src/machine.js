@@ -165,30 +165,34 @@ export function createMachine(scene) {
   // display bezel with the timer window and the lap window beside it
   const bezel = F(new THREE.BoxGeometry(1.42, .62, .06), dark, 0, 1.9, .03);
   bezel.userData.noHit = false;
+  // (the display, the control plate and the button take no paint: they stay readable and pushable)
+  const noPaint = (...ms) => { for (const m of ms) m.traverse(o => { o.userData.noPaint = true; }); return ms[0]; };
+  noPaint(bezel);
   const timer = createReadout(1024, 256), laps = createReadout(256, 256);
   const screenMat = tex => new THREE.MeshBasicMaterial({map: tex, toneMapped: false});
-  F(new THREE.PlaneGeometry(.96, .36), screenMat(timer.texture), -.17, 1.88, .0605);
-  F(new THREE.PlaneGeometry(.26, .36), screenMat(laps.texture), .52, 1.88, .0605);
+  noPaint(F(new THREE.PlaneGeometry(.96, .36), screenMat(timer.texture), -.17, 1.88, .0605), F(new THREE.PlaneGeometry(.26, .36), screenMat(laps.texture), .52, 1.88, .0605));
   // glass over both, a touch reflective
   const glass = std(0x99aab0, .06, .2, {transparent: true, opacity: .12, depthWrite: false});
   F(new THREE.PlaneGeometry(.96, .36), glass, -.17, 1.88, .064);
   F(new THREE.PlaneGeometry(.26, .36), glass, .52, 1.88, .064);
-  F(new THREE.BoxGeometry(.035, .5, .065), black, .355, 1.9, .033);           // divider
+  noPaint(F(new THREE.BoxGeometry(.035, .5, .065), black, .355, 1.9, .033));           // divider
   // power and status lamps
-  const lamp = (color, u) => F(new THREE.CylinderGeometry(.012, .012, .01, 12), new THREE.MeshBasicMaterial({color, toneMapped: false}), u, 1.63, .062, [Math.PI / 2, 0, 0]);
+  const lamp = (color, u) => noPaint(F(new THREE.CylinderGeometry(.012, .012, .01, 12), new THREE.MeshBasicMaterial({color, toneMapped: false}), u, 1.63, .062, [Math.PI / 2, 0, 0]));
   lamp(0x47ff6a, -.6); const runLamp = lamp(0xff3020, -.55);
-  for (const [u, v] of [[-.68, 2.18], [.68, 2.18], [-.68, 1.62], [.68, 1.62]]) F(new THREE.CylinderGeometry(.011, .011, .012, 8), steel, u, v, .066, [Math.PI / 2, 0, 0]);
+  for (const [u, v] of [[-.68, 2.18], [.68, 2.18], [-.68, 1.62], [.68, 1.62]]) noPaint(F(new THREE.CylinderGeometry(.011, .011, .012, 8), steel, u, v, .066, [Math.PI / 2, 0, 0]));
 
   // control plate, the button in its yellow guard, and the stencils
   const plate = F(new THREE.BoxGeometry(.9, .62, .03), dark, 0, 1.03, .015);   // the whole plate is the push target
-  for (const [u, v] of [[-.42, 1.3], [.42, 1.3], [-.42, .76], [.42, .76]]) F(new THREE.CylinderGeometry(.012, .012, .014, 8), steel, u, v, .036, [Math.PI / 2, 0, 0]);
-  F(new THREE.BoxGeometry(.32, .32, .07), yellow, 0, 1.07, .065);
-  F(new THREE.CylinderGeometry(.115, .125, .03, 32), black, 0, 1.07, .112, [Math.PI / 2, 0, 0]);            // collar
+  noPaint(plate);
+  for (const [u, v] of [[-.42, 1.3], [.42, 1.3], [-.42, .76], [.42, .76]]) noPaint(F(new THREE.CylinderGeometry(.012, .012, .014, 8), steel, u, v, .036, [Math.PI / 2, 0, 0]));
+  noPaint(F(new THREE.BoxGeometry(.32, .32, .07), yellow, 0, 1.07, .065));
+  noPaint(F(new THREE.CylinderGeometry(.115, .125, .03, 32), black, 0, 1.07, .112, [Math.PI / 2, 0, 0]));            // collar
   const button = new THREE.Group(); button.position.set(0, 1.07, .127); face.add(button);
   part(button, new THREE.CylinderGeometry(.06, .06, .05, 24), rubber, [0, 0, .025], [Math.PI / 2, 0, 0]);  // stem
   const capGeo = new THREE.SphereGeometry(.1, 32, 12, 0, Math.PI * 2, 0, Math.PI * .42);
   const cap = part(button, capGeo, red, [0, 0, .02], [Math.PI / 2, 0, 0]);
   cap.scale.set(1, .55, 1);
+  noPaint(button);
   // the glow: round the yellow guard, the black collar and the red cap together, fitted to each, from any angle
   // (the cap: a sphere of 0.1 squashed to 0.055 deep, its middle 0.147 out from the face)
   const buttonGlow = glowBox(new THREE.Vector3(-.162, -.162, .028), new THREE.Vector3(.162, .162, .102),

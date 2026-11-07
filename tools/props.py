@@ -556,7 +556,7 @@ class Props:
         W.box((X1 + T_W / 2, CEIL / 2, 0), (T_W, CEIL, Z1 - Z0), wall, faces='-x', collide=True)
         W.box(((X0 - T_W + dl) / 2, CEIL / 2, Z0 - T_W / 2), (dl - X0 + T_W, CEIL, T_W), wall, faces='+z', collide=True)
         W.box(((dr + X1 + T_W) / 2, CEIL / 2, Z0 - T_W / 2), (X1 + T_W - dr, CEIL, T_W), wall, faces='+z', collide=True)
-        W.box((door_x, (self.DOOR_H + CEIL) / 2, Z0 - T_W / 2), (self.DOOR_W, CEIL - self.DOOR_H, T_W), wall, faces='+z-y')
+        W.box((door_x, (self.DOOR_H + CEIL) / 2, Z0 - T_W / 2), (self.DOOR_W, CEIL - self.DOOR_H, T_W), wall, faces='+z')   # the frame's head lines the opening's top
         if baseboard:
             for (c, s) in [((0, 0.05, Z1 - 0.006), (X1 - X0, 0.1, 0.012)), ((X0 + 0.006, 0.05, 0), (0.012, 0.1, Z1 - Z0)),
                            ((X1 - 0.006, 0.05, 0), (0.012, 0.1, Z1 - Z0)),

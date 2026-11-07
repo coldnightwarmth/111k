@@ -133,6 +133,7 @@ export class Room {
 
   async alarm() {
     const now = Date.now();
+    if (await this.closeIfEmpty()) return;
     await this.releaseOrphans();
     for (const ws of this.sockets()) {
       const p = ws.deserializeAttachment();
@@ -163,17 +164,32 @@ export class Room {
     const p = ws.deserializeAttachment();
     if (!p?.id || this.sockets().some(o => o !== ws && o.deserializeAttachment()?.id === p.id)) return;
     this.broadcast({type: 'leave', id: p.id});
-    const items = await this.loadItems();
-    if (!this.sockets().some(o => o !== ws)) {
-      // last one out: everything goes back where it started (and any game is off)
-      this.items = freshItems(); await this.saveItems();
-      this.koth = freshKoth(); await this.saveKoth(); return;
+    const items = await this.loadItems(), alone = !this.sockets().some(o => o !== ws);
+    // the crown never waits for anyone: it comes off now (on the floor where they were if anyone else is
+    // about or a game is on, otherwise back on its stand)
+    const crowns = Object.fromEntries(Object.values(items).filter(it => it.holder === p.id && it.type === 'crown').map(it => [it.id, it]));
+    if (Object.keys(crowns).length) {
+      const others = this.players().some(o => o.id !== p.id && !o.inactive);
+      for (const {msg} of letGo(crowns, p, {others, koth: await this.loadKoth()})) this.broadcast(msg);
+      await this.saveItems(); await this.runKoth(Date.now(), 'left');
     }
-    // a refresh reconnects within a few seconds as the same player: keep their item for them,
+    // a refresh reconnects within a few seconds as the same player: keep what's in their hands for them,
     // and let an alarm (which survives hibernation) drop it where they were if they don't come back
+    // (or, if they were the last one here, put everything back and call off any game)
     if (p.pose && Object.values(items).some(it => it.holder === p.id)) { const left = (await this.ctx.storage.get?.('left')) || {}; left[p.id] = p.pose; await this.ctx.storage.put?.('left', left); }
+    if (alone) await this.ctx.storage.put?.('emptied', Date.now());
     const soon = Date.now() + 9000, current = await this.ctx.storage.getAlarm?.();
     if (!current || current > soon) await this.ctx.storage.setAlarm(soon);
+  }
+  // the last one out didn't come back: everything goes back where it started, and any game is off
+  async closeIfEmpty() {
+    if (!(await this.ctx.storage.get?.('emptied'))) return false;
+    await this.ctx.storage.delete?.('emptied');
+    if (this.sockets().length) return false;
+    this.items = freshItems(); await this.saveItems();
+    this.koth = freshKoth(); await this.saveKoth();
+    await this.ctx.storage.delete?.('left');
+    return true;
   }
   // items held by someone who is no longer connected go down where they were
   async releaseOrphans() {
