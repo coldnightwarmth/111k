@@ -152,7 +152,7 @@ export function cleanSpray(s) {
   if (!s || typeof s !== 'object') return null;
   const p = vec(s.p, 500), n = unit(s.n), up = unit(s.up);
   const piece = typeof s.piece === 'string' && /^[a-zA-Z0-9_.-]{1,48}$/.test(s.piece) ? s.piece : null;
-  const size = Number.isFinite(s.size) ? round(Math.max(.2, Math.min(2.4, s.size)), 2) : null;
+  const size = Number.isFinite(s.size) ? round(Math.max(.1, Math.min(4.5, s.size)), 2) : null;
   if (!p || !n || !up || !piece || size === null) return null;
   const out = {p, n, up, piece, size};
   const v = s.v !== undefined ? unit(s.v) : null;                 // which way it was sprayed

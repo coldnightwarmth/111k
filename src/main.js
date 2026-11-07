@@ -170,7 +170,6 @@ async function start() {
   let relock = false, lastPunch = 0, lastShot = 0, lastSpray = 0, shake = 0, menuRelease = false;
 
   const controls = createControls({
-    ctrlCrouches: () => heldType() !== 'spray',
     canvas, isTouch,
     onToggleView: () => { thirdPerson = !thirdPerson; },
     onJump: () => { if (!chat.open && vertical.jump()) player.emote = ''; },
@@ -327,7 +326,7 @@ async function start() {
     const up = Math.abs(normal.y) > .9 ? new THREE.Vector3(Math.cos(s.s), 0, Math.sin(s.s)) : new THREE.Vector3(0, 1, 0);
     up.applyAxisAngle(normal, (s.s % 628) / 100);
     const verts = cutDecal(surface || withOccluders(s.occ), {point, normal, up, width: size, height: size,
-      dir: s.v ? new THREE.Vector3(...s.v) : null, front: thin ? .03 : .3, back: thin ? .03 : .35});
+      dir: s.v ? new THREE.Vector3(...s.v) : null, front: thin ? .03 : .3, back: thin ? .03 : .35, apart: s.pi ? null : undefined});
     const [cu, cv] = splatCell(s.s);
     for (const q of verts) { q.u = cu + q.u / 4; q.v = cv + q.v / 2; }
     return verts;
@@ -368,7 +367,7 @@ async function start() {
     const point = new THREE.Vector3(...s.p), normal = new THREE.Vector3(...s.n), up = new THREE.Vector3(...s.up), thin = s.d !== undefined;
     const verts = cutDecal(surface || withOccluders(s.occ), {point, normal, up, width: s.size, height: s.size * piece.h / piece.w,
       dir: s.v ? new THREE.Vector3(...s.v) : null, front: thin ? .03 : .9, back: thin ? .03 : .5,
-      slab: thin ? null : sprayReach(s), thrower: s.r ?? null});
+      slab: thin ? null : sprayReach(s), thrower: s.r ?? null, apart: s.pi ? null : undefined});   // (on a painting, the painting is all there is)
     const [u0, v0, u1, v1] = piece.uv;
     for (const q of verts) { q.u = u0 + q.u * (u1 - u0); q.v = v0 + q.v * (v1 - v0); }
     return verts;
@@ -948,7 +947,7 @@ async function start() {
   // the next tag's little twist and size are rolled ahead, so the preview shows exactly what you'll get
   // (once you've turned or sized it by hand, it goes on exactly as set: no wobble)
   let nextTilt = 0, nextScale = 1, tagTurn = 0, tagScale = 1;
-  const TURN_STEP = 5 * Math.PI / 180, SCALE_STEP = 1.06, SCALE_MIN = .3, SCALE_MAX = 3;
+  const TURN_STEP = 5 * Math.PI / 180, SCALE_STEP = 1.06, SCALE_MIN = .3, SCALE_MAX = 2;
   const handSet = () => tagTurn !== 0 || tagScale !== 1;
   const rollSpray = () => {
     if (handSet()) { nextTilt = 0; nextScale = 1; return; }
@@ -974,7 +973,7 @@ async function start() {
       : new THREE.Vector3(aim.dir.x, 0, aim.dir.z).normalize().multiplyScalar(n.y > 0 ? 1 : -1);
     up.applyAxisAngle(n, nextTilt + tagTurn);                 // your turn, or by itself up to 3° either way
     const big = Math.max(piece.w, piece.h);
-    const size = Math.max(.2, Math.min(2.4, Math.max(.35, Math.min(piece.w * Math.min(1, 1.5 / big), 2.2)) * nextScale * tagScale));
+    const size = Math.max(.1, Math.min(4.5, Math.max(.35, Math.min(piece.w * Math.min(1, 1.5 / big), 2.2)) * nextScale * tagScale));
     // sprayed partly along your aim (so it wraps the corner you can see) and partly straight on (so the piece reads)
     const fly = aim.dir.clone().normalize().add(n.clone().negate()).normalize();
     const msg = {type: 'spray', p: aim.point.toArray().map(r3), n: n.toArray().map(r3), up: up.toArray().map(r3), piece: chosenPiece,
@@ -1004,9 +1003,9 @@ async function start() {
   }
 
   // a faint ghost of the tag where a click would put it
-  let preview = null, previewKey = '', previewAt = 0;
+  let preview = null, previewKey = '', previewAt = 0, previewMat = null;
   function clearPreview() {
-    if (preview) { preview.removeFromParent(); preview.geometry.dispose(); preview.material.dispose(); preview = null; }
+    if (preview) { preview.removeFromParent(); preview.geometry.dispose(); preview = null; }   // (the material is kept: a new one means a new shader)
     previewKey = '';
   }
   function updatePreview(now, show) {
@@ -1034,8 +1033,11 @@ async function start() {
     geo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
     geo.setAttribute('color', new THREE.Float32BufferAttribute(color, 4));
     const map = level.materials.get(`graffiti_${piece.page}`)?.map || null;
-    preview = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({map, vertexColors: true, transparent: true, opacity: .38,
-      depthWrite: false, toneMapped: false, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -6, polygonOffsetUnits: -6}));
+    previewMat ||= new THREE.MeshBasicMaterial({vertexColors: true, transparent: true, opacity: .38,
+      depthWrite: false, toneMapped: false, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -6, polygonOffsetUnits: -6});
+    if (!previewMat.map !== !map) previewMat.needsUpdate = true;
+    previewMat.map = map;
+    preview = new THREE.Mesh(geo, previewMat);
     preview.renderOrder = 7; preview.frustumCulled = false;
     (onDoor ? onDoor.mesh : scene).add(preview);
   }

@@ -1,6 +1,5 @@
 // Keyboard + mouse (pointer lock) and touch (joystick + drag to look) input.
-export function createControls({canvas, isTouch, onToggleView, onJump, onChat, onEmotes, onCrouchToggle, onLockChange, onPrimary, onSecondary, onUse, onGallery,
-  ctrlCrouches = () => true}) {
+export function createControls({canvas, isTouch, onToggleView, onJump, onChat, onEmotes, onCrouchToggle, onLockChange, onPrimary, onSecondary, onUse, onGallery}) {
   const keys = new Set();
   const state = {yaw: 0, pitch: 0, moveX: 0, moveZ: 0, run: false, crouch: false, locked: false, touch: isTouch, firing: false};
   const PITCH = 1.35;
@@ -106,8 +105,7 @@ export function createControls({canvas, isTouch, onToggleView, onJump, onChat, o
       if (len > 1) { x /= len; z /= len; }
       state.moveX = x; state.moveZ = z;
       state.run = k('ShiftLeft') || k('ShiftRight') || (stickId !== null && Math.hypot(stickMove.x, stickMove.y) > .92);
-      // (left ctrl crouches, except while it's turning a tag: then only C does)
-      state.crouch = k('KeyC') || (k('ControlLeft') && ctrlCrouches()) || touchCrouch;
+      state.crouch = k('KeyC') || touchCrouch;
       return state;
     },
   };

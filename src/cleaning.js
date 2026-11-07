@@ -4,7 +4,13 @@ import * as THREE from 'three';
 import {MeshBVH} from '../vendor/three/three-mesh-bvh.module.js';
 
 const glowTime = {value: 0};
+// one per texture, kept: making a fresh one each time the target changes would build a new shader each time
+const glows = new Map();
 function glowMaterial(map) {
+  if (!glows.has(map)) glows.set(map, makeGlow(map));
+  return glows.get(map);
+}
+function makeGlow(map) {
   const m = new THREE.MeshBasicMaterial({map, color: new THREE.Color(1, .8, .2), transparent: true, opacity: .9,
     blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false, side: THREE.DoubleSide,
     polygonOffset: true, polygonOffsetFactor: -8, polygonOffsetUnits: -8});
@@ -162,7 +168,7 @@ export function createCleaning({level, scene, hits}) {
 
   // -------------------------------------------------------- highlight
   let glow = null, glowKey = '';
-  function clearGlow() { if (glow) { glow.removeFromParent(); glow.geometry.dispose(); glow.material.dispose(); glow = null; } glowKey = ''; }
+  function clearGlow() { if (glow) { glow.removeFromParent(); glow.geometry.dispose(); glow = null; } glowKey = ''; }
   function highlight(target) {
     const key = target ? `${target.kind}|${target.id}` : '';
     if (key === glowKey) return;
