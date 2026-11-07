@@ -8,6 +8,7 @@ const BEAM_FAR = 42, BEAM_FADE = 10;   // torches on the floor: full strength to
 import {EYE_HEIGHT} from './motion.js';
 import {PAINT_COLORS, RANDOM_PAINT} from './decals.js';
 import {ART, paintingSize} from './paintings.js';
+import {mergeVertices} from '../vendor/three/BufferGeometryUtils.js';
 
 const BEAM_COLOR = new THREE.Color(1, .93, .8);
 export const ITEM_NAMES = {flashlight: 'flashlight', paintball: 'paintball marker', spray: 'spray can', bucket: 'bucket and sponge', crown: 'golden crown', painting: 'painting'};
@@ -462,8 +463,9 @@ const OUTLINES = [outlineMaterial(.007, 1), outlineMaterial(.016, .35)];
 // through the painting itself (tested against its box): just the ring round its outline, from any angle.
 // (Only shown while you're aiming at it in plain view, so drawing it over things is fine.)
 const boxOutlines = new Map();
-function boxOutlineMaterials(min, max) {
-  const key = `${min.toArray().map(v => v.toFixed(3))}|${max.toArray().map(v => v.toFixed(3))}`;
+// (cyl, if given: an upright cylinder along z, {x, y, r, z0, z1}, joined to the box: the glow goes round both)
+function boxOutlineMaterials(min, max, cyl = null) {
+  const key = `${min.toArray().map(v => v.toFixed(3))}|${max.toArray().map(v => v.toFixed(3))}|${cyl ? Object.values(cyl).map(v => v.toFixed(3)) : ''}`;
   if (!boxOutlines.has(key)) boxOutlines.set(key, [[.007, 1], [.016, .35]].map(([width, opacity]) => {
     const m = outlineMaterial(width, opacity);
     m.depthTest = false;
@@ -472,13 +474,28 @@ function boxOutlineMaterials(min, max) {
       before(sh);
       sh.uniforms.boxMin = {value: min.clone()};
       sh.uniforms.boxMax = {value: max.clone()};
+      sh.uniforms.cyl = {value: cyl ? new THREE.Vector3(cyl.x, cyl.y, cyl.r) : new THREE.Vector3()};
+      sh.uniforms.cylZ = {value: cyl ? new THREE.Vector2(cyl.z0, cyl.z1) : new THREE.Vector2()};
       sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vObj;\nvarying vec3 vEye;')
         .replace('gl_Position = projectionMatrix * mvPosition;', `gl_Position = projectionMatrix * mvPosition;
       vObj = (inverse(modelViewMatrix) * mvPosition).xyz;
       vEye = (inverse(modelMatrix) * vec4(cameraPosition, 1.0)).xyz;`);
       sh.fragmentShader = sh.fragmentShader.replace('#include <common>', `#include <common>
-uniform vec3 boxMin; uniform vec3 boxMax;
-varying vec3 vObj; varying vec3 vEye;`)
+uniform vec3 boxMin; uniform vec3 boxMax; uniform vec3 cyl; uniform vec2 cylZ;
+varying vec3 vObj; varying vec3 vEye;
+// does the line of sight o + t d (t >= 0) pass through the cylinder?
+bool hitCyl(vec3 o, vec3 d) {
+  if (cyl.z <= 0.0) return false;
+  vec2 p = o.xy - cyl.xy;
+  float a = dot(d.xy, d.xy), b = dot(p, d.xy), c = dot(p, p) - cyl.z * cyl.z, t0, t1;
+  if (a < 1e-12) { if (c > 0.0) return false; t0 = -1e30; t1 = 1e30; }
+  else { float disc = b * b - a * c; if (disc < 0.0) return false; float s = sqrt(disc); t0 = (-b - s) / a; t1 = (-b + s) / a; }
+  float zin = -1e30, zout = 1e30;
+  if (abs(d.z) < 1e-9) { if (o.z < cylZ.x || o.z > cylZ.y) return false; }
+  else { float za = (cylZ.x - o.z) / d.z, zb = (cylZ.y - o.z) / d.z; zin = min(za, zb); zout = max(za, zb); }
+  float tin = max(t0, zin), tout = min(t1, zout);
+  return tout >= max(tin, 0.0);
+}`)
         .replace('#include <clipping_planes_fragment>', `#include <clipping_planes_fragment>
       {
         vec3 dir = vObj - vEye;
@@ -486,7 +503,7 @@ varying vec3 vObj; varying vec3 vEye;`)
         vec3 t0 = (boxMin - vEye) * inv, t1 = (boxMax - vEye) * inv;
         vec3 lo = min(t0, t1), hi = max(t0, t1);
         float tin = max(max(lo.x, lo.y), lo.z), tout = min(min(hi.x, hi.y), hi.z);
-        if (tout >= max(tin, 0.0)) discard;        // the painting itself is here
+        if (tout >= max(tin, 0.0) || hitCyl(vEye, dir)) discard;        // the thing itself is here
       }`);
     };
     m.customProgramCacheKey = () => `box-outline-${width}-${key}`;
@@ -503,11 +520,20 @@ export function glowBoxGeometry(min, max) {
   g.computeVertexNormals();
   return g;
 }
-// a glow round a box (in its parent's space), seen from any angle: hidden until shown
-export function glowBox(min, max) {
+// a glow round a box (in its parent's space), and an upright cylinder joined to it if given, seen from
+// any angle: hidden until shown
+export function glowBox(min, max, cyl = null) {
   const shells = new THREE.Group(); shells.visible = false;
-  const geo = glowBoxGeometry(min, max);
-  for (const mat of boxOutlineMaterials(min, max)) { const s = new THREE.Mesh(geo, mat); s.renderOrder = 5; s.frustumCulled = false; shells.add(s); }
+  const geos = [glowBoxGeometry(min, max)];
+  if (cyl) {
+    // a closed cylinder whose rim normals are shared, so its glow has no gap at the edge
+    const c = new THREE.CylinderGeometry(cyl.r, cyl.r, cyl.z1 - cyl.z0, 40, 1, false);
+    c.deleteAttribute('normal'); c.deleteAttribute('uv');
+    const m = mergeVertices(c);
+    m.rotateX(Math.PI / 2); m.translate(cyl.x, cyl.y, (cyl.z0 + cyl.z1) / 2); m.computeVertexNormals();
+    geos.push(m);
+  }
+  for (const geo of geos) for (const mat of boxOutlineMaterials(min, max, cyl)) { const s = new THREE.Mesh(geo, mat); s.renderOrder = 5; s.frustumCulled = false; shells.add(s); }
   return shells;
 }
 export function addOutline(model) {
