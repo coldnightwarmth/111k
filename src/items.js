@@ -403,10 +403,7 @@ function paintingModel(id, state) {
   const key = new THREE.BoxGeometry(.03, .03, .006);
   for (const [kx, ky] of [[1, 1], [1, -1], [-1, 1], [-1, -1]]) part(g, key, wood, [kx * (x - bar - .012), ky * (y - bar - .012), .004], [0, 0, Math.PI / 4]);
   // the pick-up glow: one closed box with its corners' normals shared, so the glow wraps it without gaps
-  const ob = new THREE.BufferGeometry();
-  ob.setAttribute('position', new THREE.Float32BufferAttribute([-x, -y, 0, x, -y, 0, x, y, 0, -x, y, 0, -x, -y, d, x, -y, d, x, y, d, -x, y, d], 3));
-  ob.setIndex([0, 2, 1, 0, 3, 2, 4, 5, 6, 4, 6, 7, 0, 1, 5, 0, 5, 4, 3, 7, 6, 3, 6, 2, 1, 2, 6, 1, 6, 5, 0, 4, 7, 0, 7, 3]);
-  ob.computeVertexNormals();
+  const ob = glowBoxGeometry(new THREE.Vector3(-x, -y, 0), new THREE.Vector3(x, y, d));
   g.userData = {tip: new THREE.Vector3(0, 0, d), ground: .002, painting: true, w, h, d, art, canvas: front, outline: ob};
   return g;
 }
@@ -465,16 +462,16 @@ const OUTLINES = [outlineMaterial(.007, 1), outlineMaterial(.016, .35)];
 // through the painting itself (tested against its box): just the ring round its outline, from any angle.
 // (Only shown while you're aiming at it in plain view, so drawing it over things is fine.)
 const boxOutlines = new Map();
-function boxOutlineMaterials(w, h, d) {
-  const key = `${w.toFixed(3)}|${h.toFixed(3)}|${d.toFixed(3)}`;
+function boxOutlineMaterials(min, max) {
+  const key = `${min.toArray().map(v => v.toFixed(3))}|${max.toArray().map(v => v.toFixed(3))}`;
   if (!boxOutlines.has(key)) boxOutlines.set(key, [[.007, 1], [.016, .35]].map(([width, opacity]) => {
     const m = outlineMaterial(width, opacity);
     m.depthTest = false;
     const before = m.onBeforeCompile;
     m.onBeforeCompile = sh => {
       before(sh);
-      sh.uniforms.boxMin = {value: new THREE.Vector3(-w / 2, -h / 2, 0)};
-      sh.uniforms.boxMax = {value: new THREE.Vector3(w / 2, h / 2, d)};
+      sh.uniforms.boxMin = {value: min.clone()};
+      sh.uniforms.boxMax = {value: max.clone()};
       sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vObj;\nvarying vec3 vEye;')
         .replace('gl_Position = projectionMatrix * mvPosition;', `gl_Position = projectionMatrix * mvPosition;
       vObj = (inverse(modelViewMatrix) * mvPosition).xyz;
@@ -497,13 +494,29 @@ varying vec3 vObj; varying vec3 vEye;`)
   }));
   return boxOutlines.get(key);
 }
+// a closed box with its corners' normals shared, so a glow pushed out from it wraps it without gaps
+export function glowBoxGeometry(min, max) {
+  const [x0, y0, z0] = min.toArray(), [x1, y1, z1] = max.toArray();
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute([x0, y0, z0, x1, y0, z0, x1, y1, z0, x0, y1, z0, x0, y0, z1, x1, y0, z1, x1, y1, z1, x0, y1, z1], 3));
+  g.setIndex([0, 2, 1, 0, 3, 2, 4, 5, 6, 4, 6, 7, 0, 1, 5, 0, 5, 4, 3, 7, 6, 3, 6, 2, 1, 2, 6, 1, 6, 5, 0, 4, 7, 0, 7, 3]);
+  g.computeVertexNormals();
+  return g;
+}
+// a glow round a box (in its parent's space), seen from any angle: hidden until shown
+export function glowBox(min, max) {
+  const shells = new THREE.Group(); shells.visible = false;
+  const geo = glowBoxGeometry(min, max);
+  for (const mat of boxOutlineMaterials(min, max)) { const s = new THREE.Mesh(geo, mat); s.renderOrder = 5; s.frustumCulled = false; shells.add(s); }
+  return shells;
+}
 export function addOutline(model) {
   const shells = new THREE.Group(); shells.visible = false;
   const meshes = [];
   const u = model.userData;
   if (u.outline) meshes.push(new THREE.Mesh(u.outline));   // a shape made for glowing round
   else model.traverse(o => { if (o.isMesh) meshes.push(o); });
-  const mats = u.outline && u.painting ? boxOutlineMaterials(u.w, u.h, u.d) : OUTLINES;
+  const mats = u.outline && u.painting ? boxOutlineMaterials(new THREE.Vector3(-u.w / 2, -u.h / 2, 0), new THREE.Vector3(u.w / 2, u.h / 2, u.d)) : OUTLINES;
   for (const o of meshes) for (const mat of mats) {
     const shell = new THREE.Mesh(o.geometry, mat);
     o.updateMatrix(); shell.matrixAutoUpdate = false;

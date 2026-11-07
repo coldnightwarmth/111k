@@ -3,7 +3,7 @@
 // security camera on top. The server runs the race; this draws it and works the button.
 import * as THREE from 'three';
 import {MACHINE_ANGLE, MACHINE_BASE, loopPoint} from './race.js';
-import {addOutline} from './items.js';
+import {glowBox} from './items.js';
 
 const SLOPE = .12;                       // the front leans back a little with the wall's curve
 const HEIGHT = 2.4, WIDTH = 1.56;
@@ -189,7 +189,9 @@ export function createMachine(scene) {
   const capGeo = new THREE.SphereGeometry(.1, 32, 12, 0, Math.PI * 2, 0, Math.PI * .42);
   const cap = part(button, capGeo, red, [0, 0, .02], [Math.PI / 2, 0, 0]);
   cap.scale.set(1, .55, 1);
-  const buttonGlow = addOutline(button);
+  // the glow: round the whole yellow guard and the button in it, from any angle
+  const buttonGlow = glowBox(new THREE.Vector3(-.165, -.165, .028), new THREE.Vector3(.165, .165, .2));
+  buttonGlow.position.set(0, 1.07, 0); face.add(buttonGlow);
 
   // a caged work lamp on the hood, lighting the front
   const lampMat = new THREE.MeshBasicMaterial({color: 0xffe2a8, toneMapped: false});
