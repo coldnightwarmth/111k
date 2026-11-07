@@ -179,14 +179,15 @@ body.touch #chat .log { max-height: min(30vh, calc(100vh - 260px)); }
 /* phones and small windows: one column that scrolls, the button pinned to the bottom */
 #picker .sheet { width: min(1040px, calc(100vw - 32px)); margin: 0 auto; padding: max(24px, calc(env(safe-area-inset-top) + 16px)) 0 0;
   display: grid; grid-template-columns: 1fr; gap: 16px; align-content: start;
-  grid-template-areas: "name" "tabs" "previous" "cards" "extra" "foot"; }
+  grid-template-areas: "previous" "cards" "tabs" "extra" "name" "foot"; }
 #picker .name { grid-area: name; display: flex; align-items: center; gap: 12px; }
 #picker .name span { color: var(--dim); letter-spacing: .14em; font-size: 11px; text-transform: uppercase; }
 #picker .name input { flex: 1; min-width: 0; padding: 10px 12px; border-radius: 6px; border: 1px solid var(--line);
   background: rgba(8, 8, 9, .7); color: var(--ink); font: inherit; font-size: 16px; outline: none; user-select: text;
   transition: border-color .15s, box-shadow .15s; }
 #picker .name input:focus { border-color: rgba(255, 79, 160, .6); box-shadow: 0 0 0 3px rgba(255, 79, 160, .14); }
-#picker .who { grid-area: tabs; display: flex; gap: 8px; }
+/* the tabs (and the dice) sit centred under the six */
+#picker .who { grid-area: tabs; display: flex; gap: 8px; justify-self: center; width: min(372px, 100%); }
 #picker .reroll { flex: none; width: 44px; display: grid; place-items: center; padding: 0; border: 1px solid var(--line); border-radius: 8px;
   background: rgba(255, 255, 255, .025); color: var(--dim); cursor: pointer; transition: color .15s, border-color .15s; }
 #picker .reroll:hover { color: var(--ink); border-color: rgba(233, 230, 220, .32); }
@@ -231,10 +232,12 @@ body.touch #chat .log { max-height: min(30vh, calc(100vh - 260px)); }
    down the right; the cards as big as the window's height allows */
 @media (min-width: 860px) and (min-height: 560px) {
   #picker .sheet { --pad: 32px; width: min(1320px, calc(100vw - 2 * var(--pad))); height: 100dvh; padding: var(--pad) 0; gap: 14px 32px;
-    grid-template-columns: 1fr 280px; grid-template-rows: auto auto auto 1fr auto;
-    grid-template-areas: "cards name" "cards tabs" "cards previous" "cards extra" "cards foot"; }
-  #picker .grid { align-self: center; gap: 14px;
-    grid-template-columns: repeat(3, min(calc((100% - 28px) / 3), calc((100dvh - 2 * var(--pad) - 14px) / 2 * .75))); }
+    grid-template-columns: 1fr 280px; grid-template-rows: auto auto 1fr auto auto;
+    grid-template-areas: "cards previous" "cards extra" "cards ." "cards name" "tabs foot"; }
+  /* two rows of three, as tall as the window allows after the tabs' row beneath them */
+  #picker .grid { align-self: end; gap: 14px;
+    grid-template-columns: repeat(3, min(calc((100% - 28px) / 3), calc((100dvh - 2 * var(--pad) - 14px - 54px) / 2 * .75))); }
+  #picker .who { align-self: center; }
   /* last time's card as big as the column's height leaves room for */
   #picker .previous .card { width: clamp(84px, calc((100dvh - 2 * var(--pad) - 400px) * .75), 168px); }
   #picker .extra { align-self: start; }

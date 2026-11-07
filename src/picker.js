@@ -111,7 +111,7 @@ export function pickAvatar({previous = null, name = '', extra = null} = {}) {
         <div class="tabs" role="tablist" aria-label="who">${KINDS.map(([k, label]) => `<button type="button" role="tab" data-kind="${k}">${label}</button>`).join('')}</div>
         <button type="button" class="reroll" aria-label="new options" title="new options">${DICE}</button>
       </div>
-      ${previous ? `<div class="previous"><p>last time</p><button type="button" class="card" data-id="previous"><canvas width="${W}" height="${H}"></canvas></button></div>` : ''}
+      ${previous ? `<div class="previous"><button type="button" class="card" data-id="previous"><canvas width="${W}" height="${H}"></canvas></button><p>last time</p></div>` : ''}
       <div class="grid"></div>
       <div class="extra"></div>
       <div class="foot"><button type="button" class="go" disabled>enter the tunnel ${LADDER}</button></div>
@@ -142,12 +142,14 @@ export function pickAvatar({previous = null, name = '', extra = null} = {}) {
     const paint = () => { frame = 0; const e = entries.get(card); if (e) portraits.paint(e, card.querySelector('canvas')); };
     card.addEventListener('pointerdown', e => {
       if (e.button !== 0) return;
-      down = {x: e.clientX, t: performance.now(), vel: 0}; moved = false;
+      down = {id: e.pointerId, x: e.clientX, t: performance.now(), vel: 0}; moved = false; swallow = false;
       if (spinning?.card === card) { cancelAnimationFrame(spinning.raf); spinning = null; }
-      card.setPointerCapture(e.pointerId);
+      try { card.setPointerCapture(e.pointerId); } catch {}
     });
     card.addEventListener('pointermove', e => {
-      if (!down) return;
+      if (!down || e.pointerId !== down.id) return;
+      // the button's already up (released somewhere the card never heard about): the drag's over
+      if (e.pointerType === 'mouse' && !(e.buttons & 1)) { up(e); return; }
       const dx = e.clientX - down.x, now = performance.now();
       if (!moved && Math.abs(dx) < 4) return;
       moved = true; card.classList.add('turning');
@@ -156,8 +158,8 @@ export function pickAvatar({previous = null, name = '', extra = null} = {}) {
       down.vel = dx * .012 / Math.max(8, now - down.t); down.x = e.clientX; down.t = now;
       if (!frame) frame = requestAnimationFrame(paint);
     });
-    const up = () => {
-      if (!down) return;
+    const up = e => {
+      if (!down || (e && e.pointerId !== down.id)) return;
       const ent = entries.get(card);
       card.classList.remove('turning');
       if (moved) {
@@ -176,6 +178,7 @@ export function pickAvatar({previous = null, name = '', extra = null} = {}) {
       down = null;
     };
     card.addEventListener('pointerup', up);
+    card.addEventListener('lostpointercapture', up);
     card.addEventListener('pointercancel', () => { down = null; card.classList.remove('turning'); });
     // the click that ends a drag doesn't pick
     card.addEventListener('click', e => { if (swallow) { swallow = false; e.stopImmediatePropagation(); } }, true);
