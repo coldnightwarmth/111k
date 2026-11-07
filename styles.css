@@ -301,3 +301,10 @@ body.touch #chat .log { max-height: min(30vh, calc(100vh - 260px)); }
 #koth small { font-size: 11px; color: var(--dim); }
 #koth small:empty { display: none; }
 #koth.grace b { color: var(--ink, #e9e6dc); }
+/* on the picker, the mic toggle reads as a checkbox (no key hint) */
+#picker .voice-panel .toggle { justify-content: flex-start; gap: 10px; }
+#picker .voice-panel .toggle kbd { display: none; }
+#picker .voice-panel .toggle::before { content: ''; flex: none; width: 14px; height: 14px; border: 1px solid var(--dim); border-radius: 3px;
+  background: transparent center / 10px no-repeat; transition: background-color .15s, border-color .15s; }
+#picker .voice-panel.enabled .toggle::before { border-color: #6dff92; background-color: #6dff92;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M2.5 6.2 5 8.6 9.6 3.6' fill='none' stroke='%23071a0d' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E"); }

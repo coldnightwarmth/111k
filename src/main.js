@@ -82,7 +82,7 @@ async function chooseYourself() {
   if (params.get('pick') === 'auto') return {look: randomLook(Math.random() < .5 ? 'drifella' : 'drilady'), name: params.get('name') || ''};
   // the picker comes up over the black; "going down…" only shows once you've picked
   const last = lastMe.get();
-  const pick = await pickAvatar({previous: last?.look ? cleanLook(last.look) : null, name: last?.name || '', extra: voicePanel(voice)});
+  const pick = await pickAvatar({previous: last?.look ? cleanLook(last.look) : null, name: last?.name || '', extra: voicePanel(voice, {checkbox: true})});
   return {look: pick.look, name: sanitizeName(pick.name)};
 }
 

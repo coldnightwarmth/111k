@@ -257,7 +257,8 @@ export function createVoice() {
 // ------------------------------------------------------------------- panel
 // The same small panel on the start screen and the Esc screen: you always hear people near
 // you; your mic is up to you.
-export function voicePanel(voice) {
+// checkbox: the mic toggle as a checkbox labelled "enable mic" (the start screen) rather than a button that says what it'll do
+export function voicePanel(voice, {checkbox = false} = {}) {
   const el = document.createElement('section');
   el.className = 'voice-panel';
   el.innerHTML = `
@@ -270,6 +271,7 @@ export function voicePanel(voice) {
     <label class="row"><span>voices</span><input type="range" class="vol" min="0" max="1.5" step="0.05"></label>
     <p class="note"></p>`;
   const $ = s => el.querySelector(s);
+  if (checkbox) $('.on').setAttribute('role', 'checkbox');
   const on = $('.on'), mic = $('.mic'), vol = $('.vol'), note = $('.note'), bar = $('.meter i');
   for (const type of ['keydown', 'keyup']) el.addEventListener(type, e => { if (e.key !== 'Escape') e.stopPropagation(); });
   async function fillDevices() {
@@ -280,8 +282,8 @@ export function voicePanel(voice) {
     mic.value = voice.deviceId && list.some(d => d.deviceId === voice.deviceId) ? voice.deviceId : (list[0]?.deviceId || '');
   }
   function sync() {
-    on.querySelector('.label').textContent = voice.micOn ? 'disable mic' : 'enable mic';
-    on.setAttribute('aria-pressed', voice.micOn ? 'true' : 'false');
+    on.querySelector('.label').textContent = checkbox || !voice.micOn ? 'enable mic' : 'disable mic';
+    on.setAttribute(checkbox ? 'aria-checked' : 'aria-pressed', voice.micOn ? 'true' : 'false');
     vol.value = voice.volume;
     el.classList.toggle('enabled', voice.micOn);
     note.textContent = voice.error;              // only when something's wrong with the mic
