@@ -232,8 +232,8 @@ body.touch #chat .log { max-height: min(30vh, calc(100vh - 260px)); }
    down the right; the cards as big as the window's height allows */
 @media (min-width: 860px) and (min-height: 560px) {
   #picker .sheet { --pad: 32px; width: min(1320px, calc(100vw - 2 * var(--pad))); height: 100dvh; padding: var(--pad) 0; gap: 14px 32px;
-    grid-template-columns: 1fr 280px; grid-template-rows: auto auto 1fr auto auto;
-    grid-template-areas: "cards previous" "cards name" "cards ." "cards extra" "tabs foot"; }
+    grid-template-columns: 1fr 280px; grid-template-rows: auto 1fr auto auto auto;
+    grid-template-areas: "cards previous" "cards ." "cards name" "cards extra" "tabs foot"; }
   /* two rows of three, as tall as the window allows after the tabs' row beneath them */
   /* when the width is what limits them, the six sit centred in the height (the tabs stay at the bottom) */
   #picker .grid { align-self: center; gap: 14px;
