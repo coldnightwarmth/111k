@@ -43,7 +43,7 @@ export function createChatUI({onSend, onOpenChange}) {
     if (text && onSend(text) !== false) input.value = '';
     setOpen(false);
   });
-  input.addEventListener('keydown', e => { if (e.key === 'Escape') { e.preventDefault(); setOpen(false); } });
+  input.addEventListener('keydown', e => { if (e.key === 'Escape' || e.key === 'Tab') { e.preventDefault(); setOpen(false); } });
   return {
     get open() { return open; },
     get typing() { return open && input.value.trim().length > 0; },

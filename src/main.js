@@ -223,7 +223,7 @@ async function start() {
     emoteMenu.hidden = !open;
     if (open) { toggleGallery(false); release(); }
   }
-  addEventListener('keydown', e => { if (e.code === 'Escape') { toggleEmotes(false); if (!controls.state.locked) toggleGallery(false); } });
+  addEventListener('keydown', e => { if (e.code === 'Escape' || e.code === 'Tab') { toggleEmotes(false); if (!controls.state.locked) toggleGallery(false); } });
   // clicking back into the world closes the chat box, the emote menu or the gallery and gives you control again
   document.addEventListener('pointerdown', e => {
     if (!emoteMenu.hidden && !e.target.closest('#emotes, #btnEmote')) toggleEmotes(false);
@@ -1592,7 +1592,7 @@ async function start() {
         : type === 'bucket' ? [['scrub', cleanTarget ? 'click: scrub it off' : 'aim at paint or graffiti to scrub it'], drop]
         : type === 'crown' ? (kothActive(koth) ? [] : [['koth', 'click: start king of the hill'], drop])
         : type === 'painting' ? [['place', placePlan ? `click: ${{hang: 'hang it here', lean: 'lean it here', lay: 'lay it down'}[placePlan.how]}` : 'aim at a wall or the floor to put it there']]
-        : [['spray', 'click a wall: spray'], ['pieces', 'esc: pick a piece'], ['tagturn', 'ctrl + scroll: turn'], ['tagsize', 'shift + scroll: size'], drop])
+        : [['spray', 'click a wall: spray'], ['pieces', 'esc or tab: pick a piece'], ['tagturn', 'ctrl + scroll: turn'], ['tagsize', 'shift + scroll: size'], drop])
       : t ? (t.state.type === 'crown' && kothActive(koth) ? [['pickup:crown:on', 'click: put on the crown']]
         : [[`pickup:${t.state.type}`, `click: pick up ${ITEM_NAMES[t.state.type] || 'it'}`]]) : [];
     const hint = parts.filter(([k]) => !learned.has(k)).map(([, text]) => text).join('  ·  ');
