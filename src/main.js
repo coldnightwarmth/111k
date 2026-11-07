@@ -584,7 +584,7 @@ async function start() {
   // a wall, leant back against that wall; anywhere else laid face up, its top pointing away from you.
   // Either way it's fitted to the whole surface under it, not just the spot you aim at.
   // {x, y, z, yaw, tilt, roll, how} or null (nothing in reach to put it on).
-  const PLACE_REACH = 3.2, LEAN = -.2;
+  const PLACE_REACH = 3.2;
   function planPlace(h) {
     const {w, h: ht} = paintingSize(h.state.art);
     camera.updateMatrixWorld();
@@ -598,25 +598,47 @@ async function start() {
       const plan = fitOn(P, n, w, ht, new THREE.Vector3(0, 1, 0));
       return plan && {...plan, how: 'hang'};
     }
-    // a wall just beyond where you're aiming: lean it there, picture facing you
+    // a wall just beyond where you're aiming (straight, or the tunnel's curve rising from the floor): lean it there
     const fwd = new THREE.Vector3(dir.x, 0, dir.z);
     if (fwd.lengthSq() > 1e-6) {
       fwd.normalize();
-      const wall = hits.raycast(P.clone().add(new THREE.Vector3(0, .3, 0)).addScaledVector(fwd, -.05), fwd, .55);
-      if (wall && Math.abs(wall.normal.y) < .35 && !onMachine(wall.mesh)) {
-        const wn = new THREE.Vector3(wall.normal.x, 0, wall.normal.z).normalize();
-        const yaw = Math.atan2(wn.x, wn.z), sinT = Math.sin(LEAN), cosT = Math.cos(LEAN);
-        // the top of its back touches the wall, the bottom of its back sits on the floor
-        const out = .004 - (ht / 2) * sinT;
-        const along = P.clone().sub(wall.point); along.addScaledVector(wn, -along.dot(wn)); along.y = 0;
-        const at = wall.point.clone().add(along).addScaledVector(wn, out);
-        at.y = P.y + (ht / 2) * cosT + .002;
-        return {x: at.x, y: at.y, z: at.z, yaw, tilt: LEAN, roll: 0, how: 'lean'};
-      }
+      const plan = leanOn(P, n, fwd, w, ht);
+      if (plan) return plan;
     }
     // laid down, its top away from you
     const plan = fitOn(P, n, w, ht, fwd.lengthSq() > 1e-6 ? fwd : new THREE.Vector3(0, 0, -1));
     return plan && {...plan, how: 'lay'};
+  }
+  // Leant: its bottom edge on the floor where you aim, tipped back until it rests on the wall behind it.
+  // The wall is felt for along its back at both sides and the middle, so a curved wall (low in the tunnel)
+  // works the same as a flat one: it tips back as far as it takes to touch.
+  const MIN_LEAN = .12, MAX_LEAN = 1.25;
+  function leanOn(P, floorN, fwd, w, ht) {
+    const wall = hits.raycast(P.clone().add(new THREE.Vector3(0, .3, 0)).addScaledVector(fwd, -.05), fwd, 1);
+    if (!wall || wall.normal.y > .75 || wall.normal.y < -.5 || onMachine(wall.mesh)) return null;
+    const out = new THREE.Vector3(wall.normal.x, 0, wall.normal.z);
+    if (out.lengthSq() < 1e-4) return null;
+    out.normalize();                                            // the way the picture faces: out from the wall
+    const side = new THREE.Vector3().crossVectors(new THREE.Vector3(0, 1, 0), out).normalize();
+    const upAt = t => new THREE.Vector3(0, Math.cos(t), 0).addScaledVector(out, -Math.sin(t));   // up its back, tipped back by t
+    const touches = (F, t) => {
+      const u = upAt(t);
+      for (const k of [-.5, 0, .5]) {
+        const from = F.clone().addScaledVector(side, k * w * .96).addScaledVector(u, .03);
+        const h = hits.raycast(from, u, ht - .03);
+        if (h && !onMachine(h.mesh)) return true;
+      }
+      return false;
+    };
+    // its foot: where you aim, eased out from the wall if it would have to stand nearly upright
+    const F = P.clone();
+    for (let k = 0; touches(F, MIN_LEAN); k++) { if (k > 20) return null; F.addScaledVector(out, .03); }
+    if (!touches(F, MAX_LEAN)) return null;                     // the wall's out of reach: it'd fall flat
+    let lo = MIN_LEAN, hi = MAX_LEAN;
+    for (let k = 0; k < 12; k++) { const mid = (lo + hi) / 2; if (touches(F, mid)) hi = mid; else lo = mid; }
+    const t = hi, u = upAt(t);
+    const at = F.clone().addScaledVector(u, ht / 2).add(new THREE.Vector3(0, .002, 0));
+    return {x: at.x, y: at.y, z: at.z, yaw: Math.atan2(out.x, out.z), tilt: -t, roll: 0, how: 'lean'};
   }
   // nothing goes on the lap timer machine
   const onMachine = m => { for (let q = m; q; q = q.parent) if (q === machine.root) return true; return false; };
