@@ -1140,6 +1140,7 @@ async function start() {
       for (const id of [...peers.keys()]) if (!live.has(id)) removePeer(id);
       for (const p of m.players) if (p.id !== network.id) { applyPose(p.id, p.pose, m.now); if (p.look) coming.push(setLook(peer(p.id), p.look)); }
       if (m.items) items.set(m.items);
+      updateCount();   // (with no one else here, nothing else would ever replace the "…")
       roomArrived(Promise.allSettled(coming));   // the first time: who's here, so they're in before the fade
     },
     onPose: m => applyPose(m.id, m.pose, m.time),
