@@ -6,9 +6,13 @@ import {randomLook} from './looks.js';
 
 const KINDS = [['drifella', 'drifella'], ['drilady', 'drilady']];
 
-// Renders still portraits of avatars with a small offscreen renderer.
+// Renders still portraits of avatars with a small offscreen renderer. Each one is framed to fit: feet
+// a little up from the bottom of the card, on a soft shadow, and the whole head in (big heads and tall
+// hats get pulled back so nothing's cut off; everyone else is shown at the same scale).
+const W = 300, H = 400;
+const FOOT = .085, HEAD = .06;      // the share of the card below the feet and above the head
+const MIN_SPAN = 2.2;               // metres of height a card shows at least (same scale for ordinary avatars)
 function createPortraits() {
-  const W = 240, H = 320;
   const renderer = new THREE.WebGLRenderer({antialias: true, alpha: true, preserveDrawingBuffer: true});
   renderer.setPixelRatio(1); renderer.setSize(W, H, false);
   renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.toneMappingExposure = 1.05;
@@ -18,18 +22,40 @@ function createPortraits() {
   scene.add(new THREE.HemisphereLight(0xdfe6ff, 0x2a2420, 1.4));
   const key = new THREE.DirectionalLight(0xfff1e0, 2.4); key.position.set(1.4, 2.6, 2.2); scene.add(key);
   const rim = new THREE.DirectionalLight(0xff79c0, 1.6); rim.position.set(-2, 1.6, -1.8); scene.add(rim);
-  const camera = new THREE.PerspectiveCamera(26, W / H, .1, 20);
-  camera.position.set(0, 1.05, 4.5); camera.lookAt(0, .84, 0);
+  const camera = new THREE.PerspectiveCamera(24, W / H, .1, 30);
+  const box = new THREE.Box3(), feet = new THREE.Vector3();
+  const tan = Math.tan(THREE.MathUtils.degToRad(camera.fov / 2));
+  function frame() {
+    const top = box.max.y + .02, bottom = Math.min(0, box.min.y);
+    const cx = (box.min.x + box.max.x) / 2, halfW = (box.max.x - box.min.x) / 2 + .06;
+    let span = Math.max(MIN_SPAN, (top - bottom) / (1 - FOOT - HEAD));
+    span = Math.max(span, 2 * halfW / camera.aspect);
+    const cy = bottom - FOOT * span + span / 2;
+    // measured a little in front of the body's middle, so heads that stick out toward you still fit
+    const dist = span / 2 / tan + Math.max(0, box.max.z) * .6;
+    camera.position.set(cx, cy + .18, dist); camera.lookAt(cx, cy, 0);
+    camera.updateMatrixWorld();
+    return feet.set(cx, bottom, 0).project(camera);
+  }
   return {
     async draw(look, canvas) {
       const a = await createAvatar(look);
       a.root.rotation.y = Math.PI + .38;
       a.update(1 / 30, 0, {});
       scene.add(a.root);
+      a.root.updateMatrixWorld(true);
+      box.setFromObject(a.root, true);      // exact: the skinned, posed vertices (the quick box is off)
+      const f = frame();
       renderer.render(scene, camera);
-      const ctx = canvas.getContext('2d');
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      ctx.drawImage(renderer.domElement, 0, 0, canvas.width, canvas.height);
+      const ctx = canvas.getContext('2d'), w = canvas.width, h = canvas.height;
+      ctx.clearRect(0, 0, w, h);
+      // a soft shadow to stand on
+      const x = (f.x + 1) / 2 * w, y = (1 - f.y) / 2 * h, rx = w * .3, ry = h * .028;
+      ctx.save(); ctx.translate(x, y); ctx.scale(1, ry / rx);
+      const g = ctx.createRadialGradient(0, 0, 0, 0, 0, rx);
+      g.addColorStop(0, 'rgba(0, 0, 0, .55)'); g.addColorStop(1, 'rgba(0, 0, 0, 0)');
+      ctx.fillStyle = g; ctx.beginPath(); ctx.arc(0, 0, rx, 0, Math.PI * 2); ctx.fill(); ctx.restore();
+      ctx.drawImage(renderer.domElement, 0, 0, w, h);
       scene.remove(a.root); a.dispose();
     },
     dispose() { renderer.dispose(); pmrem.dispose(); renderer.forceContextLoss?.(); },
@@ -53,17 +79,25 @@ export function pickAvatar({previous = null, name = '', extra = null} = {}) {
   let chosen = previous ? 'previous' : null;
   root.innerHTML = `
     <div class="sheet">
-      <h1>who's going down?</h1>
-      <label class="name">name <input type="text" maxlength="24" placeholder="anon" autocomplete="off" spellcheck="false"></label>
-      ${previous ? '<div class="previous"><button type="button" class="card" data-id="previous"><canvas width="240" height="320"></canvas><span>last time</span></button><p>keep your look from last time, or pick a new one</p></div>' : ''}
-      <div class="grid"></div>
-      <div class="tabs" role="tablist">${KINDS.map(([k, label]) => `<button type="button" role="tab" data-kind="${k}">${label}</button>`).join('')}</div>
+      <header class="head">
+        <h1>who's going down?</h1>
+        <p>an abandoned room off the loop. pick someone to be.</p>
+      </header>
+      <div class="bar">
+        <label class="name"><span>name</span><input type="text" maxlength="24" placeholder="anon" autocomplete="off" spellcheck="false"></label>
+        <div class="tabs" role="tablist" aria-label="who">${KINDS.map(([k, label]) => `<button type="button" role="tab" data-kind="${k}">${label}</button>`).join('')}</div>
+      </div>
+      <div class="cards">
+        ${previous ? `<div class="previous"><button type="button" class="card" data-id="previous"><canvas width="${W}" height="${H}"></canvas><span>last time</span></button></div>` : ''}
+        <div class="grid"></div>
+      </div>
       <div class="extra"></div>
-      <button type="button" class="go" disabled>go down</button>
-    </div>`;
+    </div>
+    <footer class="foot"><div class="inner"><p class="chosen-note">pick someone</p><button type="button" class="go" disabled>go down <span aria-hidden="true">↓</span></button></div></footer>`;
   root.hidden = false;
   if (extra) root.querySelector('.extra').append(extra);
   const input = root.querySelector('input'), grid = root.querySelector('.grid'), go = root.querySelector('.go');
+  const note = root.querySelector('.chosen-note');
   input.value = name || '';
   for (const type of ['keydown', 'keyup']) input.addEventListener(type, e => e.stopPropagation());
   const portraits = createPortraits();
@@ -77,7 +111,7 @@ export function pickAvatar({previous = null, name = '', extra = null} = {}) {
     cards[k] = looks[k].map((look, i) => {
       const b = document.createElement('button');
       b.type = 'button'; b.className = 'card loading'; b.dataset.id = `${k}:${i}`;
-      b.innerHTML = '<canvas width="240" height="320"></canvas>';
+      b.innerHTML = `<canvas width="${W}" height="${H}"></canvas>`;
       b.addEventListener('click', () => select(b.dataset.id));
       return b;
     });
@@ -95,6 +129,7 @@ export function pickAvatar({previous = null, name = '', extra = null} = {}) {
     chosen = id;
     for (const c of root.querySelectorAll('.card')) c.classList.toggle('chosen', c.dataset.id === id);
     go.disabled = !id;
+    note.textContent = !id ? 'pick someone' : id === 'previous' ? 'you, like last time' : `${id.split(':')[0]} #${Number(id.split(':')[1]) + 1}`;
   }
   for (const t of root.querySelectorAll('.tabs button')) t.addEventListener('click', () => show(t.dataset.kind));
   if (previous) {

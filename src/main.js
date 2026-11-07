@@ -80,11 +80,9 @@ async function chooseYourself() {
   const saved = tabMe.get();
   if (saved?.look && cleanLook(saved.look)) return {...saved, look: cleanLook(saved.look), resumed: true};
   if (params.get('pick') === 'auto') return {look: randomLook(Math.random() < .5 ? 'drifella' : 'drilady'), name: params.get('name') || ''};
-  await wait(900);                     // a moment of "going down…" first
-  loading.classList.add('done');
+  // the picker comes up over the black; "going down…" only shows once you've picked
   const last = lastMe.get();
   const pick = await pickAvatar({previous: last?.look ? cleanLook(last.look) : null, name: last?.name || '', extra: voicePanel(voice)});
-  loading.classList.remove('done');
   return {look: pick.look, name: sanitizeName(pick.name)};
 }
 
@@ -92,6 +90,8 @@ async function start() {
   const levelReady = loadLevel('world', renderer);
   levelReady.catch(() => {});
   const mine = await chooseYourself();
+  loading.classList.add('going');      // "going down…" while the space loads
+  const goingAt = performance.now();
   lastMe.set({look: mine.look, name: mine.name});
   tabMe.set({...tabMe.get(), look: mine.look, name: mine.name});
   const [level] = await Promise.all([levelReady, preloadLook(mine.look)]);
@@ -1097,7 +1097,7 @@ async function start() {
     const key = JSON.stringify(clean);
     if (key === p.lookKey) return;
     p.lookKey = key; p.look = clean;
-    createAvatar(clean).then(a => {
+    return createAvatar(clean).then(a => {
       if (peers.get(p.id) !== p || p.lookKey !== key) { a.dispose(); return; }
       p.avatar?.dispose(); p.avatar = a; scene.add(a.root);
       for (const local of p.pendingPaint.splice(0)) paintAvatar(a, local);
@@ -1113,6 +1113,8 @@ async function start() {
     if (pose.typing && !p.typing) { p.typing = createBubble('', {typing: true}); }
     if (!pose.typing && p.typing) { p.typing.dispose(); p.typing = null; }
   }
+  let roomArrived;
+  const roomIn = new Promise(r => { roomArrived = p => { roomArrived = () => {}; p.then(r); }; });
   const network = connectRoom({
     url: serverUrl(),
     onStatus: s => {
@@ -1120,10 +1122,11 @@ async function start() {
       if (s === 'online') { lastSent = ''; network.send({type: 'look', look: mine.look, name: mine.name}); }
     },
     onState: m => {
-      const live = new Set(m.players.map(p => p.id));
+      const live = new Set(m.players.map(p => p.id)), coming = [];
       for (const id of [...peers.keys()]) if (!live.has(id)) removePeer(id);
-      for (const p of m.players) if (p.id !== network.id) { applyPose(p.id, p.pose, m.now); if (p.look) setLook(peer(p.id), p.look); }
+      for (const p of m.players) if (p.id !== network.id) { applyPose(p.id, p.pose, m.now); if (p.look) coming.push(setLook(peer(p.id), p.look)); }
       if (m.items) items.set(m.items);
+      roomArrived(Promise.allSettled(coming));   // the first time: who's here, so they're in before the fade
     },
     onPose: m => applyPose(m.id, m.pose, m.time),
     onLeave: id => removePeer(id),
@@ -1256,7 +1259,7 @@ async function start() {
   // ------------------------------------------------------------- loop
   const pivot = new THREE.Vector3(), smoothPivot = new THREE.Vector3(), dir = new THREE.Vector3(), bubbleAnchor = new THREE.Vector3();
   let camDist = 1.9, camSide = .6, lastSent = '', sentAt = 0, settle = 0, last = performance.now(), firstFrame = true, savedAt = 0;
-  loading.classList.add('done');
+  reveal();
   // the controls bar: each control fades once you've used it, and when you've used every one the
   // bar goes for good (remembered in this browser)
   {
@@ -1602,13 +1605,22 @@ async function start() {
     updateLights(now);
     renderer.render(scene, camera);
   });
-  document.body.classList.add('ready');
+  // Fade the space in from black only once it's really there: the room's state and everyone in it
+  // (or a few seconds, if the server is slow), every shader compiled, and a few frames drawn behind the black.
+  async function reveal() {
+    await Promise.race([roomIn, wait(6000)]);
+    await renderer.compileAsync?.(scene, camera).catch(() => {});
+    for (let i = 0; i < 4; i++) await new Promise(r => requestAnimationFrame(r));
+    await wait(1500 - (performance.now() - goingAt));   // "going down…" stays long enough to read, even when it all loaded while you picked
+    loading.classList.add('done');
+    document.body.classList.add('ready');
+  }
   window.__111k = {scene, camera, player, peers, network, renderer, items, controls, hits, doors, me, meView, vertical,
     voice, cleaning, mimic, planPlace, get cleanTarget() { return cleanTarget; }, splatMarks, sprayMarks, addSplat, doorBatches, setView: v => { thirdPerson = v; }, primary, secondary, shoot, spray, choosePiece, choosePaint, toggleGallery, get pieces() { return pieces; }};
 }
 
 start().catch(err => {
   console.error(err);
-  loading.classList.remove('done');
+  loading.classList.remove('done'); loading.classList.add('going');
   loading.querySelector('p').textContent = 'Could not load the space. Refresh to try again.';
 });

@@ -163,42 +163,84 @@ body.touch #chat .log { max-height: min(30vh, calc(100vh - 260px)); }
 }
 
 /* ---- loading ---- */
-#loading { position: fixed; inset: 0; display: grid; place-items: center; background: #050506; transition: opacity .8s; z-index: 5; }
-#loading p { color: var(--dim); letter-spacing: .2em; animation: blink 1.6s steps(2) infinite; }
-#loading.done { opacity: 0; pointer-events: none; }
+/* black until the space is really there; "going down…" only once you've picked who you are */
+#loading { position: fixed; inset: 0; display: grid; place-items: center; background: #050506; z-index: 5; }
+#loading p { margin: 0; color: var(--dim); letter-spacing: .2em; opacity: 0; transition: opacity .6s; }
+#loading p span { animation: blink 1.6s steps(2) infinite; }
+#loading.going p { opacity: 1; }
+#loading.done { opacity: 0; pointer-events: none; transition: opacity 1.8s cubic-bezier(.4, 0, .2, 1) .35s; }
+#loading.done p { opacity: 0; transition-duration: .35s; }
 
 /* ---- avatar picker ---- */
-#picker { position: fixed; inset: 0; z-index: 6; overflow-y: auto; background: radial-gradient(120% 90% at 50% 0%, #17151a 0%, #050506 70%);
-  transition: opacity .6s; user-select: none; touch-action: pan-y; }
+#picker { position: fixed; inset: 0; z-index: 6; overflow-y: auto; transition: opacity .6s; user-select: none; touch-action: pan-y;
+  background: radial-gradient(90% 70% at 50% -10%, #221c24 0%, #0c0b0e 55%, #050506 100%); }
 #picker[hidden] { display: none; }
+#picker:not([hidden]) { display: flex; flex-direction: column; }
+#picker .sheet { flex: 1 0 auto; }
 #picker.done { opacity: 0; pointer-events: none; }
-#picker .sheet { width: min(760px, calc(100vw - 32px)); margin: 0 auto; padding: max(28px, env(safe-area-inset-top)) 0 40px;
-  display: flex; flex-direction: column; gap: 16px; }
-#picker h1 { margin: 0; font-size: 15px; font-weight: 600; letter-spacing: .2em; text-transform: lowercase; }
-#picker .name { display: flex; align-items: center; gap: 10px; color: var(--dim); letter-spacing: .08em; }
-#picker .name input { flex: 1; max-width: 300px; padding: 9px 10px; border-radius: 4px; border: 1px solid var(--line);
-  background: rgba(8, 8, 9, .85); color: var(--ink); font: inherit; font-size: 16px; outline: none; user-select: text; }
-#picker .name input:focus { border-color: rgba(233, 230, 220, .4); }
-#picker .previous { display: flex; align-items: center; gap: 14px; }
-#picker .previous .card { width: 120px; flex: none; }
-#picker .previous p { margin: 0; color: var(--dim); }
-#picker .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
-#picker .card { position: relative; padding: 0; border: 1px solid var(--line); border-radius: 6px; cursor: pointer; overflow: hidden;
-  background: linear-gradient(#1c1b20, #0d0d10); aspect-ratio: 3 / 4; transition: border-color .15s, transform .15s; }
-#picker .card canvas { display: block; width: 100%; height: 100%; }
-#picker .card span { position: absolute; left: 8px; bottom: 6px; font-size: 11px; color: var(--dim); letter-spacing: .1em; }
+#picker .sheet { width: min(1040px, calc(100vw - 32px)); margin: 0 auto;
+  padding: max(40px, calc(env(safe-area-inset-top) + 24px)) 0 28px; display: flex; flex-direction: column; gap: 22px; }
+#picker .head h1 { margin: 0; font-size: 22px; font-weight: 600; letter-spacing: .16em; text-transform: lowercase; }
+#picker .head p { margin: 8px 0 0; color: var(--dim); letter-spacing: .04em; }
+#picker .bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px 20px; }
+#picker .name { display: flex; align-items: center; gap: 12px; flex: 1 1 260px; max-width: 380px; }
+#picker .name span { color: var(--dim); letter-spacing: .14em; font-size: 11px; text-transform: uppercase; }
+#picker .name input { flex: 1; min-width: 0; padding: 10px 12px; border-radius: 6px; border: 1px solid var(--line);
+  background: rgba(8, 8, 9, .7); color: var(--ink); font: inherit; font-size: 16px; outline: none; user-select: text;
+  transition: border-color .15s, box-shadow .15s; }
+#picker .name input:focus { border-color: rgba(255, 79, 160, .6); box-shadow: 0 0 0 3px rgba(255, 79, 160, .14); }
+#picker .tabs { display: inline-flex; padding: 3px; gap: 3px; border: 1px solid var(--line); border-radius: 8px; background: rgba(255, 255, 255, .025); }
+#picker .tabs button { padding: 8px 16px; border: 0; border-radius: 5px; background: transparent; color: var(--dim);
+  cursor: pointer; letter-spacing: .12em; transition: background .15s, color .15s; }
+#picker .tabs button:hover { color: var(--ink); }
+#picker .tabs button[aria-selected="true"] { background: var(--accent); color: #140a10; font-weight: 600; }
+/* wide: one row of cards (last time's first, set off by a gap); narrower: last time's on a row of its own */
+#picker .cards { display: grid; grid-template-columns: repeat(6, 1fr); gap: 12px; }
+#picker .cards:has(.previous) { grid-template-columns: repeat(7, 1fr); }
+#picker .grid, #picker .previous { display: contents; }
+#picker .previous .card { border-style: dashed; }
+#picker .card { position: relative; padding: 0; border: 1px solid var(--line); border-radius: 10px; cursor: pointer; overflow: hidden;
+  aspect-ratio: 3 / 4; transition: border-color .15s, transform .18s, box-shadow .18s;
+  background: radial-gradient(70% 20% at 50% 91%, rgba(255, 255, 255, .07), transparent 70%),
+              radial-gradient(90% 65% at 50% 30%, #2a2730 0%, #16151a 60%, #0e0d11 100%); }
+#picker .card canvas { position: absolute; inset: 0; display: block; width: 100%; height: 100%; }
+#picker .card span { position: absolute; left: 0; right: 0; bottom: 7px; text-align: center; font-size: 10px; color: var(--dim);
+  letter-spacing: .16em; text-transform: uppercase; }
 #picker .card.loading::after { content: '…'; position: absolute; inset: 0; display: grid; place-items: center; color: var(--dim);
   animation: blink 1.2s steps(2) infinite; }
-#picker .card:hover { border-color: rgba(233, 230, 220, .35); }
-#picker .card.chosen { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent), 0 0 24px rgba(255, 79, 160, .25); }
-#picker .tabs { display: flex; gap: 6px; }
-#picker .tabs button { padding: 8px 14px; border-radius: 4px; border: 1px solid var(--line); background: rgba(255, 255, 255, .03);
-  cursor: pointer; letter-spacing: .1em; }
-#picker .tabs button[aria-selected="true"] { background: rgba(255, 79, 160, .16); border-color: var(--accent); }
-#picker .go { align-self: flex-end; padding: 11px 22px; border-radius: 4px; border: 1px solid var(--accent); background: var(--accent);
-  color: #120a0e; font-weight: 600; letter-spacing: .14em; cursor: pointer; }
-#picker .go:disabled { opacity: .35; cursor: default; }
-@media (max-width: 640px) { #picker .grid { grid-template-columns: repeat(2, 1fr); } }
+#picker .card:hover { border-color: rgba(233, 230, 220, .32); transform: translateY(-2px); }
+#picker .card.chosen { border-color: var(--accent); transform: translateY(-2px);
+  box-shadow: 0 0 0 1px var(--accent), 0 10px 28px -8px rgba(255, 79, 160, .45); }
+#picker .card.chosen::before { content: ''; position: absolute; right: 8px; top: 8px; width: 9px; height: 9px; border-radius: 50%;
+  background: var(--accent); box-shadow: 0 0 8px var(--accent); z-index: 1; }
+#picker .card:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+#picker .extra { max-width: 380px; }
+#picker .extra .voice-panel { background: rgba(255, 255, 255, .025); border-radius: 8px; }
+#picker .foot { position: sticky; bottom: 0; padding: 18px 0 max(18px, env(safe-area-inset-bottom));
+  background: linear-gradient(rgba(5, 5, 6, 0), rgba(5, 5, 6, .92) 40%); }
+#picker .foot .inner { width: min(1040px, calc(100vw - 32px)); margin: 0 auto; display: flex; align-items: center; justify-content: flex-end; gap: 16px; }
+#picker .chosen-note { margin: 0; color: var(--dim); letter-spacing: .1em; }
+#picker .go { padding: 12px 26px; border-radius: 8px; border: 1px solid var(--accent); background: var(--accent);
+  color: #140a10; font-weight: 600; letter-spacing: .14em; cursor: pointer; transition: opacity .15s, transform .15s, box-shadow .15s; }
+#picker .go:not(:disabled):hover { transform: translateY(-1px); box-shadow: 0 6px 20px -6px rgba(255, 79, 160, .7); }
+#picker .go:disabled { opacity: .3; cursor: default; }
+@media (max-width: 700px) {
+  #picker .cards, #picker .cards:has(.previous) { display: flex; flex-direction: column; }
+  #picker .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+  #picker .previous { display: block; }
+  #picker .previous .card { width: calc((100% - 2 * 12px) / 3); }
+}
+@media (max-width: 560px) {
+  #picker .sheet { gap: 18px; padding-top: max(28px, calc(env(safe-area-inset-top) + 16px)); }
+  #picker .head h1 { font-size: 18px; }
+  #picker .grid { gap: 8px; }
+  #picker .previous .card { width: calc((100% - 2 * 8px) / 3); }
+  #picker .name { max-width: none; }
+  #picker .tabs { width: 100%; }
+  #picker .tabs button { flex: 1; }
+  #picker .go { flex: 1; }
+  #picker .chosen-note { display: none; }
+}
 
 @media (max-width: 640px) { #hint { display: none; } }
 
@@ -224,6 +266,7 @@ body.touch #chat .log { max-height: min(30vh, calc(100vh - 260px)); }
 .voice-panel .toggle { cursor: pointer; color: var(--ink, #e9e6dc); width: 100%; justify-content: space-between; padding: 5px 8px;
   background: #141416; border: 1px solid var(--line); border-radius: 3px; font: inherit; text-align: left; }
 .voice-panel .toggle:hover { border-color: var(--dim); }
+.voice-panel .row.toggle > span.label { width: auto; }
 .voice-panel.enabled .toggle { border-color: #6dff92; }
 .voice-panel select, .voice-panel input[type=range] { flex: 1; min-width: 0; }
 .voice-panel select { background: #141416; color: inherit; border: 1px solid var(--line); border-radius: 3px; padding: 3px 4px; font: inherit; }
@@ -233,8 +276,6 @@ body.touch #chat .log { max-height: min(30vh, calc(100vh - 260px)); }
 .voice-panel .meter i { display: block; height: 100%; background: #6dff92; transform-origin: left; transform: scaleX(0); transition: transform 60ms linear; }
 .voice-panel .note { margin: 6px 0 0; font-size: 10.5px; line-height: 1.4; }
 .voice-panel kbd { font-size: 10px; }
-#picker .extra { margin: 4px 0 10px; }
-#picker .extra .voice-panel { background: rgba(255, 255, 255, .03); }
 .speaking { position: absolute; left: 0; top: 0; display: flex; gap: 2px; align-items: flex-end; height: 14px; padding: 3px 5px; border-radius: 8px;
   background: rgba(10, 10, 11, .55); pointer-events: none; }
 .speaking[hidden] { display: none; }
