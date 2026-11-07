@@ -73,6 +73,102 @@ function attachPart(model, gltf, name, parentName) {
   parent.add(copy);
 }
 
+// A Drifella's body is only a head, a tail and two hands: the arms come with the shirt, as its sleeves.
+// Some shirts (the collection's vests, harness, coverall, toga and short-sleeved shirts) were sculpted
+// without them, which left hands floating by the body. So every body gets a pair of bare arms in its own
+// skin, rigged to the arm bones and tucked inside the sleeves, shown whenever the shirt doesn't cover them.
+const ARM_BONES = ['UpperArmL', 'ForearmL', 'HandL', 'UpperArmR', 'ForearmR', 'HandR'];
+// which arm segments a mesh has (vertices mostly on the upper arm / forearm bones)
+function armCoverage(mesh) {
+  const out = {upper: false, fore: false}, j = mesh.geometry?.attributes.skinIndex, w = mesh.geometry?.attributes.skinWeight;
+  if (!mesh.isSkinnedMesh || !j || !w) return out;
+  const name = i => mesh.skeleton.bones[i]?.name || '';
+  for (let v = 0; v < j.count && !(out.upper && out.fore); v++) {
+    let best = 0, bone = -1;
+    for (let k = 0; k < 4; k++) if (w.getComponent(v, k) > best) { best = w.getComponent(v, k); bone = j.getComponent(v, k); }
+    const n = name(bone);
+    if (/^UpperArm[LR]$/.test(n)) out.upper = true; else if (/^Forearm[LR]$/.test(n)) out.fore = true;
+  }
+  return out;
+}
+function addArms(model) {
+  let body = null;
+  const part = o => { for (let q = o; q && q !== model; q = q.parent) if (/^Drif_/.test(q.name)) return q.name; return ''; };
+  model.traverse(o => { if (!body && o.isSkinnedMesh && part(o) === 'Drif_Body' && !Array.isArray(o.material)
+    && /Body_Main|Fur/.test(o.material.name) && o.skeleton.bones.some(b => b.name === 'HandL')) body = o; });
+  if (!body) return null;
+  const own = armCoverage(body);
+  if (own.upper && own.fore) return null;                       // this body has its own arms
+  const bones = body.skeleton.bones, at = name => bones.findIndex(b => b.name === name);
+  if (ARM_BONES.some(n => at(n) < 0)) return null;
+  // bone positions at rest, in the body geometry's own space
+  const toGeo = body.bindMatrixInverse, m = new THREE.Matrix4();
+  const rest = i => new THREE.Vector3().setFromMatrixPosition(m.copy(body.skeleton.boneInverses[i]).invert().premultiply(toGeo));
+  // the skin colour (and texture spot) of the wrist: the hand vertex nearest the forearm
+  const g = body.geometry, pos = g.attributes.position, sj = g.attributes.skinIndex, sw = g.attributes.skinWeight;
+  const handL = at('HandL'), wristL = rest(handL), v = new THREE.Vector3();
+  let sample = -1, near = Infinity;
+  for (let i = 0; i < pos.count; i++) {
+    let main = -1, best = 0;
+    for (let k = 0; k < 4; k++) if (sw.getComponent(i, k) > best) { best = sw.getComponent(i, k); main = sj.getComponent(i, k); }
+    if (main !== handL) continue;
+    const d = v.fromBufferAttribute(pos, i).distanceToSquared(wristL);
+    if (d < near) { near = d; sample = i; }
+  }
+  if (sample < 0) return null;
+  const SEG = 14, RINGS = 12, positions = [], indices = [], skinIndex = [], skinWeight = [];
+  const extra = Object.entries(g.attributes).filter(([k]) => !['position', 'normal', 'skinIndex', 'skinWeight', 'tangent'].includes(k));
+  const extras = extra.map(() => []);
+  for (const side of ['L', 'R']) {
+    const up = at('UpperArm' + side), fore = at('Forearm' + side), hand = at('Hand' + side);
+    const shoulder = rest(up), elbow = rest(fore), wrist = rest(hand);
+    const len = shoulder.distanceTo(wrist), dir = wrist.clone().sub(shoulder).normalize();
+    const start = shoulder.clone().addScaledVector(dir, -.06 * len), end = wrist.clone().addScaledVector(dir, .05 * len);
+    const span = start.distanceTo(end), kElbow = start.distanceTo(elbow) / span;
+    // a frame round the arm
+    const a = Math.abs(dir.y) < .9 ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(1, 0, 0);
+    const u = new THREE.Vector3().crossVectors(dir, a).normalize(), w = new THREE.Vector3().crossVectors(u, dir);
+    const base = positions.length / 3;
+    for (let r = 0; r <= RINGS; r++) {
+      const t = r / RINGS;
+      // a soft taper, a touch fuller at the shoulder and the elbow, rounded shut at both ends
+      const radius = len * (.15 - .03 * t + .006 * Math.exp(-(((t - kElbow) / .08) ** 2))) * Math.sqrt(Math.max(0, 1 - ((2 * t - 1) ** 16)));
+      const c = start.clone().addScaledVector(dir, t * span);
+      // the upper arm bone to the elbow, the forearm after it, blended across the joint
+      const blend = THREE.MathUtils.smoothstep(t, kElbow - .07, kElbow + .07);
+      for (let s = 0; s < SEG; s++) {
+        const ang = s / SEG * Math.PI * 2;
+        const p = c.clone().addScaledVector(u, Math.cos(ang) * radius).addScaledVector(w, Math.sin(ang) * radius);
+        positions.push(p.x, p.y, p.z);
+        skinIndex.push(up, fore, 0, 0); skinWeight.push(1 - blend, blend, 0, 0);
+        extra.forEach(([, attr], e) => { for (let k = 0; k < attr.itemSize; k++) extras[e].push(attr.getComponent(sample, k)); });
+      }
+    }
+    for (let r = 0; r < RINGS; r++) for (let s = 0; s < SEG; s++) {
+      const i0 = base + r * SEG + s, i1 = base + r * SEG + (s + 1) % SEG, j0 = i0 + SEG, j1 = i1 + SEG;
+      indices.push(i0, i1, j0, i1, j1, j0);
+    }
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geo.setAttribute('skinIndex', new THREE.Uint16BufferAttribute(skinIndex, 4));
+  geo.setAttribute('skinWeight', new THREE.Float32BufferAttribute(skinWeight, 4));
+  extra.forEach(([k, attr], e) => geo.setAttribute(k, new THREE.Float32BufferAttribute(extras[e], attr.itemSize)));
+  geo.setIndex(indices);
+  geo.computeVertexNormals();
+  // faces wound the same way as the body's? make sure normals point out from the arm's axis
+  const n = geo.attributes.normal, p0 = new THREE.Vector3().fromBufferAttribute(geo.attributes.position, RINGS / 2 * SEG);
+  const axis = rest(at('UpperArmL')).lerp(rest(at('HandL')), .5);
+  if (new THREE.Vector3().fromBufferAttribute(n, RINGS / 2 * SEG).dot(p0.sub(axis)) < 0) { geo.index.array.reverse(); geo.index.needsUpdate = true; geo.computeVertexNormals(); }
+  const arms = new THREE.SkinnedMesh(geo, body.material);
+  arms.name = 'Drif_Body_Arms';
+  arms.position.copy(body.position); arms.quaternion.copy(body.quaternion); arms.scale.copy(body.scale);
+  body.parent.add(arms);
+  arms.bind(body.skeleton, body.bindMatrix);
+  arms.frustumCulled = false;
+  return arms;
+}
+
 // Apply camera aim to the head after the clip mixer, restoring the untouched
 // pose before the next mixer tick so rotations never accumulate.
 function createLookPose(model) {
@@ -103,8 +199,20 @@ export async function createAvatar(look) {
   const parts = await Promise.all(needed.map(p => part(name, c.index.parts[p].file)));
   const model = cloneRig(c.scene);
   needed.forEach((p, i) => attachPart(model, parts[i], p, c.index.parts[p].parent));
+  const arms = addArms(model);
   const wardrobe = createAvatarAppearance(model, look);
   wardrobe.setAppearance(look);
+  // bare arms only where the shirt has no sleeves of its own
+  if (arms) {
+    const covered = {upper: false, fore: false};
+    model.traverse(o => {
+      let shirt = false, vis = true;
+      for (let q = o; q && q !== model; q = q.parent) { if (/^Drif_Shirt_/.test(q.name)) shirt = true; if (q.visible === false) vis = false; }
+      if (!shirt || !vis || !o.isSkinnedMesh) return;
+      const c = armCoverage(o); covered.upper ||= c.upper; covered.fore ||= c.fore;
+    });
+    arms.visible = !(covered.upper && covered.fore);
+  }
   // seen from a camera pressed up close (third person against a wall), you dissolve rather than clip
   // the camera inside any part of this avatar ghosts all of it (ghostAll), not just the nearby faces
   // and ghostOn: whether faces near the camera dither away (other people always; you only in third person)
