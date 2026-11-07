@@ -3,7 +3,7 @@
 // in other players' hands and in your own view, and feeds torch beams to the
 // level shader.
 import * as THREE from 'three';
-import {lighting, MAX_FLASHLIGHTS, MAX_SPOTLIGHTS, FAN_RANGE, packBeams} from './level.js';
+import {lighting, MAX_FLASHLIGHTS, MAX_SPOTLIGHTS, FAN_RANGE, packBeams, ghostMaterial} from './level.js';
 const BEAM_FAR = 42, BEAM_FADE = 10;   // torches on the floor: full strength to 32 m, gone by 42 m
 import {EYE_HEIGHT} from './motion.js';
 import {PAINT_COLORS, RANDOM_PAINT} from './decals.js';
@@ -399,6 +399,16 @@ export function createItems({scene, camera, hits, shadows = null}) {
       const model = (MODELS[state.type] || flashlightModel)(state.id);
       model.traverse(o => { o.castShadow = false; o.frustumCulled = false; });
       it = {state, model, sway: 0, kick: 0, shake: 0, outline: addOutline(model), fall: null};
+      // a crown dithers away with its wearer when the camera pushes into them
+      if (state.type === 'crown') {
+        it.ghost = {ghostAll: {value: 0}, ghostOn: {value: 0}};
+        const done = new Map();
+        model.traverse(o => {
+          if (!o.isMesh || o.parent === it.outline) return;
+          if (!done.has(o.material)) done.set(o.material, ghostMaterial(o.material, it.ghost));
+          o.material = done.get(o.material);
+        });
+      }
       scene.add(model);
       items.set(state.id, it);
     }
@@ -461,6 +471,7 @@ export function createItems({scene, camera, hits, shadows = null}) {
         let origin = null, dir = null, eye = null;
         if (!(s.holder === myId && !thirdPerson) || s.type === 'flashlight') m.scale.setScalar(1);
         it.outline.visible = !s.holder && s.id === highlighted && !it.fall;
+        if (it.ghost) it.ghost.ghostAll.value = it.ghost.ghostOn.value = 0;     // (worn, it follows its wearer: below)
         if (!s.holder) {
           if (m.parent !== scene) scene.add(m);
           m.visible = true;
@@ -487,6 +498,7 @@ export function createItems({scene, camera, hits, shadows = null}) {
           const avatar = s.holder === myId ? me : avatarOf(s.holder);
           if (m.parent !== scene) scene.add(m);
           if (avatar?.head) {
+            if (it.ghost && avatar.ghost) { it.ghost.ghostAll.value = avatar.ghost.ghostAll.value; it.ghost.ghostOn.value = avatar.ghost.ghostOn.value; }
             avatar.head.updateWorldMatrix(true, false);
             _onHead.makeRotationX(CROWN_ON_HEAD.tilt).setPosition(0, CROWN_ON_HEAD.y, CROWN_ON_HEAD.z || 0);
             _onHead.scale(tmpV.setScalar(CROWN_ON_HEAD.scale));

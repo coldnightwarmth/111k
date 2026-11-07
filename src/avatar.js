@@ -317,6 +317,7 @@ export async function createAvatar(look) {
     fold() { if (head && hideHead) head.scale.setScalar(1e-3); },
     // dissolve the whole avatar while the camera is inside it (eased in and out)
     // dither away the faces close to the camera (instead of the near plane slicing through them)
+    ghost: ghostOwn,   // its dither uniforms (a crown on its head dissolves with it)
     ghostNear(on) { ghostOwn.ghostOn.value = on ? 1 : 0; },
     ghostFor(cameraPos, dt) {
       root.updateMatrixWorld(); camLocal.copy(cameraPos); root.worldToLocal(camLocal); camLocal.y -= model.position.y;
