@@ -1284,7 +1284,10 @@ async function start() {
       const support = collider.groundAt(player.x, player.z, feetNow);
       if (support > player.ground + 1e-4) {
         if (vertical.lift <= 1e-4) { player.stepLag -= support - player.ground; player.ground = support; player.fall = 0; }   // a step: the view eases up
-        else if (vertical.descending && feetNow <= support + .02) { player.ground = support; player.fall = 0; vertical.touchdown(); }
+        else if (vertical.descending && feetNow <= support + .02) {
+          // landing on something higher: the view carries on from where the feet were and eases onto it
+          player.stepLag += feetNow - support; player.ground = support; player.fall = 0; vertical.touchdown();
+        }
       } else if (support < player.ground - 1e-4) {
         player.fall -= 13 * dt;
         player.ground = Math.max(support, player.ground + player.fall * dt);
@@ -1294,7 +1297,8 @@ async function start() {
       vertical.setFalling(player.fall < -1.2 || (player.fall < 0 && vertical.lift <= 1e-4 && player.ground - support > STEP_UP));
       player.stepLag *= Math.exp(-dt * 14);
     }
-    player.y = player.ground + eye + player.stepLag;
+    // (read again: a touchdown just now ended the jump's lift)
+    player.y = player.ground + vertical.eye + player.stepLag;
     const h = held(), holding = !!h;
     if (!input.firing) fireLatch = false;
     if (h?.state.type === 'paintball' && input.firing && !fireLatch && !frozen) shoot();

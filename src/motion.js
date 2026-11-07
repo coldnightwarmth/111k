@@ -72,6 +72,10 @@ export function createVerticalMovement() {
         if (grounded > .3 && chain) chain = 0;   // standing around ends the run
       }
       crouch += ((duck && jumpTime < 0 ? 1 : 0) - crouch) * (1 - Math.exp(-dt * 12));
+      return this.eye;
+    },
+    // eye height above the feet's ground right now (read again after a touchdown changes the jump)
+    get eye() {
       const anticipation = jumpTime >= 0 && jumpTime < JUMP_TAKEOFF ? .07 * Math.sin(Math.PI * jumpTime / JUMP_TAKEOFF) : 0;
       const landing = jumpTime > LANDED
         ? .09 * Math.sin(Math.PI * (jumpTime - LANDED) / (JUMP_DURATION - LANDED)) : 0;

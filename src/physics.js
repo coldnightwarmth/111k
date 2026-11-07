@@ -19,7 +19,8 @@ export function createCollider(meta, radius = .38) {
     const o = c.r !== undefined ? {...c, circle: true}
       : {...c, cos: Math.cos(c.yaw || 0), sin: Math.sin(c.yaw || 0)};
     o.top = c.y1 ?? Infinity; o.bottom = c.y0 ?? 0;
-    o.walkable = o.top <= WALKABLE && o.bottom < .15;
+    // anything low enough can be stood on, whatever holds it up (a table top on its spool, a crate on a crate)
+    o.walkable = o.top <= WALKABLE;
     const reach = (o.circle ? o.r : Math.hypot(o.hx, o.hz)) + radius + .5;
     for (let ix = Math.floor((o.x - reach) / CELL); ix <= Math.floor((o.x + reach) / CELL); ix++)
       for (let iz = Math.floor((o.z - reach) / CELL); iz <= Math.floor((o.z + reach) / CELL); iz++) {
