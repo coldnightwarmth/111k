@@ -219,12 +219,12 @@ body.touch #chat .log { max-height: min(30vh, calc(100vh - 260px)); }
 #picker .go svg { width: 14px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
 #picker .go:not(:disabled):hover { transform: translateY(-1px); box-shadow: 0 6px 20px -6px rgba(255, 79, 160, .7); }
 #picker .go:disabled { opacity: .3; cursor: default; }
-/* a normal window: everything on one screen. The controls down the left, the six as two rows of three
-   on the right, as big as the window's height allows */
+/* a normal window: everything on one screen. The six as two rows of three on the left, the controls
+   down the right; the cards as big as the window's height allows */
 @media (min-width: 860px) and (min-height: 560px) {
   #picker .sheet { --pad: 32px; width: min(1320px, calc(100vw - 2 * var(--pad))); height: 100dvh; padding: var(--pad) 0; gap: 14px 32px;
-    grid-template-columns: 280px 1fr; grid-template-rows: auto auto auto 1fr auto;
-    grid-template-areas: "name cards" "tabs cards" "previous cards" "extra cards" "foot cards"; }
+    grid-template-columns: 1fr 280px; grid-template-rows: auto auto auto 1fr auto;
+    grid-template-areas: "cards name" "cards tabs" "cards previous" "cards extra" "cards foot"; }
   #picker .grid { align-self: center; gap: 14px;
     grid-template-columns: repeat(3, min(calc((100% - 28px) / 3), calc((100dvh - 2 * var(--pad) - 14px) / 2 * .75))); }
   /* last time's card as big as the column's height leaves room for */
