@@ -185,7 +185,12 @@ function unfold(tris, point, nh, xh, yh, z) {
   });
   if (start < 0) return out;
   const flat = p => { const d = _v.copy(p).sub(point); return new THREE.Vector2(d.dot(xh), d.dot(yh)); };
-  out.set(tris[start], tris[start].p.map(flat));
+  // each corner gets one spot on the decal, the first way it's reached: faces sharing a corner always meet
+  // there, so a surface curved two ways (the tunnel bends round the loop as well as over your head) can't
+  // tear or doubles up a bit of the piece where two ways round arrive at slightly different places
+  const spot = new Map();
+  tris[start].p.forEach((p, k) => spot.set(keys[start][k], flat(p)));
+  out.set(tris[start], keys[start].map(k => spot.get(k)));
   const queue = [start];
   const c3 = new THREE.Vector3(), d3 = new THREE.Vector3();
   while (queue.length) {
@@ -209,12 +214,13 @@ function unfold(tris, point, nh, xh, yh, z) {
         const A0 = a2[i0], A1 = a2[i1], ed = A1.clone().sub(A0);
         if (ed.lengthSq() < 1e-12) continue;
         ed.normalize();
-        const perp = new THREE.Vector2(-ed.y, ed.x), third = a2[i2];
-        const side = perp.dot(third.clone().sub(A0)) > 0 ? -1 : 1;
-        const b2 = [];
-        b2[j0] = A0.clone(); b2[j1] = A1.clone();
-        b2[jc] = A0.clone().addScaledVector(ed, along).addScaledVector(perp, off * side);
-        out.set(B, b2);
+        const kc = keys[bi][jc];
+        if (!spot.has(kc)) {
+          const perp = new THREE.Vector2(-ed.y, ed.x), third = a2[i2];
+          const side = perp.dot(third.clone().sub(A0)) > 0 ? -1 : 1;
+          spot.set(kc, A0.clone().addScaledVector(ed, along).addScaledVector(perp, off * side));
+        }
+        out.set(B, keys[bi].map(k => spot.get(k)));
         queue.push(bi);
       }
     }
@@ -254,7 +260,7 @@ const DEPTH_EPS = .015;
 // goes on the wall behind it, the way a sticker would. Something built against the wall (a pillar, a ledge, a
 // door frame), touching it somewhere, is part of the wall as far as paint goes and gets wrapped. null turns
 // this off (a painting's own space).
-const APART = .04, TOUCH = .03;
+const APART = .04, TOUCH = .08;
 export function cutDecal(hits, {point, normal, up, width, height, dir = null, front = .15, back = .3, shade = .3, slab = null, thrower = null, apart = APART}) {
   const z = dir ? dir.clone().negate().normalize() : normal.clone().normalize();
   const y = up.clone().addScaledVector(z, -up.dot(z));
@@ -272,9 +278,39 @@ export function cutDecal(hits, {point, normal, up, width, height, dir = null, fr
   // (gathered a little wider: an unfolded corner can reach further than the straight-on box)
   const tris = hits.gather(point, Math.hypot(hx, hy, reach) * 1.25);
   const flatOn = unfold(tris, point, nh, xh, yh, z);
-  // faces it doesn't reach by unfolding: straight along the throw onto the hit face's plane
+  // Faces it doesn't reach by unfolding (separate things): each spot takes the piece from the unfolded surface
+  // right behind it along the throw, so the piece carries straight across them as the thrower sees it.
+  // With no unfolded surface behind, straight along the throw onto the hit face's plane.
   const zn = Math.max(.25, z.dot(nh));
-  const along = p => { const d = _v.copy(p).sub(point), s = d.dot(nh) / zn; d.addScaledVector(z, -s); return new THREE.Vector2(d.dot(xh), d.dot(yh)); };
+  const flatAlong = p => { const d = _v.copy(p).sub(point), s = d.dot(nh) / zn; d.addScaledVector(z, -s); return new THREE.Vector2(d.dot(xh), d.dot(yh)); };
+  const CELL = .1, grid = new Map(), behind = [];
+  for (const [t, q] of flatOn) {
+    const l = t.p.map(p => { const d = _v.copy(p).sub(point); return new THREE.Vector3(d.dot(x), d.dot(y), d.dot(z)); });
+    const e = {l, q, minX: Math.min(l[0].x, l[1].x, l[2].x), maxX: Math.max(l[0].x, l[1].x, l[2].x), minY: Math.min(l[0].y, l[1].y, l[2].y), maxY: Math.max(l[0].y, l[1].y, l[2].y)};
+    if (e.maxX - e.minX > 4 || e.maxY - e.minY > 4) { behind.push(e); continue; }       // (huge ones: just checked every time)
+    for (let gx = Math.floor(e.minX / CELL); gx <= Math.floor(e.maxX / CELL); gx++)
+      for (let gy = Math.floor(e.minY / CELL); gy <= Math.floor(e.maxY / CELL); gy++) {
+        const k = gx * 100003 + gy;
+        if (!grid.has(k)) grid.set(k, []);
+        grid.get(k).push(e);
+      }
+  }
+  const along = p => {
+    const d = _v.copy(p).sub(point), lx = d.dot(x), ly = d.dot(y), lz = d.dot(z);
+    let best = null, bestZ = -Infinity;
+    for (const e of [...(grid.get(Math.floor(lx / CELL) * 100003 + Math.floor(ly / CELL)) || []), ...behind]) {
+      if (lx < e.minX - 1e-6 || lx > e.maxX + 1e-6 || ly < e.minY - 1e-6 || ly > e.maxY + 1e-6) continue;
+      const [a, b, c] = e.l, den = (b.y - c.y) * (a.x - c.x) + (c.x - b.x) * (a.y - c.y);
+      if (Math.abs(den) < 1e-12) continue;
+      const w0 = ((b.y - c.y) * (lx - c.x) + (c.x - b.x) * (ly - c.y)) / den, w1 = ((c.y - a.y) * (lx - c.x) + (a.x - c.x) * (ly - c.y)) / den, w2 = 1 - w0 - w1;
+      if (w0 < -1e-4 || w1 < -1e-4 || w2 < -1e-4) continue;
+      const tz = w0 * a.z + w1 * b.z + w2 * c.z;
+      if (tz > lz + .02 || tz <= bestZ) continue;                 // the nearest surface behind it
+      bestZ = tz;
+      best = new THREE.Vector2(e.q[0].x * w0 + e.q[1].x * w1 + e.q[2].x * w2, e.q[0].y * w0 + e.q[1].y * w1 + e.q[2].y * w2);
+    }
+    return best || flatAlong(p);
+  };
   const local = p => { _v.copy(p).sub(point); return new THREE.Vector3(_v.dot(x), _v.dot(y), _v.dot(z)); };
   // depth measured from the surface that was hit (its plane), along the throw
   const hn = new THREE.Vector3(normal.dot(x), normal.dot(y), normal.dot(z));
