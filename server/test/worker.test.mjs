@@ -380,6 +380,10 @@ test('king of the hill: start with the crown, grace, knocked off by punch and pa
   r = send(b, {type: 'punch', target: 'aaa'}, 0);
   const lost = r.out.find(o => o.msg.type === 'koth' && o.msg.event === 'lost').msg;
   assert.equal(lost.by, 'aaa'); assert.equal(lost.time, 5000); assert.equal(lost.how, 'punch');
+  assert.equal(lost.from, 'bbb'); assert.equal(lost.fromName, 'bob');
+  // the crown and the marker she was holding land apart, both with a fall
+  assert.ok(Math.hypot(crown.x - gun.x, crown.z - gun.z) > .7, 'spread apart');
+  assert.equal(r.out.filter(o => o.msg.type === 'item' && o.msg.fall).length, 2);
   assert.equal(crown.holder, null); assert.equal(crown.on, false);
   assert.ok(r.out.find(o => o.msg.type === 'item' && o.msg.item.id === 'cr1').msg.fall, 'pops off the head');
   // picking it up mid-game puts it straight on, even with full hands
@@ -395,7 +399,7 @@ test('king of the hill: start with the crown, grace, knocked off by punch and pa
   assert.equal(crown.holder, 'bbb', 'still on while the ball is in the air');
   const msgs = tick(300);
   const shot = msgs.find(m => m.event === 'lost');
-  assert.equal(shot.how, 'paintball'); assert.equal(shot.by, 'bbb');
+  assert.equal(shot.how, 'paintball'); assert.equal(shot.by, 'bbb'); assert.equal(shot.from, 'aaa');
   assert.equal(shot.time, 2250, 'banked up to when the ball landed');
   assert.equal(crown.on, false);
   // alice takes it back and her time carries on from where it was

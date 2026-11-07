@@ -90,17 +90,26 @@ function trackRunner(r, player, now, out) {
   return true;
 }
 
-// Drop whatever this player holds (they left, went idle, or got punched).
+// Drop whatever this player holds (they left, went idle, or got punched). A crown pops up off the head;
+// with more than one thing (a crown and what's in their hands) they fly apart a little, landing about
+// 0.4 m out on different sides (inside the space their body took up, so never in a wall), easy to grab one at a time.
+const r3 = v => Math.round(v * 1000) / 1000;
 export function releaseItems(items, player) {
-  const out = [];
-  for (const it of Object.values(items)) {
-    if (it.holder !== player.id) continue;
-    const head = worn(it) && player.pose;
-    dropAt(it, player.pose || it, 0, 0);
-    // a crown knocked off pops up off the head and falls at their feet
-    const fall = head ? {p: [player.pose.x, Math.round((player.pose.y + .12) * 1000) / 1000, player.pose.z], v: [0, 1.4, 0]} : undefined;
+  const out = [], mine = Object.values(items).filter(it => it.holder === player.id), pose = player.pose;
+  const spread = pose && mine.length > 1 ? .4 : 0, base = (pose?.yaw || 0) + Math.PI / 2;   // first off to their right
+  mine.forEach((it, k) => {
+    const head = worn(it);
+    const a = base + 2 * Math.PI * k / mine.length, dx = Math.cos(a) * spread, dz = -Math.sin(a) * spread;
+    dropAt(it, pose || it, dx, dz);
+    let fall;
+    if (pose && (head || spread)) {
+      // from the head or the hand, up a little and out to where it lands
+      const y0 = pose.y + (head ? .12 : -.45), vy = head ? 1.4 : 1, drop = Math.max(.05, y0 - it.y);
+      const t = (vy + Math.sqrt(vy * vy + 2 * 9.8 * drop)) / 9.8;
+      fall = {p: [r3(pose.x), r3(y0), r3(pose.z)], v: [r3(dx / t), vy, r3(dz / t)]};
+    }
     out.push({to: 'all', msg: {type: 'item', item: cleanItem(it), fall}});
-  }
+  });
   return out;
 }
 
@@ -278,7 +287,7 @@ function handle(player, data, now, room) {
     if (!target || target.id === player.id || flat(player.pose, target.pose) > PUNCH_RANGE) return {out, changed: true};
     const dx = target.pose.x - player.pose.x, dz = target.pose.z - player.pose.z, len = Math.hypot(dx, dz) || 1;
     out.push({to: 'all', msg: {type: 'punch', from: player.id, target: target.id, dir: [dx / len, dz / len], time: now}});
-    if (room.koth) room.koth.cause = 'punch';
+    if (room.koth) { Object.assign(room.koth, {cause: 'punch', causeBy: player.id}); room.koth.names[player.id] = player.name || ''; }
     const dropped = releaseItems(items, target);
     out.push(...dropped);
     return {out, changed: true, itemsChanged: dropped.length > 0};
@@ -304,7 +313,8 @@ function handle(player, data, now, room) {
     // a paintball knocks the crown off when it lands
     if (target && kothActive(room.koth) && Object.values(items).some(it => worn(it) && it.holder === target.id)) {
       const k = room.koth;
-      k.hits = [...(k.hits || []), {target: target.id, at: now + Math.round(t * 1000)}].slice(-20);
+      k.hits = [...(k.hits || []), {target: target.id, at: now + Math.round(t * 1000), by: player.id}].slice(-20);
+      k.names[player.id] = player.name || '';
       kothChanged = true;
     }
     if (hit && !target && room.marks) {
@@ -340,7 +350,7 @@ function handle(player, data, now, room) {
 // room: {items, koth, players: () => [player records]}
 export function kothTick(room, now) {
   const out = [], k = room.koth, items = room.items || {};
-  if (!kothActive(k)) { if (k) { delete k.cause; delete k.lostAt; } return {out, kothChanged: false, itemsChanged: false}; }
+  if (!kothActive(k)) { if (k) { delete k.cause; delete k.causeBy; delete k.lostAt; } return {out, kothChanged: false, itemsChanged: false}; }
   const crown = Object.values(items).find(it => it.type === 'crown');
   const players = room.players ? room.players() : [];
   const nameOf = id => players.find(p => p && p.id === id)?.name || k.names[id] || '';
@@ -355,7 +365,7 @@ export function kothTick(room, now) {
   if (k.state === 'running' && k.wearer && kothTime(k, k.wearer, now) >= KOTH_WIN_MS) {
     k.times[k.wearer] = KOTH_WIN_MS; k.since = now;
     Object.assign(k, {state: 'done', winner: k.wearer, winnerName: nameOf(k.wearer), endedAt: now, hits: []});
-    delete k.cause; delete k.lostAt;
+    delete k.cause; delete k.causeBy; delete k.lostAt;
     send('win', {by: k.winner, byName: k.winnerName, time: KOTH_WIN_MS});
     return {out, kothChanged: true, itemsChanged};
   }
@@ -367,7 +377,7 @@ export function kothTick(room, now) {
       for (const h of due) {
         if (!crown || crown.holder !== h.target || !crown.on) continue;
         const target = players.find(p => p && p.id === h.target);
-        k.cause = 'paintball'; k.lostAt = h.at;   // it came off when the ball landed
+        k.cause = 'paintball'; k.causeBy = h.by || ''; k.lostAt = h.at;   // it came off when the ball landed
         for (const o of releaseItems({[crown.id]: crown}, target || {id: h.target, pose: null})) out.push(o);
         itemsChanged = true;
       }
@@ -379,7 +389,8 @@ export function kothTick(room, now) {
     const end = Math.min(now, k.lostAt ?? now);
     if (k.state === 'running') k.times[id] = (k.times[id] || 0) + Math.max(0, end - k.since);
     k.wearer = ''; k.droppedAt = now; kothChanged = true;
-    send('lost', {by: id, byName: nameOf(id), time: k.times[id] || 0, how: k.cause || ''});
+    send('lost', {by: id, byName: nameOf(id), time: k.times[id] || 0, how: k.cause || '',
+      from: k.causeBy || '', fromName: k.causeBy ? nameOf(k.causeBy) : ''});
   }
   // someone put it on
   if (!k.wearer && crown?.holder && crown.on) {
@@ -392,7 +403,7 @@ export function kothTick(room, now) {
     Object.assign(k, {state: 'cancelled', endedAt: now, hits: []}); kothChanged = true;
     send('cancel');
   }
-  delete k.cause; delete k.lostAt;
+  delete k.cause; delete k.causeBy; delete k.lostAt;
   return {out, kothChanged, itemsChanged};
 }
 // when the game next needs a look even if nobody does anything (ms since epoch), or null

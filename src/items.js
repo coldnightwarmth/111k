@@ -424,7 +424,9 @@ export function createItems({scene, camera, hits, shadows = null}) {
       const it = ensure(state);
       if (fall && hits && !state.holder) {
         const f = simulateFall(hits, fall.p, fall.v);
-        f.path[f.path.length - 1].set(state.x, state.y, state.z);   // the server's resting spot is the word
+        // the server's resting spot is the word: ease the difference in over the whole fall, not a jump at the end
+        const last = f.path.length - 1, err = new THREE.Vector3(state.x, state.y, state.z).sub(f.path[last]);
+        f.path.forEach((p, i) => p.addScaledVector(err, last ? i / last : 1));
         it.fall = {path: f.path, t: 0};
       } else it.fall = null;
     },

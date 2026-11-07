@@ -169,6 +169,31 @@ function addArms(model) {
   return arms;
 }
 
+// a copy of a skinned mesh's geometry without any triangle that touches the head or neck bones
+function withoutHead(mesh) {
+  const src = mesh.geometry, j = src.attributes.skinIndex, w = src.attributes.skinWeight;
+  if (!j || !w) return null;
+  const hi = new Set(mesh.skeleton.bones.flatMap((b, i) => /^(Head|Neck)/.test(b.name) ? [i] : []));
+  if (!hi.size) return null;
+  const head = new Uint8Array(j.count);
+  let any = false;
+  for (let v = 0; v < j.count; v++) for (let k = 0; k < 4; k++) if (w.getComponent(v, k) > .001 && hi.has(j.getComponent(v, k))) { head[v] = 1; any = true; break; }
+  if (!any) return null;
+  const count = src.index ? src.index.count : j.count, kept = [], groups = [];
+  const ranges = src.groups.length ? src.groups : [{start: 0, count, materialIndex: 0}];
+  for (const g of ranges) {
+    const start = kept.length;
+    for (let i = g.start; i < Math.min(count, g.start + g.count); i += 3) {
+      const t = [0, 1, 2].map(o => src.index ? src.index.getX(i + o) : i + o);
+      if (!t.some(v => head[v])) kept.push(...t);
+    }
+    groups.push({start, count: kept.length - start, materialIndex: g.materialIndex});
+  }
+  const geo = src.clone(); geo.setIndex(kept); geo.clearGroups();
+  if (src.groups.length) for (const g of groups) geo.addGroup(g.start, g.count, g.materialIndex);
+  return geo;
+}
+
 // Apply camera aim to the head after the clip mixer, restoring the untouched
 // pose before the next mixer tick so rotations never accumulate.
 function createLookPose(model) {
@@ -245,7 +270,8 @@ export async function createAvatar(look) {
   let lastPt = -1, lastHand = 0, tail = null;
   const punchCurve = k => Math.max(0, Math.min(1, k / .08, (1 - k) / .3));
   const head = model.getObjectByName('Head');
-  let moving = false, speed = 0, walkBlend = 0, holdBlend = 0, hideHead = false, crowned = false;
+  let moving = false, speed = 0, walkBlend = 0, holdBlend = 0, hideHead = false, crowned = false, headParts = null;
+  const partOf = o => { for (let q = o; q && q !== model; q = q.parent) if (/^Drif_/.test(q.name)) return q.name; return ''; };
 
   return {
     root, model, socket, hand: model.getObjectByName('HandR') || model.getObjectByName('Hand.R'),
@@ -260,7 +286,30 @@ export async function createAvatar(look) {
       wardrobe.applyHeadScale();
     },
     // first person: keep the body (so you see your own punch) but fold the head away
-    setHeadless(v) { hideHead = v; },
+    setHeadless(v) {
+      hideHead = v;
+      // everything on the head goes too: some heads, hats and face parts hang off the chest or neck, not
+      // the head bone, and would poke into view (in first person you only ever see your arms)
+      if (v && !headParts) {
+        headParts = [];
+        const onHead = o => {
+          const j = o.geometry?.attributes.skinIndex, w = o.geometry?.attributes.skinWeight;
+          if (!o.isSkinnedMesh || !j || !w) return false;
+          const hi = new Set(o.skeleton.bones.flatMap((b, i) => /^(Head|Neck)/.test(b.name) ? [i] : []));
+          let n = 0;
+          for (let i = 0; i < j.count; i++) for (let k = 0; k < 4; k++) if (hi.has(j.getComponent(i, k)) && w.getComponent(i, k) > .2) { n++; break; }
+          return n > j.count * .3;
+        };
+        model.traverse(o => {
+          if (/^Drif_(Head|Hat|Hair|Ears|Eyes|Brows|Mouth|Nose|Tattoo)_/.test(o.name)) headParts.push(o);
+          else if (o.isMesh && !/^Drif_Body/.test(partOf(o)) && onHead(o)) headParts.push(o);   // head-worn accessories
+        });
+        // and anything left that's partly on the head (the body's own face and neck, a hood, a collar)
+        // loses those triangles: shrinking the head bone leaves them stretched toward the chest
+        model.traverse(o => { if (o.isSkinnedMesh && !headParts.includes(o)) { const g = withoutHead(o); if (g) o.geometry = g; } });
+      }
+      this.fold();
+    },
     // velocity: horizontal speed (m/s); motion: {crouch, jumpTime, jumpPower, emote, emoteTime, pitch, punchTime, holding}
     update(dt, velocity, motion = {}) {
       look_.restore(); wardrobe.restoreHeadScale();
@@ -314,7 +363,11 @@ export async function createAvatar(look) {
       look_.apply(dt, motion.pitch || 0);
       this.fold();
     },
-    fold() { if (head && hideHead) head.scale.setScalar(1e-3); },
+    fold() {
+      if (!hideHead) return;
+      if (head) head.scale.setScalar(1e-3);
+      for (const o of headParts || []) o.visible = false;
+    },
     // dissolve the whole avatar while the camera is inside it (eased in and out)
     // dither away the faces close to the camera (instead of the near plane slicing through them)
     ghost: ghostOwn,   // its dither uniforms (a crown on its head dissolves with it)

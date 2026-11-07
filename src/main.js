@@ -432,6 +432,8 @@ async function start() {
   const kothEl = $('koth'), kothWho = kothEl.querySelector('span'), kothClock = kothEl.querySelector('b'), kothMine = kothEl.querySelector('small');
   const nameOf = id => id === network.id ? 'you' : (koth?.names?.[id] || 'anon');
   const secs = ms => `${(Math.floor(ms / 100) / 10).toFixed(1)}`;
+  // a player's crown time for the chat, seconds:hundredths like the lap timer (it never reaches a minute)
+  const crownTime = ms => `${String(Math.floor(Math.min(ms, 59999) / 1000)).padStart(2, '0')}:${String(Math.floor(ms / 10) % 100).padStart(2, '0')}`;
   // top of the screen while a game's on: who has the crown and their time, and yours if it's not you
   function updateKoth(now) {
     const live = kothActive(koth), won = koth?.state === 'done' && now - kothWonAt < 8000;
@@ -874,15 +876,18 @@ async function start() {
         }, from);
       } else if (m.type === 'koth') {
         koth = m.koth; kothAt = performance.now();
-        const who = m.by === network.id ? 'you' : (m.byName || 'anon');
+        const name = (id, n) => id === network.id ? 'you' : (n || 'anon');
+        const who = name(m.by, m.byName), at = `${who} (${crownTime(m.time || 0)})`;
         const say = text => chat.record(text, {system: true});
-        if (m.event === 'start') say(`${who} started king of the hill: ${KOTH_GRACE_MS / 1000}s grace, then whoever wears the crown longest (a minute in all) wins`);
-        else if (m.event === 'grace') say(m.by ? `grace period over: ${m.by === network.id ? 'you have' : `${m.byName || 'anon'} has`} the crown, the clock's running` : `grace period over: the crown's up for grabs`);
+        if (m.event === 'start') say(`${who} initiated a game of king's crown`);
+        else if (m.event === 'grace') say('the game begins!');
+        else if (m.event === 'take') say(`${at} got the crown`);
         else if (m.event === 'lost') {
-          const how = {punch: ' to a punch', paintball: ' to a paintball', left: ' (left)'}[m.how] || '';
-          say(`${who} lost the crown${how} · ${formatRace(m.time)} of ${formatRace(KOTH_WIN_MS)}`);
-        } else if (m.event === 'win') { say(`${who} ${m.by === network.id ? 'win' : 'wins'} king of the hill!`); kothWonAt = performance.now(); }
-        else if (m.event === 'cancel') say(`king of the hill called off: nobody picked the crown back up`);
+          const by = m.from ? (m.from === network.id ? 'your' : `${m.fromName || 'anon'}'s`) : '';
+          const how = by && (m.how === 'punch' || m.how === 'paintball') ? ` to ${by} ${m.how}` : '';
+          say(`${at} lost the crown${how}`);
+        } else if (m.event === 'win') { say(`${who} won the king's crown!`); kothWonAt = performance.now(); }
+        else if (m.event === 'cancel') say(`the king's crown game is off: nobody picked the crown back up`);
       } else if (m.type === 'race') {
         machine.setRace(m.race);
         if (m.by && m.by !== network.id) machine.press();
