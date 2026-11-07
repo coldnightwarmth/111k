@@ -1,4 +1,4 @@
-// Held items: flashlights, the paintball marker and spray cans. The server owns
+// Held items: flashlights, the paintball gun and spray cans. The server owns
 // who holds what and where things lie; this module draws them on the ground,
 // in other players' hands and in your own view, and feeds torch beams to the
 // level shader.
@@ -11,7 +11,7 @@ import {ART, paintingSize} from './paintings.js';
 import {mergeVertices, mergeGeometries} from '../vendor/three/BufferGeometryUtils.js';
 
 const BEAM_COLOR = new THREE.Color(1, .93, .8);
-export const ITEM_NAMES = {flashlight: 'flashlight', paintball: 'paintball marker', spray: 'spray can', bucket: 'bucket and sponge', crown: 'golden crown', painting: 'painting'};
+export const ITEM_NAMES = {flashlight: 'flashlight', paintball: 'paintball gun', spray: 'spray can', bucket: 'bucket and sponge', crown: 'golden crown', painting: 'painting'};
 
 const std = (color, roughness = .55, metalness = .2, extra = {}) => new THREE.MeshStandardMaterial({color, roughness, metalness, ...extra});
 function part(g, geo, mat, [x, y, z] = [0, 0, 0], [rx, ry, rz] = [0, 0, 0]) {
@@ -35,7 +35,7 @@ function flashlightModel() {
   return g;
 }
 
-// ----------------------------------------------------------------- the marker
+// ----------------------------------------------------------------- the paintball gun
 // Shapes drawn side-on (z forward/back, y up) and extruded across x, bevelled.
 function sideExtrude(points, width, bevel = .003, curveSegments = 6) {
   const shape = new THREE.Shape();
@@ -63,9 +63,9 @@ function rings(g, mat, r, z0, z1, n, y = 0, tube = .0016) {
   for (let i = 0; i < n; i++) part(g, new THREE.TorusGeometry(r, tube, 5, 20), mat, [0, y, z0 + (z1 - z0) * (i + .5) / n]);
 }
 
-// A modern speedball marker, muzzle down its local -z, ~63 cm from muzzle to tank end.
+// A modern speedball paintball gun, muzzle down its local -z, ~63 cm from muzzle to tank end.
 // The hopper's balls show the loaded paint (setPaint).
-const GUN_SCALE = 1.12;   // the marker is drawn a little bigger than it was built
+const GUN_SCALE = 1.12;   // the gun is drawn a little bigger than it was built
 function paintballModel() {
   const g = new THREE.Group();
   const X = [Math.PI / 2, 0, 0];
@@ -620,7 +620,7 @@ export function createItems({scene, camera, hits, shadows = null}) {
   const spots = [];                 // real spotlights so avatars catch the beams
   const slotOf = new Map(), used = new Array(MAX_FLASHLIGHTS).fill(false);   // torch id -> its beam slot
   const lit = [];                   // switched-on flashlights this frame, nearest first
-  let myPaint = RANDOM_PAINT;       // the colour you've loaded into the marker
+  let myPaint = RANDOM_PAINT;       // the colour you've loaded into the gun
   let highlighted = null;           // the item under your crosshair that you could pick up
   // how far a beam's middle gets before it hits the level (cached while the light holds still), so the
   // real spotlight that lights avatars stops at the wall it's pointed at

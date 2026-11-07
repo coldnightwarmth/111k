@@ -223,7 +223,7 @@ def build(ctx, door_x):
         ctx['ITEMS'].append({'type': 'flashlight', 'x': round(float(p[0]), 3), 'y': round(float(p[1]), 3),
                              'z': round(float(p[2]), 3), 'yaw': round(float(yaw + W.yaw), 3)})
 
-    # the paintball marker, on the floor in the middle of the room
+    # the paintball gun, on the floor in the middle of the room
     p = W.T((-0.35, 0.03, 0.45))
     ctx['ITEMS'].append({'type': 'paintball', 'x': round(float(p[0]), 3), 'y': 0.03, 'z': round(float(p[2]), 3),
                          'yaw': round(float(0.9 + W.yaw), 3)})

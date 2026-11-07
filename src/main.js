@@ -192,7 +192,7 @@ async function start() {
     onLockChange: locked => {
       document.body.classList.toggle('locked', locked);
       if (locked) { toggleGallery(false); return; }
-      // Esc while holding a can opens the piece gallery (or, holding the marker, the paint list)
+      // Esc while holding a can opens the piece gallery (or, holding the paintball gun, the paint list)
       if (!menuRelease && ['spray', 'paintball'].includes(heldType()) && !chat.open && emoteMenu.hidden) toggleGallery(true);
       menuRelease = false;
     },
@@ -946,7 +946,7 @@ async function start() {
   function toggleGallery(force) {
     const open = force ?? gallery.hidden;
     const paint = heldType() === 'paintball';
-    // the tags menu is for a can in hand (the paint list for the marker): nothing else opens it
+    // the tags menu is for a can in hand (the paint list for the paintball gun): nothing else opens it
     if (open && (paint ? false : heldType() !== 'spray' || !pieces.length)) return;
     if (open) {
       gallery.dataset.mode = paint ? 'paint' : 'piece';
@@ -959,7 +959,7 @@ async function start() {
     gallery.hidden = !open;
   }
 
-  // ------------------------------------------------------- marker paint
+  // ------------------------------------------------- paintball gun paint
   const paintList = gallery.querySelector('.paints'), paintLabel = $('paintLabel'), btnGallery = $('btnGallery');
   const hex = c => '#' + c.toString(16).padStart(6, '0');
   const RAINBOW = `conic-gradient(${PAINT_ROWS.slice(0, 7).map(([, sh]) => hex(sh[1])).join(', ')}, ${hex(PAINT_ROWS[0][1][1])})`;

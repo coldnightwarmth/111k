@@ -10,7 +10,7 @@ export function createControls({canvas, isTouch, onToggleView, onJump, onChat, o
     if (e.target instanceof HTMLInputElement) return;
     if (e.code === 'Enter') { e.preventDefault(); onChat(); return; }
     // Tab stands in for Esc: it lets go of the mouse (which opens the tags or paint list with a can or
-    // the marker in hand) and, with the mouse free, shuts menus (main.js), rather than moving focus about
+    // the paintball gun in hand) and, with the mouse free, shuts menus (main.js), rather than moving focus about
     if (e.code === 'Tab') { e.preventDefault(); if (state.locked) document.exitPointerLock?.(); return; }
     if (e.code === 'KeyV' && !e.repeat) onToggleView();
     if (e.code === 'KeyE' && !e.repeat) onEmotes();

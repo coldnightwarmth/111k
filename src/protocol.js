@@ -52,7 +52,7 @@ export function sanitizePose(p) {
   return {
     x: round(x), y: round(y), z: round(z), yaw: round(yaw), pitch: round(pitch), room,
     g: Number.isFinite(p.g) ? round(Math.max(-2, Math.min(5, p.g))) : 0,     // height of the floor under their feet
-    pc: Number.isInteger(p.pc) && p.pc >= -1 && p.pc <= 0xffffff ? p.pc : -1,   // paint loaded in their marker (-1: a mix)
+    pc: Number.isInteger(p.pc) && p.pc >= -1 && p.pc <= 0xffffff ? p.pc : -1,   // paint loaded in their paintball gun (-1: a mix)
     crouch: Number.isFinite(p.crouch) ? round(Math.max(0, Math.min(1, p.crouch))) : 0,
     jumpTime: Number.isFinite(p.jumpTime) ? round(Math.max(-1, Math.min(1.1, p.jumpTime))) : -1,
     jumpPower: Number.isFinite(p.jumpPower) ? round(Math.max(.5, Math.min(1.5, p.jumpPower)), 2) : 1,

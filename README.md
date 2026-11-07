@@ -32,7 +32,7 @@ you hold · right click (or F) drops it.
 
 - Flashlights (fifteen, six of them already on, lying around the loop): left click switches them on and off.
   Every item goes back where it started when the last person leaves, or once nobody has done anything for 3 minutes.
-- The paintball marker (in the starting room): left click fires, hold to keep firing.
+- The paintball gun (in the starting room): left click fires, hold to keep firing.
   Paint stays on the walls; a hit player gets paint on them and drops what they hold.
 - Spray cans (ten, round the loop): left click a wall to tag it. Press Esc while
   holding one to pick which piece you spray.
@@ -124,7 +124,7 @@ src/                      client (ES modules, no bundler)
   main.js                 game loop, camera, peers
   avatar.js  motion.js    character animation, movement, interpolation
   level.js   physics.js   baked level + shader hook, flicker, avatar lights, collision + camera rays
-  items.js                held items (flashlights, paintball marker, spray cans)
+  items.js                held items (flashlights, paintball gun, spray cans)
   decals.js  doors.js     paint and tags on the level, swinging doors
   picker.js  looks.js     avatar picker, random looks; cards/ = cards.art appearance code
   net.js     chat.js      websocket client, chat log + bubbles

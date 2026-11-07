@@ -194,7 +194,7 @@ test('paintball and spray: holder checks, marks kept and sent to newcomers, hits
   const gun = ITEM_SPAWNS.find(s => s.type === 'paintball'), torch = ITEM_SPAWNS.find(s => s.type === 'flashlight');
   const can = ITEM_SPAWNS.find(s => s.type === 'spray');
   const shot = {type: 'shoot', o: [gun.x, 1.2, gun.z], v: [-30, 1, 0], c: 0xff00ff, s: 77, t: .3, hit: {p: [gun.x - 9, 1.2, gun.z], n: [1, 0, 0]}};
-  // not holding the marker: ignored
+  // not holding the paintball gun: ignored
   await room.webSocketMessage(a, JSON.stringify({type: 'pose', pose: {...pose, x: gun.x, z: gun.z}}));
   await room.webSocketMessage(a, JSON.stringify(shot));
   assert.equal(b.messages().filter(m => m.type === 'shot').length, 0);
@@ -400,7 +400,7 @@ test('king of the hill: start with the crown, grace, knocked off by punch and pa
   const lost = r.out.find(o => o.msg.type === 'koth' && o.msg.event === 'lost').msg;
   assert.equal(lost.by, 'aaa'); assert.equal(lost.time, 5000); assert.equal(lost.how, 'punch');
   assert.equal(lost.from, 'bbb'); assert.equal(lost.fromName, 'bob');
-  // the crown and the marker she was holding land apart, both with a fall
+  // the crown and the paintball gun she was holding land apart, both with a fall
   assert.ok(Math.hypot(crown.x - gun.x, crown.z - gun.z) > .7, 'spread apart');
   assert.equal(r.out.filter(o => o.msg.type === 'item' && o.msg.fall).length, 2);
   assert.equal(crown.holder, null); assert.equal(crown.on, false);
@@ -412,7 +412,7 @@ test('king of the hill: start with the crown, grace, knocked off by punch and pa
   assert.equal(crown.holder, 'bbb'); assert.equal(crown.on, true); assert.equal(koth.wearer, 'bbb');
   assert.deepEqual(events(r), ['take']);
   // a paintball knocks it off when it lands, not when it's fired
-  a.pose.x = b.pose.x + 5; a.pose.z = b.pose.z; gun.holder = "aaa";   // (the punch knocked the marker out of her hand too)
+  a.pose.x = b.pose.x + 5; a.pose.z = b.pose.z; gun.holder = "aaa";   // (the punch knocked the gun out of her hand too)
   r = send(a, {type: 'shoot', o: [a.pose.x, 1.3, a.pose.z], v: [-20, 0, 0], c: 0xff0000, s: 1, t: .25, target: 'bbb', local: {p: [0, 1, 0], n: [1, 0, 0]}}, 2000);
   assert.ok(r.out.some(o => o.msg.type === "shot"), JSON.stringify(r.out)); assert.equal(koth.hits.length, 1);
   assert.equal(crown.holder, 'bbb', 'still on while the ball is in the air');

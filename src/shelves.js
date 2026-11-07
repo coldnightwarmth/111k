@@ -1,5 +1,5 @@
 // The supply room: B-02, the empty room next to the start room, fitted out at runtime with
-// steel shelving stocked with spray cans, paintball markers, flashlights and cleaning buckets.
+// steel shelving stocked with spray cans, paintball guns, flashlights and cleaning buckets.
 // Shared by the server (where the stock starts) and the client (which builds the shelves).
 const RL = 38, XF = Math.sqrt(3.3 ** 2 - 2 ** 2), VD = XF + 1.15, ROOM_C = VD + 3.2;
 const ROOM = 1, DOOR_X = 1.6;                 // the level builder's room 1 and its door offset
