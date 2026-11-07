@@ -32,6 +32,9 @@ jobs:
           V="${GITHUB_SHA::10}"
           find _site/src -name '*.js' -o -name '*.mjs' | xargs sed -i -E "s#((from|import)[[:space:]]*\(?[[:space:]]*'\.\.?/[^']+\.m?js)'#\1?v=$V'#g"
           sed -i -E "s#src=\"src/main\.js\"#src=\"src/main.js?v=$V\"#; s#href=\"styles\.css\"#href=\"styles.css?v=$V\"#" _site/index.html
+          # the level is asked for by the same version (src/level.js), so preload that exact file, not a second copy
+          sed -i -E "s#href=\"assets/env/world\.glb\"#href=\"assets/env/world.glb?v=$V\"#" _site/index.html
+          grep -q "world.glb?v=$V" _site/index.html
           grep -q "main.js?v=$V" _site/index.html
           touch _site/.nojekyll
           if [ -f CNAME ]; then cp CNAME _site/; fi
