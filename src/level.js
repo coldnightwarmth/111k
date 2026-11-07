@@ -169,22 +169,28 @@ float beamVisible(int i, vec3 p, vec3 n, float d) {
   material.customProgramCacheKey = () => 'level-lit';
 }
 
+// The level files' version: a deploy writes a hash of their contents here (.github/workflows/pages.yml),
+// so a rebaked level is fetched fresh but one that hasn't changed stays in the browser's cache
+// across deploys. Empty when run locally.
+const LEVEL_VERSION = '';
+
 export async function loadLevel(name, renderer) {
   const base = new URL(`../assets/env/${name}`, import.meta.url).href;
-  // a deploy stamps this module's URL with its version: ask for the level files by it too, so a
-  // rebaked level isn't served stale from the browser's cache
-  const v = new URL(import.meta.url).search;
-  const [gltf, lightmap, meta] = await Promise.all([
-    new GLTFLoader().loadAsync(`${base}.glb${v}`),
-    new THREE.TextureLoader().loadAsync(`${base}-lightmap.webp${v}`),
-    fetch(`${base}.json${v}`).then(r => { if (!r.ok) throw Error(`Level data unavailable (${r.status})`); return r.json(); }),
-  ]);
-  const blank = () => new THREE.DataTexture(new Uint8Array(4), 1, 1);
+  const v = LEVEL_VERSION ? `?v=${LEVEL_VERSION}` : '';
   const loader = new THREE.TextureLoader();
+  const blank = () => new THREE.DataTexture(new Uint8Array(4), 1, 1);
+  // everything downloads at once: the light and flicker maps only wait for the small json (which
+  // says whether there are flicker maps), not for the big model
+  const metaReady = fetch(`${base}.json${v}`).then(r => { if (!r.ok) throw Error(`Level data unavailable (${r.status})`); return r.json(); });
   // groups 0-2 in one map's rgb; newer bakes keep group 3 in a second map instead of alpha
-  const [flicker, flicker2] = await Promise.all([
-    meta.flickerMap ? loader.loadAsync(`${base}-flicker.webp${v}`) : blank(),
-    meta.flickerMap === 'share2' ? loader.loadAsync(`${base}-flicker2.webp${v}`) : blank(),
+  const flickers = metaReady.then(m => Promise.all([
+    m.flickerMap ? loader.loadAsync(`${base}-flicker.webp${v}`) : blank(),
+    m.flickerMap === 'share2' ? loader.loadAsync(`${base}-flicker2.webp${v}`) : blank(),
+  ]));
+  const [gltf, lightmap, meta, [flicker, flicker2]] = await Promise.all([
+    new GLTFLoader().loadAsync(`${base}.glb${v}`),
+    loader.loadAsync(`${base}-lightmap.webp${v}`),
+    metaReady, flickers,
   ]);
   lighting.flickerSplit.value = meta.flickerMap === 'share2' ? 1 : 0;
   for (const t of [lightmap, flicker, flicker2]) {

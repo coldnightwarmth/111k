@@ -209,6 +209,8 @@ export function pickAvatar({previous = null, name = '', extra = null} = {}) {
   function show(k) {
     kind = k;
     grid.replaceChildren(...cards[k]);
+    // fetch every option's parts at once; only drawing them goes one at a time
+    for (const look of looks[k]) preloadLook(look).catch(() => {});
     for (const t of root.querySelectorAll('.tabs button')) t.setAttribute('aria-selected', t.dataset.kind === k);
     cards[k].forEach((b, i) => {
       if (drawn.has(b)) return;
@@ -225,6 +227,7 @@ export function pickAvatar({previous = null, name = '', extra = null} = {}) {
     const card = root.querySelector('.previous .card');
     turnable(card);
     card.addEventListener('click', () => select('previous'));
+    preloadLook(previous).catch(() => {});
     draw(previous, card);
   }
   show(kind);
