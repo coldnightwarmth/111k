@@ -4,6 +4,8 @@ Everything is built in the current frame of the World (so a prop can be
 placed inside a room frame, or inside a tilted frame to knock it over).
 Small coloured parts use the shared palette texture: `box(..., 'red')`.
 """
+import contextlib
+import os
 import math
 import numpy as np
 from scipy.spatial import ConvexHull
@@ -319,10 +321,23 @@ class Props:
                 pts.append((x + u * co + w * si, y + yy, z - u * si + w * co))
         self.hull(pts, color, mat)
 
+    # left out (built and thrown away, so every other piece stays where it was): carrier bags, which
+    # read as face masks, and one pizza box standing open in the tunnel
+    SKIP_KINDS = {'bag'}
+    SKIP_AT = [('pizza', 32.395, 19.881)]
+
     def _debris(self, r, x, z, kind=None, y=0.0):
         names = list(self.DEBRIS)
         wts = np.array([self.DEBRIS[k] for k in names], float)
         kind = kind or names[r.choice(len(names), p=wts / wts.sum())]
+        w = self.W.T(np.array([[x, y, z]], float))[0]
+        if os.environ.get('DEBRIS_LOG'):
+            print(f'DEBRIS {kind} {w[0]:.3f} {w[1]:.3f} {w[2]:.3f}')
+        drop = kind in self.SKIP_KINDS or any(k == kind and math.hypot(w[0] - sx, w[2] - sz) < 0.05 for k, sx, sz in self.SKIP_AT)
+        with (self.W.discard() if drop else contextlib.nullcontext()):
+            self._debris_piece(r, x, z, kind, y)
+
+    def _debris_piece(self, r, x, z, kind, y):
         yaw = r.uniform(0, 6.28)
         co, si = math.cos(yaw), math.sin(yaw)
         local = lambda u, w, h=0.0: (x + u * co + w * si, y + h, z - u * si + w * co)
