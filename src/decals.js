@@ -122,19 +122,8 @@ export function createWorldHits(level, doors = []) {
 
 // ------------------------------------------------------- cutting decal meshes
 // A decal is a box (half sizes hx, hy, hz) in the frame (right, up, normal) at a point.
-function clipPolygon(poly, axis, limit, sign) {
-  const out = [];
-  for (let i = 0; i < poly.length; i++) {
-    const a = poly[i], b = poly[(i + 1) % poly.length];
-    const da = sign * a.l[axis] - limit, db = sign * b.l[axis] - limit;
-    if (da <= 0) out.push(a);
-    if ((da <= 0) !== (db <= 0)) {
-      const t = da / (da - db);
-      out.push({l: a.l.clone().lerp(b.l, t), uv: a.uv.clone().lerp(b.uv, t)});
-    }
-  }
-  return out;
-}
+// a point part way along a polygon's edge (its place in the throw's frame, lightmap uv and spot on the decal)
+const mix = (a, b, t) => ({l: a.l.clone().lerp(b.l, t), uv: a.uv.clone().lerp(b.uv, t), q: a.q.clone().lerp(b.q, t)});
 
 // keep the part of a polygon where fn(l) <= 0 (fn linear in l)
 function clipBy(poly, fn) {
@@ -143,9 +132,91 @@ function clipBy(poly, fn) {
     const a = poly[i], b = poly[(i + 1) % poly.length];
     const da = fn(a.l), db = fn(b.l);
     if (da <= 0) out.push(a);
-    if ((da <= 0) !== (db <= 0)) {
-      const t = da / (da - db);
-      out.push({l: a.l.clone().lerp(b.l, t), uv: a.uv.clone().lerp(b.uv, t)});
+    if ((da <= 0) !== (db <= 0)) out.push(mix(a, b, da / (da - db)));
+  }
+  return out;
+}
+// keep the part where its spot on the decal is inside the decal's rectangle
+function clipToDecal(poly, hx, hy) {
+  for (const [axis, lim] of [['x', hx], ['y', hy]]) for (const sign of [1, -1]) {
+    const out = [];
+    for (let i = 0; i < poly.length; i++) {
+      const a = poly[i], b = poly[(i + 1) % poly.length];
+      const da = sign * a.q[axis] - lim, db = sign * b.q[axis] - lim;
+      if (da <= 0) out.push(a);
+      if ((da <= 0) !== (db <= 0)) out.push(mix(a, b, da / (da - db)));
+    }
+    poly = out;
+    if (poly.length < 3) return poly;
+  }
+  return poly;
+}
+
+// Where each surface near the hit lies on the decal, as if the surface were unfolded flat round the face
+// that was hit, like paper smoothed over a corner: the face that was hit gets the piece at its true size and
+// shape whatever angle it was thrown at, and faces joined to it (round a corner, along the tunnel's curve)
+// carry on from it without stretching. Faces it can't reach by its edges (separate things) are mapped
+// straight along the throw onto the hit face's plane. Returns triangle -> its three corners on the decal.
+function unfold(tris, point, nh, xh, yh, z) {
+  const out = new Map();
+  const key = p => `${Math.round(p.x * 500)},${Math.round(p.y * 500)},${Math.round(p.z * 500)}`;
+  const edges = new Map(), keys = [], facing = [];
+  const e1 = new THREE.Vector3(), e2 = new THREE.Vector3(), n = new THREE.Vector3();
+  tris.forEach((t, i) => {
+    keys.push(t.p.map(key));
+    n.crossVectors(e1.subVectors(t.p[1], t.p[0]), e2.subVectors(t.p[2], t.p[0]));
+    const ok = n.lengthSq() > 1e-14;
+    if (ok) { n.normalize(); if (t.n ? n.dot(t.n) < 0 : n.dot(z) < 0) n.negate(); }
+    facing.push(ok && n.dot(z) >= .03 ? n.clone() : null);
+    for (let e = 0; e < 3; e++) {
+      const a = keys[i][e], b = keys[i][(e + 1) % 3], ek = a < b ? `${a}|${b}` : `${b}|${a}`;
+      if (!edges.has(ek)) edges.set(ek, []);
+      edges.get(ek).push(i);
+    }
+  });
+  // the face the hit is on
+  const tri = new THREE.Triangle(), cp = new THREE.Vector3();
+  let start = -1, best = 1e-4;
+  tris.forEach((t, i) => {
+    if (!facing[i] || facing[i].dot(nh) < .9) return;
+    tri.set(t.p[0], t.p[1], t.p[2]).closestPointToPoint(point, cp);
+    const d = cp.distanceToSquared(point);
+    if (d < best) { best = d; start = i; }
+  });
+  if (start < 0) return out;
+  const flat = p => { const d = _v.copy(p).sub(point); return new THREE.Vector2(d.dot(xh), d.dot(yh)); };
+  out.set(tris[start], tris[start].p.map(flat));
+  const queue = [start];
+  const c3 = new THREE.Vector3(), d3 = new THREE.Vector3();
+  while (queue.length) {
+    const ai = queue.shift(), A = tris[ai], a2 = out.get(A);
+    for (let e = 0; e < 3; e++) {
+      const i0 = e, i1 = (e + 1) % 3, i2 = (e + 2) % 3;
+      const a = keys[ai][i0], b = keys[ai][i1], ek = a < b ? `${a}|${b}` : `${b}|${a}`;
+      for (const bi of edges.get(ek)) {
+        const B = tris[bi];
+        if (bi === ai || out.has(B) || !facing[bi]) continue;
+        const j0 = keys[bi].indexOf(a), j1 = keys[bi].indexOf(b);
+        if (j0 < 0 || j1 < 0 || j0 === j1) continue;
+        const jc = 3 - j0 - j1;
+        // B's third corner, laid flat across the shared edge from A's
+        d3.subVectors(B.p[j1], B.p[j0]);
+        const len = d3.length();
+        if (len < 1e-6) continue;
+        d3.divideScalar(len);
+        c3.subVectors(B.p[jc], B.p[j0]);
+        const along = c3.dot(d3), off = c3.addScaledVector(d3, -along).length();
+        const A0 = a2[i0], A1 = a2[i1], ed = A1.clone().sub(A0);
+        if (ed.lengthSq() < 1e-12) continue;
+        ed.normalize();
+        const perp = new THREE.Vector2(-ed.y, ed.x), third = a2[i2];
+        const side = perp.dot(third.clone().sub(A0)) > 0 ? -1 : 1;
+        const b2 = [];
+        b2[j0] = A0.clone(); b2[j1] = A1.clone();
+        b2[jc] = A0.clone().addScaledVector(ed, along).addScaledVector(perp, off * side);
+        out.set(B, b2);
+        queue.push(bi);
+      }
     }
   }
   return out;
@@ -186,7 +257,18 @@ export function cutDecal(hits, {point, normal, up, width, height, dir = null, fr
   const x = new THREE.Vector3().crossVectors(y, z);
   const hx = width / 2, hy = height / 2, near = front + shade;
   const reach = slab ? Math.max(near, back, slab[0], slab[1] + shade) : Math.max(near, back);
-  const tris = hits.gather(point, Math.hypot(hx, hy, reach));
+  // the piece's own frame on the surface that was hit (upright as asked, true size there)
+  const nh = normal.clone().normalize();
+  const yh = up.clone().addScaledVector(nh, -up.dot(nh));
+  if (yh.lengthSq() < 1e-6) yh.copy(y).addScaledVector(nh, -y.dot(nh));
+  yh.normalize();
+  const xh = new THREE.Vector3().crossVectors(yh, nh);
+  // (gathered a little wider: an unfolded corner can reach further than the straight-on box)
+  const tris = hits.gather(point, Math.hypot(hx, hy, reach) * 1.25);
+  const flatOn = unfold(tris, point, nh, xh, yh, z);
+  // faces it doesn't reach by unfolding: straight along the throw onto the hit face's plane
+  const zn = Math.max(.25, z.dot(nh));
+  const along = p => { const d = _v.copy(p).sub(point), s = d.dot(nh) / zn; d.addScaledVector(z, -s); return new THREE.Vector2(d.dot(xh), d.dot(yh)); };
   const local = p => { _v.copy(p).sub(point); return new THREE.Vector3(_v.dot(x), _v.dot(y), _v.dot(z)); };
   // depth measured from the surface that was hit (its plane), along the throw
   const hn = new THREE.Vector3(normal.dot(x), normal.dot(y), normal.dot(z));
@@ -201,11 +283,9 @@ export function cutDecal(hits, {point, normal, up, width, height, dir = null, fr
     if (t.n ? n.dot(t.n) < 0 : n.dot(z) < 0) n.negate();       // the way the surface faces
     const facing = n.dot(z);
     if (facing < .03) continue;                               // edge-on or turned away: no paint, no shadow
-    let poly = t.p.map((p, k) => ({l: local(p), uv: t.uv[k]}));
-    for (const [axis, lo, hi] of [['x', hx, hx], ['y', hy, hy]]) {
-      poly = clipPolygon(poly, axis, hi, 1); if (poly.length < 3) break;
-      poly = clipPolygon(poly, axis, lo, -1); if (poly.length < 3) break;
-    }
+    const q = flatOn.get(t);
+    let poly = t.p.map((p, k) => ({l: local(p), uv: t.uv[k], q: q ? q[k] : along(p)}));
+    poly = clipToDecal(poly, hx, hy);
     if (poly.length >= 3 && thrower !== null) poly = clipBy(poly, l => l.z - (thrower - .05));
     if (poly.length < 3) continue;
     const ln = new THREE.Vector3(n.dot(x), n.dot(y), n.dot(z));
@@ -278,7 +358,7 @@ export function cutDecal(hits, {point, normal, up, width, height, dir = null, fr
     for (const poly of pieces) for (let t = 1; t < poly.length - 1; t++) for (const q of [poly[0], poly[t], poly[t + 1]]) {
       verts.push({
         p: point.clone().addScaledVector(x, q.l.x).addScaledVector(y, q.l.y).addScaledVector(z, q.l.z).addScaledVector(f.n, .005),
-        u: q.l.x / width + .5, v: q.l.y / height + .5, uv1: q.uv, k,
+        u: q.q.x / width + .5, v: q.q.y / height + .5, uv1: q.uv, k,
       });
     }
   }
