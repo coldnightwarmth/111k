@@ -170,6 +170,7 @@ async function start() {
   let relock = false, lastPunch = 0, lastShot = 0, lastSpray = 0, shake = 0, menuRelease = false;
 
   const controls = createControls({
+    ctrlCrouches: () => heldType() !== 'spray',
     canvas, isTouch,
     onToggleView: () => { thirdPerson = !thirdPerson; },
     onJump: () => { if (!chat.open && vertical.jump()) player.emote = ''; },
@@ -857,15 +858,33 @@ async function start() {
     try { localStorage.setItem('111k:piece', name); } catch {}
     for (const b of galleryList.children) b.classList.toggle('chosen', b.dataset.piece === name);
     const p = pieceByName.get(name);
-    tagLabel.replaceChildren(...(p ? [thumb(p, 72)] : []));      // just the piece: no instructions
+    tagLabel.replaceChildren(...(p ? [thumb(p, 72), tagAdjust] : []));      // just the piece (and any turn or size you've set)
   }
   // the scroll wheel steps through your tags whenever the tags menu is shut (open, it scrolls the list).
   // Trackpads send a stream of small deltas, so they're added up and each step takes a fair swipe.
   let wheelAcc = 0, wheelAt = 0, stepAt = 0, tagFlashUntil = 0;
+  // With a can in hand, ctrl + scroll turns the next tag and shift + scroll sizes it (the ghost shows it).
+  let adjAcc = 0, adjAt = 0;
   addEventListener('wheel', e => {
     if (!pieces.length || !gallery.hidden || chat.open) return;
     if (!controls.state.locked && e.target !== canvas) return;
     const now = performance.now();
+    const turning = e.ctrlKey && heldType() === 'spray', sizing = !turning && e.shiftKey && heldType() === 'spray';
+    if (turning || sizing) {
+      if (e.cancelable) e.preventDefault();            // ctrl + scroll would zoom the page
+      // (shift turns the wheel sideways in some browsers)
+      const d = (Math.abs(e.deltaY) >= Math.abs(e.deltaX) ? e.deltaY : e.deltaX) * (e.deltaMode === 1 ? 33 : e.deltaMode === 2 ? 400 : 1);
+      if (now - adjAt > 250) adjAcc = 0;
+      adjAt = now; adjAcc += d;
+      if (Math.abs(adjAcc) < 40) return;
+      const step = -Math.sign(adjAcc); adjAcc = 0;
+      if (turning) { tagTurn = Math.round((tagTurn + step * TURN_STEP) / TURN_STEP) * TURN_STEP; tagTurn = Math.atan2(Math.sin(tagTurn), Math.cos(tagTurn)); learn('tagturn'); }
+      else { tagScale = Math.max(SCALE_MIN, Math.min(SCALE_MAX, tagScale * (step > 0 ? SCALE_STEP : 1 / SCALE_STEP))); learn('tagsize'); }
+      nextTilt = 0; nextScale = 1;                      // set by hand: no random wobble on top
+      showTagAdjust();
+      previewKey = '';
+      return;
+    }
     if (now - wheelAt > 250) wheelAcc = 0;
     wheelAt = now;
     wheelAcc += e.deltaY * (e.deltaMode === 1 ? 33 : e.deltaMode === 2 ? 400 : 1);
@@ -874,7 +893,7 @@ async function start() {
     const i = Math.max(0, pieces.findIndex(p => p.name === chosenPiece));
     choosePiece(pieces[(i + step + pieces.length) % pieces.length].name);
     tagFlashUntil = now + 1500;            // show which tag it landed on, even without a can in hand
-  }, {passive: true});
+  }, {passive: false});
   // picked something: shut the menu and go straight back to playing (the click is the gesture the
   // browser needs to take the mouse again)
   function backToPlay() {
@@ -927,8 +946,21 @@ async function start() {
     paintLabel.replaceChildren(dot);
   }
   // the next tag's little twist and size are rolled ahead, so the preview shows exactly what you'll get
-  let nextTilt = 0, nextScale = 1;
-  const rollSpray = () => { nextTilt = (Math.random() * 2 - 1) * 3 * Math.PI / 180; nextScale = .9 + Math.random() * .2; };
+  // (once you've turned or sized it by hand, it goes on exactly as set: no wobble)
+  let nextTilt = 0, nextScale = 1, tagTurn = 0, tagScale = 1;
+  const TURN_STEP = 5 * Math.PI / 180, SCALE_STEP = 1.06, SCALE_MIN = .3, SCALE_MAX = 3;
+  const handSet = () => tagTurn !== 0 || tagScale !== 1;
+  const rollSpray = () => {
+    if (handSet()) { nextTilt = 0; nextScale = 1; return; }
+    nextTilt = (Math.random() * 2 - 1) * 3 * Math.PI / 180; nextScale = .9 + Math.random() * .2;
+  };
+  // the turn and size you've set, shown under the piece by the can (nothing when they're as standard)
+  const tagAdjust = document.createElement('small');
+  function showTagAdjust() {
+    const deg = Math.round(tagTurn * 180 / Math.PI), pct = Math.round(tagScale * 100);
+    tagAdjust.textContent = [deg ? `${deg > 0 ? '+' : ''}${deg}°` : '', pct !== 100 ? `${pct}%` : ''].filter(Boolean).join('  ');
+    tagFlashUntil = performance.now() + 1500;
+  }
   rollSpray();
   // what a click would spray right now, as the message to send (null if there's no wall in reach)
   function planSpray() {
@@ -940,9 +972,9 @@ async function start() {
     // upright on walls; on floors and ceilings, readable from where you stand
     const up = Math.abs(n.y) < .7 ? new THREE.Vector3(0, 1, 0).addScaledVector(n, -n.y).normalize()
       : new THREE.Vector3(aim.dir.x, 0, aim.dir.z).normalize().multiplyScalar(n.y > 0 ? 1 : -1);
-    up.applyAxisAngle(n, nextTilt);                           // up to 3° either way
+    up.applyAxisAngle(n, nextTilt + tagTurn);                 // your turn, or by itself up to 3° either way
     const big = Math.max(piece.w, piece.h);
-    const size = Math.max(.35, Math.min(piece.w * Math.min(1, 1.5 / big), 2.2)) * nextScale;
+    const size = Math.max(.2, Math.min(2.4, Math.max(.35, Math.min(piece.w * Math.min(1, 1.5 / big), 2.2)) * nextScale * tagScale));
     // sprayed partly along your aim (so it wraps the corner you can see) and partly straight on (so the piece reads)
     const fly = aim.dir.clone().normalize().add(n.clone().negate()).normalize();
     const msg = {type: 'spray', p: aim.point.toArray().map(r3), n: n.toArray().map(r3), up: up.toArray().map(r3), piece: chosenPiece,
@@ -1510,7 +1542,7 @@ async function start() {
         : type === 'bucket' ? [['scrub', cleanTarget ? 'click: scrub it off' : 'aim at paint or graffiti to scrub it'], drop]
         : type === 'crown' ? (kothActive(koth) ? [] : [['koth', 'click: start king of the hill'], drop])
         : type === 'painting' ? [['place', placePlan ? `click: ${{hang: 'hang it here', lean: 'lean it here', lay: 'lay it down'}[placePlan.how]}` : 'aim at a wall or the floor to put it there']]
-        : [['spray', 'click a wall: spray'], ['pieces', 'esc: pick a piece'], drop])
+        : [['spray', 'click a wall: spray'], ['pieces', 'esc: pick a piece'], ['tagturn', 'ctrl + scroll: turn'], ['tagsize', 'shift + scroll: size'], drop])
       : t ? (t.state.type === 'crown' && kothActive(koth) ? [['pickup:crown:on', 'click: put on the crown']]
         : [[`pickup:${t.state.type}`, `click: pick up ${ITEM_NAMES[t.state.type] || 'it'}`]]) : [];
     const hint = parts.filter(([k]) => !learned.has(k)).map(([, text]) => text).join('  ·  ');

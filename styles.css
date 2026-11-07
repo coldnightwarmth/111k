@@ -97,6 +97,7 @@ body.touch #chat .log { pointer-events: auto; touch-action: pan-y; }
 #tagLabel { position: fixed; right: max(16px, env(safe-area-inset-right)); bottom: max(40px, env(safe-area-inset-bottom));
   margin: 0; color: var(--dim); font-size: 11px; letter-spacing: .08em; pointer-events: none; text-shadow: 0 1px 2px #000; }
 #tagLabel canvas { display: block; width: 72px; margin-left: auto; margin-bottom: 4px; }
+#tagLabel small { display: block; text-align: right; font-size: 11px; color: var(--ink, #e9e6dc); font-variant-numeric: tabular-nums; }
 #paintLabel { position: fixed; right: max(16px, env(safe-area-inset-right)); bottom: max(40px, env(safe-area-inset-bottom));
   margin: 0; color: var(--dim); font-size: 11px; letter-spacing: .08em; pointer-events: none; text-shadow: 0 1px 2px #000;
   display: flex; align-items: center; gap: 8px; }
