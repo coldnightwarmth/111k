@@ -10,6 +10,7 @@ import {createControls} from './controls.js';
 import {createItems, ITEM_NAMES, simulateFall} from './items.js';
 import {createMachine} from './machine.js';
 import {createShelves, SHELF_COLLIDERS} from './shelves.js';
+import {mergeGeometries} from '../vendor/three/BufferGeometryUtils.js';
 import {createCleaning} from './cleaning.js';
 import {MACHINE_COLLIDER, BUTTON, BUTTON_RANGE, RACE_LAPS} from './race.js';
 import {KOTH_GRACE_MS, KOTH_WIN_MS, kothActive, kothTime} from './koth.js';
@@ -116,7 +117,7 @@ async function start() {
     const beside = machine.root.localToWorld(new THREE.Vector3(.95, 1.3, .4)), into = new THREE.Vector3(0, 0, -1).transformDirection(machine.root.matrixWorld);
     hits.addPaintable(machine.root, hits.lightAt(beside, into, 3));
   }
-  const shelves = createShelves(THREE, scene);
+  const shelves = createShelves(THREE, scene, mergeGeometries);
   hits.addSolid(shelves);
   // what blocks flashlight beams: the level (doors included), the lap timer and the shelving
   for (const m of level.meshes) if (!m.material.transparent) castsBeamShadow(m);
@@ -895,13 +896,14 @@ async function start() {
     const p = pieceByName.get(name);
     tagLabel.replaceChildren(...(p ? [thumb(p, 72), tagAdjust] : []));      // just the piece (and any turn or size you've set)
   }
-  // the scroll wheel steps through your tags whenever the tags menu is shut (open, it scrolls the list).
+  // with a can in hand, the scroll wheel steps through your tags whenever the tags menu is shut (open, it
+  // scrolls the list); with anything else, or nothing, it does nothing here.
   // Trackpads send a stream of small deltas, so they're added up and each step takes a fair swipe.
-  let wheelAcc = 0, wheelAt = 0, stepAt = 0, tagFlashUntil = 0;
+  let wheelAcc = 0, wheelAt = 0, stepAt = 0;
   // With a can in hand, ctrl + scroll turns the next tag and shift + scroll sizes it (the ghost shows it).
   let adjAcc = 0, adjAt = 0;
   addEventListener('wheel', e => {
-    if (!pieces.length || !gallery.hidden || chat.open) return;
+    if (!pieces.length || !gallery.hidden || chat.open || heldType() !== 'spray') return;
     if (!controls.state.locked && e.target !== canvas) return;
     const now = performance.now();
     const turning = e.ctrlKey && heldType() === 'spray', sizing = !turning && e.shiftKey && heldType() === 'spray';
@@ -927,7 +929,6 @@ async function start() {
     const step = Math.sign(wheelAcc); wheelAcc = 0; stepAt = now;
     const i = Math.max(0, pieces.findIndex(p => p.name === chosenPiece));
     choosePiece(pieces[(i + step + pieces.length) % pieces.length].name);
-    tagFlashUntil = now + 1500;            // show which tag it landed on, even without a can in hand
   }, {passive: false});
   // picked something: shut the menu and go straight back to playing (the click is the gesture the
   // browser needs to take the mouse again)
@@ -938,7 +939,8 @@ async function start() {
   function toggleGallery(force) {
     const open = force ?? gallery.hidden;
     const paint = heldType() === 'paintball';
-    if (open && !paint && !pieces.length) return;
+    // the tags menu is for a can in hand (the paint list for the marker): nothing else opens it
+    if (open && (paint ? false : heldType() !== 'spray' || !pieces.length)) return;
     if (open) {
       gallery.dataset.mode = paint ? 'paint' : 'piece';
       gallery.setAttribute('aria-label', paint ? 'paint to load' : 'pieces to spray');
@@ -994,7 +996,6 @@ async function start() {
   function showTagAdjust() {
     const deg = Math.round(tagTurn * 180 / Math.PI), pct = Math.round(tagScale * 100);
     tagAdjust.textContent = [deg ? `${deg > 0 ? '+' : ''}${deg}°` : '', pct !== 100 ? `${pct}%` : ''].filter(Boolean).join('  ');
-    tagFlashUntil = performance.now() + 1500;
   }
   rollSpray();
   // what a click would spray right now, as the message to send (null if there's no wall in reach)
@@ -1589,7 +1590,7 @@ async function start() {
     const hint = parts.filter(([k]) => !learned.has(k)).map(([, text]) => text).join('  ·  ');
     if (prompt.textContent !== hint) prompt.textContent = hint;
     document.body.classList.toggle('holding', !!h);
-    tagLabel.hidden = (type !== 'spray' && now > tagFlashUntil) || !chosenPiece;
+    tagLabel.hidden = type !== 'spray' || !chosenPiece;
     paintLabel.hidden = type !== 'paintball';
     const galleryLabel = type === 'paintball' ? 'paint' : 'tags';
     if (btnGallery.textContent !== galleryLabel) btnGallery.textContent = galleryLabel;

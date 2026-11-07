@@ -612,7 +612,8 @@ export function createItems({scene, camera, hits, shadows = null}) {
     if (!it || it.state.type !== state.type) {
       if (it) it.model.removeFromParent();
       const model = (MODELS[state.type] || flashlightModel)(state.id, state);
-      model.traverse(o => { o.castShadow = false; o.frustumCulled = false; });
+      // items are culled like anything else when they're out of view (they only ever move, so their bounds hold)
+      model.traverse(o => { o.castShadow = false; });
       it = {state, model, sway: 0, kick: 0, shake: 0, outline: addOutline(model), fall: null};
       // a crown dithers away with its wearer when the camera pushes into them
       if (state.type === 'crown') {

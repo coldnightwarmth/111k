@@ -59,7 +59,9 @@ export const LANTERN = (() => { const p = onUnit(UNITS[0], .55, 0); return {...r
 
 // ------------------------------------------------------------------ building
 // (client only: three is passed in so the server never loads it)
-export function createShelves(THREE, scene) {
+// merge (optional): BufferGeometryUtils.mergeGeometries. Each unit's boxes are built one by one and then
+// merged into one mesh per material: the same triangles in the same places, a few draws instead of hundreds.
+export function createShelves(THREE, scene, merge = null) {
   const group = new THREE.Group(); group.name = 'supply-shelves';
   scene.add(group);
   const steel = new THREE.MeshStandardMaterial({color: 0x5c6670, roughness: .55, metalness: .7});
@@ -85,6 +87,17 @@ export function createShelves(THREE, scene) {
     for (const s of [-1, 1]) {
       const b = box(unit, Math.hypot(SHELF_W - .1, SHELF_LEVELS[4] - SHELF_LEVELS[1]), .02, .006, steel, 0, (SHELF_LEVELS[1] + SHELF_LEVELS[4]) / 2, -SHELF_D / 2 + .01);
       b.rotation.z = s * brace;
+    }
+    if (merge) {
+      const byMat = new Map();
+      for (const m of unit.children) {
+        m.updateMatrix();
+        const g = m.geometry.clone().applyMatrix4(m.matrix);
+        (byMat.get(m.material) || byMat.set(m.material, []).get(m.material)).push(g);
+        m.geometry.dispose();
+      }
+      unit.clear();
+      for (const [mat, geos] of byMat) { unit.add(new THREE.Mesh(merge(geos), mat)); for (const g of geos) g.dispose(); }
     }
   }
   // a caged work lantern on top, lighting the stock
