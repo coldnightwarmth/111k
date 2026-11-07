@@ -189,8 +189,10 @@ export function createMachine(scene) {
   const capGeo = new THREE.SphereGeometry(.1, 32, 12, 0, Math.PI * 2, 0, Math.PI * .42);
   const cap = part(button, capGeo, red, [0, 0, .02], [Math.PI / 2, 0, 0]);
   cap.scale.set(1, .55, 1);
-  // the glow: round the yellow guard and the button standing out of it, together, from any angle
-  const buttonGlow = glowBox(new THREE.Vector3(-.162, -.162, .028), new THREE.Vector3(.162, .162, .102), {x: 0, y: 0, r: .127, z0: .09, z1: .205});
+  // the glow: round the yellow guard, the black collar and the red cap together, fitted to each, from any angle
+  // (the cap: a sphere of 0.1 squashed to 0.055 deep, its middle 0.147 out from the face)
+  const buttonGlow = glowBox(new THREE.Vector3(-.162, -.162, .028), new THREE.Vector3(.162, .162, .102),
+    {x: 0, y: 0, r: .126, z0: .095, z1: .128}, {c: [0, 0, .147], r: [.101, .101, .057]});
   buttonGlow.position.set(0, 1.07, 0); face.add(buttonGlow);
 
   // a caged work lamp on the hood, lighting the front

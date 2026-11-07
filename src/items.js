@@ -463,9 +463,10 @@ const OUTLINES = [outlineMaterial(.007, 1), outlineMaterial(.016, .35)];
 // through the painting itself (tested against its box): just the ring round its outline, from any angle.
 // (Only shown while you're aiming at it in plain view, so drawing it over things is fine.)
 const boxOutlines = new Map();
-// (cyl, if given: an upright cylinder along z, {x, y, r, z0, z1}, joined to the box: the glow goes round both)
-function boxOutlineMaterials(min, max, cyl = null) {
-  const key = `${min.toArray().map(v => v.toFixed(3))}|${max.toArray().map(v => v.toFixed(3))}|${cyl ? Object.values(cyl).map(v => v.toFixed(3)) : ''}`;
+// (cyl, if given: an upright cylinder along z, {x, y, r, z0, z1}, and ell, an ellipsoid {c: [x, y, z], r: [x, y, z]},
+// joined to the box: the glow goes round all of them together)
+function boxOutlineMaterials(min, max, cyl = null, ell = null) {
+  const key = `${min.toArray().map(v => v.toFixed(3))}|${max.toArray().map(v => v.toFixed(3))}|${cyl ? Object.values(cyl).map(v => v.toFixed(3)) : ''}|${ell ? [...ell.c, ...ell.r].map(v => v.toFixed(3)) : ''}`;
   if (!boxOutlines.has(key)) boxOutlines.set(key, [[.007, 1], [.016, .35]].map(([width, opacity]) => {
     const m = outlineMaterial(width, opacity);
     m.depthTest = false;
@@ -476,12 +477,22 @@ function boxOutlineMaterials(min, max, cyl = null) {
       sh.uniforms.boxMax = {value: max.clone()};
       sh.uniforms.cyl = {value: cyl ? new THREE.Vector3(cyl.x, cyl.y, cyl.r) : new THREE.Vector3()};
       sh.uniforms.cylZ = {value: cyl ? new THREE.Vector2(cyl.z0, cyl.z1) : new THREE.Vector2()};
+      sh.uniforms.ellC = {value: ell ? new THREE.Vector3(...ell.c) : new THREE.Vector3()};
+      sh.uniforms.ellR = {value: ell ? new THREE.Vector3(...ell.r) : new THREE.Vector3()};
       sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vObj;\nvarying vec3 vEye;')
         .replace('gl_Position = projectionMatrix * mvPosition;', `gl_Position = projectionMatrix * mvPosition;
       vObj = (inverse(modelViewMatrix) * mvPosition).xyz;
       vEye = (inverse(modelMatrix) * vec4(cameraPosition, 1.0)).xyz;`);
       sh.fragmentShader = sh.fragmentShader.replace('#include <common>', `#include <common>
-uniform vec3 boxMin; uniform vec3 boxMax; uniform vec3 cyl; uniform vec2 cylZ;
+uniform vec3 boxMin; uniform vec3 boxMax; uniform vec3 cyl; uniform vec2 cylZ; uniform vec3 ellC; uniform vec3 ellR;
+// ... or through the ellipsoid?
+bool hitEll(vec3 o, vec3 d) {
+  if (ellR.x <= 0.0) return false;
+  vec3 p = (o - ellC) / ellR, q = d / ellR;
+  float a = dot(q, q), b = dot(p, q), c = dot(p, p) - 1.0, disc = b * b - a * c;
+  if (disc < 0.0) return false;
+  return (-b + sqrt(disc)) / a >= 0.0;
+}
 varying vec3 vObj; varying vec3 vEye;
 // does the line of sight o + t d (t >= 0) pass through the cylinder?
 bool hitCyl(vec3 o, vec3 d) {
@@ -503,7 +514,7 @@ bool hitCyl(vec3 o, vec3 d) {
         vec3 t0 = (boxMin - vEye) * inv, t1 = (boxMax - vEye) * inv;
         vec3 lo = min(t0, t1), hi = max(t0, t1);
         float tin = max(max(lo.x, lo.y), lo.z), tout = min(min(hi.x, hi.y), hi.z);
-        if (tout >= max(tin, 0.0) || hitCyl(vEye, dir)) discard;        // the thing itself is here
+        if (tout >= max(tin, 0.0) || hitCyl(vEye, dir) || hitEll(vEye, dir)) discard;        // the thing itself is here
       }`);
     };
     m.customProgramCacheKey = () => `box-outline-${width}-${key}`;
@@ -522,7 +533,7 @@ export function glowBoxGeometry(min, max) {
 }
 // a glow round a box (in its parent's space), and an upright cylinder joined to it if given, seen from
 // any angle: hidden until shown
-export function glowBox(min, max, cyl = null) {
+export function glowBox(min, max, cyl = null, ell = null) {
   const shells = new THREE.Group(); shells.visible = false;
   const geos = [glowBoxGeometry(min, max)];
   if (cyl) {
@@ -533,7 +544,12 @@ export function glowBox(min, max, cyl = null) {
     m.rotateX(Math.PI / 2); m.translate(cyl.x, cyl.y, (cyl.z0 + cyl.z1) / 2); m.computeVertexNormals();
     geos.push(m);
   }
-  for (const geo of geos) for (const mat of boxOutlineMaterials(min, max, cyl)) { const s = new THREE.Mesh(geo, mat); s.renderOrder = 5; s.frustumCulled = false; shells.add(s); }
+  if (ell) {
+    const e = mergeVertices((() => { const g = new THREE.SphereGeometry(1, 40, 20); g.deleteAttribute('normal'); g.deleteAttribute('uv'); return g; })());
+    e.scale(...ell.r); e.translate(...ell.c); e.computeVertexNormals();
+    geos.push(e);
+  }
+  for (const geo of geos) for (const mat of boxOutlineMaterials(min, max, cyl, ell)) { const s = new THREE.Mesh(geo, mat); s.renderOrder = 5; s.frustumCulled = false; shells.add(s); }
   return shells;
 }
 export function addOutline(model) {
