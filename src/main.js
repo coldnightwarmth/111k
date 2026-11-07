@@ -44,6 +44,13 @@ const voice = createVoice();   // proximity voice: set up on the start screen or
 // --------------------------------------------------------------- renderer
 const canvas = $('view');
 const renderer = new THREE.WebGLRenderer({canvas, antialias: !lowPower, powerPreference: 'high-performance'});
+// checking each shader for errors makes the browser finish compiling it on the spot (a stall each time
+// something new comes into view); only worth it while developing
+renderer.debug.checkShaderErrors = /^(localhost|127\.|\[::1\])/.test(location.hostname);
+// if the GPU drops the context (a driver reset, a phone putting the tab to sleep), come straight back:
+// the session keeps where you were and what you held
+canvas.addEventListener('webglcontextlost', e => { e.preventDefault(); });
+canvas.addEventListener('webglcontextrestored', () => location.reload());
 renderer.setPixelRatio(Math.min(devicePixelRatio, lowPower ? 1.5 : 2));
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = Number(params.get('exposure')) || 1.0;
@@ -1300,7 +1307,8 @@ async function start() {
   }
   addEventListener('pagehide', saveTab);
 
-  renderer.setAnimationLoop(() => {
+  // one frame of the game (run below, guarded)
+  const frame = () => {
     const now = performance.now(), dt = Math.min(.1, (now - last) / 1000); last = now;
     const input = controls.update();
     const frozen = chat.open || !emoteMenu.hidden;
@@ -1605,6 +1613,15 @@ async function start() {
     avatarLights.update(camera.position.x, camera.position.z);
     updateLights(now);
     renderer.render(scene, camera);
+  };
+  // A thrown error mustn't stop the loop for good (that freezes the game): report it (once per kind)
+  // and carry on with the next frame.
+  const reported = new Set();
+  renderer.setAnimationLoop(() => {
+    try { frame(); } catch (err) {
+      const key = String(err?.stack || err).slice(0, 300);
+      if (!reported.has(key)) { reported.add(key); console.error('frame failed', err); }
+    }
   });
   // Fade the space in from black only once it's really there: the room's state and everyone in it
   // (or a few seconds, if the server is slow), every shader compiled, and a few frames drawn behind the black.
