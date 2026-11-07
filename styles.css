@@ -242,3 +242,11 @@ body.touch #chat .log { max-height: min(30vh, calc(100vh - 260px)); }
 /* the controls bar: each control fades once you've used it; the bar goes when you've used them all */
 #hint [data-cmd] { transition: opacity .4s; }
 #hint [data-cmd].used { opacity: .35; }
+
+/* bunny-hop speedometer: fades in after ten clean hops, holds your peak a few seconds when the run ends */
+#speedo { position: fixed; left: 50%; bottom: max(96px, calc(env(safe-area-inset-bottom) + 88px)); transform: translateX(-50%);
+  margin: 0; pointer-events: none; white-space: nowrap; opacity: 0; transition: opacity 1.2s;
+  color: var(--ink, #e9e6dc); text-shadow: 0 1px 3px #000; font-variant-numeric: tabular-nums; }
+#speedo b { font-size: 30px; font-weight: 600; letter-spacing: .02em; }
+#speedo span { font-size: 11px; margin-left: 5px; color: var(--dim); letter-spacing: .12em; }
+#speedo.on { opacity: .92; transition: opacity .5s; }

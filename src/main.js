@@ -151,6 +151,8 @@ async function start() {
   camera.add(meView.root);
   let thirdPerson = params.get('view') === '3p' || (resumed && mine.view === '3p');
   let fireLatch = false, doorAim = null, doorCheckAt = 0, cleanTarget = null, cleanCheckAt = 0;   // set by the click that picks something up, until the button is let go
+  const speedoEl = $('speedo'), speedoNum = speedoEl.querySelector('b');
+  let speedNow = 0, speedoPeak = 0, speedoHold = 0, speedoLive = false, speedoShown = false;
   // things you've done at least once (remembered in this browser): their hints stop showing
   let learned = new Set();
   try { learned = new Set(JSON.parse(localStorage.getItem('111k:learned') || '[]')); } catch {}
@@ -968,6 +970,16 @@ async function start() {
     doors.push(player.x, player.z, player.x - px, player.z - pz);
     [player.x, player.z] = doors.resolve(player.x, player.z);
     const velocity = Math.hypot(player.x - px, player.z - pz) / Math.max(dt, 1e-4);
+    // bunny-hop speedometer: after ten clean hops your speed fades in (rough mph); when the run ends
+    // it holds your peak for five seconds, then fades
+    speedNow += (Math.min(velocity, 60) - speedNow) * (1 - Math.exp(-dt * 6));
+    if (vertical.chain >= 10) {
+      if (!speedoLive && now >= speedoHold) speedoPeak = 0;          // a fresh run
+      speedoLive = true; speedoPeak = Math.max(speedoPeak, speedNow);
+    } else if (speedoLive) { speedoLive = false; speedoHold = now + 5000; }
+    const speedoOn = speedoLive || now < speedoHold;
+    if (speedoOn) speedoNum.textContent = Math.round((speedoLive ? speedNow : speedoPeak) * 2.237);
+    if (speedoOn !== speedoShown) { speedoShown = speedoOn; speedoEl.classList.toggle('on', speedoOn); }
     // slamming into a wall or a prop mid-run is a crash: the hop chain and its shove are gone.
     // (sliding along a wall at a shallow angle keeps most of the speed, so that's fine)
     const meant = Math.hypot(mvx, mvz) / Math.max(dt, 1e-4);
