@@ -225,6 +225,10 @@ export function createMachine(scene) {
     const m = Math.floor(ms / 60000), s = Math.floor(ms / 1000) % 60, c = Math.floor(ms / 10) % 100;
     return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}.${String(c).padStart(2, '0')}`;
   };
+  // a time that reads all ones once the leading zeros are gone (00:00.11, 00:01.11, 11:11.11...)
+  const allOnes = ms => /^1+$/.test(fmt(ms).replace(/[^0-9]/g, '').replace(/^0+/, ''));
+  // ...celebrates: a quick blink for a few seconds before it settles
+  const ones = since => since > 4200 || Math.floor(since / 160) % 2 === 0;
   const buttonBox = new THREE.Box3(), ray = new THREE.Ray();
   return {
     root, button,
@@ -252,10 +256,12 @@ export function createMachine(scene) {
         timer.draw(fmt(serverNow - r.startedAt), AMBER); laps.draw(String(r.laps), AMBER);
       } else if (r.state === 'done') {
         // the final time blinks a few times, then stays
-        const since = serverNow - r.endedAt, on = since > 2400 || Math.floor(since / 300) % 2 === 0;
+        const since = serverNow - r.endedAt;
+        const on = allOnes(r.time) ? ones(since) : since > 2400 || Math.floor(since / 300) % 2 === 0;
         timer.draw(fmt(r.time), GREEN, on); laps.draw('0', GREEN, on);
       } else if (r.state === 'cancelled') {
-        timer.draw(fmt(r.time), RED); laps.draw(String(r.laps), RED);
+        const on = !allOnes(r.time) || r.endedAt === undefined || ones(serverNow - r.endedAt);
+        timer.draw(fmt(r.time), RED, on); laps.draw(String(r.laps), RED, on);
       } else { timer.draw('00:00.00', AMBER); laps.draw('-', AMBER); }
     },
   };

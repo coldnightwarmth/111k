@@ -152,7 +152,7 @@ async function start() {
   let thirdPerson = params.get('view') === '3p' || (resumed && mine.view === '3p');
   let fireLatch = false, doorAim = null, doorCheckAt = 0, cleanTarget = null, cleanCheckAt = 0;   // set by the click that picks something up, until the button is let go
   const speedoEl = $('speedo'), speedoNum = speedoEl.querySelector('b');
-  let speedNow = 0, speedoPeak = 0, speedoHold = 0, speedoLive = false, speedoShown = false;
+  let speedNow = 0, speedoPeak = 0, speedoHold = 0, speedoLive = false, speedoShown = false, speedoBlink = false;
   // things you've done at least once (remembered in this browser): their hints stop showing
   let learned = new Set();
   try { learned = new Set(JSON.parse(localStorage.getItem('111k:learned') || '[]')); } catch {}
@@ -980,6 +980,8 @@ async function start() {
     const speedoOn = speedoLive || now < speedoHold;
     if (speedoOn) speedoNum.textContent = Math.round((speedoLive ? speedNow : speedoPeak) * 2.237);
     if (speedoOn !== speedoShown) { speedoShown = speedoOn; speedoEl.classList.toggle('on', speedoOn); }
+    const blink = speedoOn && !speedoLive && Math.round(speedoPeak * 2.237) === 111;
+    if (blink !== speedoBlink) { speedoBlink = blink; speedoEl.classList.toggle('blink', blink); }
     // slamming into a wall or a prop mid-run is a crash: the hop chain and its shove are gone.
     // (sliding along a wall at a shallow angle keeps most of the speed, so that's fine)
     const meant = Math.hypot(mvx, mvz) / Math.max(dt, 1e-4);
