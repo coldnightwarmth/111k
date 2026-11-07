@@ -461,7 +461,7 @@ test('paintings: hung, leant and laid with a tilt, fall flat when let go, and pa
   const items = Object.fromEntries(ITEM_SPAWNS.map(s => [s.id, {...s, holder: null, on: false}]));
   const pt = items.pt1;
   assert.equal(pt.type, 'painting');
-  assert.deepEqual([cleanItem(pt).tilt, cleanItem(pt).art], [0, 1]);
+  assert.deepEqual([cleanItem(pt).tilt, cleanItem(pt).roll, cleanItem(pt).art], [0, 0, 1]);
   const marks = freshMarks();
   const a = newPlayer('aaa', 0); a.pose = {x: pt.x, y: 1.45, z: pt.z + 1, yaw: 0, pitch: 0, g: 0};
   const room = {items, marks, race: null, players: () => [a]};
@@ -469,8 +469,11 @@ test('paintings: hung, leant and laid with a tilt, fall flat when let go, and pa
   const send = m => { now += 400; a.lastShot = a.lastSpray = 0; return handleMessage(a, JSON.stringify(m), now, room); };
   send({type: 'pickup', id: 'pt1'});
   assert.equal(pt.holder, 'aaa');
-  send({type: 'drop', id: 'pt1', x: pt.x + 1, y: .5, z: pt.z + .3, yaw: 1, tilt: -.2});
-  assert.deepEqual([pt.holder, pt.tilt, pt.yaw], [null, -.2, 1], 'leant on a wall');
+  send({type: 'drop', id: 'pt1', x: pt.x + 1, y: .5, z: pt.z + .3, yaw: 1, tilt: -1.4, roll: 2.5});
+  assert.deepEqual([pt.holder, pt.tilt, pt.roll], [null, -1.4, 2.5], 'laid on a slope, turned in its plane');
+  send({type: 'pickup', id: 'pt1'});
+  send({type: 'drop', id: 'pt1', x: pt.x, y: .5, z: pt.z, yaw: 1, tilt: -.2});
+  assert.deepEqual([pt.holder, pt.tilt, pt.yaw, pt.roll], [null, -.2, 1, 0], 'leant on a wall');
   // a tag across the painting and the wall: the wall part remembers the painting's shape, the painting keeps its part
   items.sp1.holder = 'aaa';
   const tag = {p: [pt.x, 1.2, pt.z + .1], n: [0, 0, 1], up: [0, 1, 0], piece: 'tag_ruse', size: 1, occ: [[pt.x, pt.y, pt.z, 1, -.2, 1]]};

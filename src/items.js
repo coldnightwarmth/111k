@@ -363,17 +363,18 @@ function paintingModel(id, state) {
   const staple = std(0x9a9ca0, .4, .8);
   const back = part(g, new THREE.PlaneGeometry(w - .002, h - .002), linen, [0, 0, d - .0025], [0, Math.PI, 0]);
   back.material = linen;
-  const bar = .042, deep = d - .004, fold = .016;
+  // (the bars sit a couple of millimetres inside the canvas's wrapped sides, so the two never fight)
+  const bar = .042, deep = d - .006, fold = .016, inset = .0025;
   // stretcher bars round the edge (meeting at mitred-looking corners), then the cross brace
   const barGeo = (len, across, depth, vertical) => {
     const geo = new THREE.BoxGeometry(vertical ? across : len, vertical ? len : across, depth);
     const uvs = geo.attributes.uv; for (let i = 0; i < uvs.count; i++) uvs.setXY(i, uvs.getX(i) * .25, uvs.getY(i) * len * 2);   // grain along the bar
     return geo;
   };
-  part(g, barGeo(w, bar, deep, false), wood, [0, y - bar / 2, deep / 2]);
-  part(g, barGeo(w, bar, deep, false), wood, [0, -y + bar / 2, deep / 2]);
-  part(g, barGeo(h - 2 * bar, bar, deep, true), wood, [x - bar / 2, 0, deep / 2]);
-  part(g, barGeo(h - 2 * bar, bar, deep, true), wood, [-x + bar / 2, 0, deep / 2]);
+  part(g, barGeo(w - 2 * inset, bar, deep, false), wood, [0, y - inset - bar / 2, deep / 2]);
+  part(g, barGeo(w - 2 * inset, bar, deep, false), wood, [0, -y + inset + bar / 2, deep / 2]);
+  part(g, barGeo(h - 2 * bar - 2 * inset, bar, deep, true), wood, [x - inset - bar / 2, 0, deep / 2]);
+  part(g, barGeo(h - 2 * bar - 2 * inset, bar, deep, true), wood, [-x + inset + bar / 2, 0, deep / 2]);
   const braceDeep = deep * .7;
   if (h > .5) part(g, barGeo(w - 2 * bar, bar * .85, braceDeep, false), wood, [0, 0, braceDeep / 2]);
   if (w > .5) part(g, barGeo(h - 2 * bar, bar * .85, braceDeep, true), wood, [0, 0, braceDeep / 2 - .0005]);
@@ -386,7 +387,12 @@ function paintingModel(id, state) {
   // corner keys: little wedges tapped into the stretcher's inside corners
   const key = new THREE.BoxGeometry(.03, .03, .006);
   for (const [kx, ky] of [[1, 1], [1, -1], [-1, 1], [-1, -1]]) part(g, key, wood, [kx * (x - bar - .012), ky * (y - bar - .012), .004], [0, 0, Math.PI / 4]);
-  g.userData = {tip: new THREE.Vector3(0, 0, d), ground: .002, painting: true, w, h, d, art, canvas: front};
+  // the pick-up glow: one closed box with its corners' normals shared, so the glow wraps it without gaps
+  const ob = new THREE.BufferGeometry();
+  ob.setAttribute('position', new THREE.Float32BufferAttribute([-x, -y, 0, x, -y, 0, x, y, 0, -x, y, 0, -x, -y, d, x, -y, d, x, y, d, -x, y, d], 3));
+  ob.setIndex([0, 2, 1, 0, 3, 2, 4, 5, 6, 4, 6, 7, 0, 1, 5, 0, 5, 4, 3, 7, 6, 3, 6, 2, 1, 2, 6, 1, 6, 5, 0, 4, 7, 0, 7, 3]);
+  ob.computeVertexNormals();
+  g.userData = {tip: new THREE.Vector3(0, 0, d), ground: .002, painting: true, w, h, d, art, canvas: front, outline: ob};
   return g;
 }
 
@@ -442,7 +448,8 @@ const OUTLINES = [outlineMaterial(.007, 1), outlineMaterial(.016, .35)];
 export function addOutline(model) {
   const shells = new THREE.Group(); shells.visible = false;
   const meshes = [];
-  model.traverse(o => { if (o.isMesh) meshes.push(o); });
+  if (model.userData.outline) meshes.push(new THREE.Mesh(model.userData.outline));   // a shape made for glowing round
+  else model.traverse(o => { if (o.isMesh) meshes.push(o); });
   for (const o of meshes) for (const mat of OUTLINES) {
     const shell = new THREE.Mesh(o.geometry, mat);
     o.updateMatrix(); shell.matrixAutoUpdate = false;
@@ -606,7 +613,7 @@ export function createItems({scene, camera, hits, shadows = null}) {
           m.rotation.set(0, s.yaw, u.groundRoll, 'YXZ');
           if (u.upright) { m.rotation.set(Math.PI / 2, s.yaw, 0, 'YXZ'); m.position.y = s.y + u.ground; }
           if (u.standing) { m.rotation.set(0, s.yaw, 0); m.position.y = s.y; }
-          if (u.painting) { m.rotation.set(s.tilt || 0, s.yaw, 0, 'YXZ'); m.position.set(s.x, s.y, s.z); }   // hung, leant or laid as placed
+          if (u.painting) { m.rotation.set(s.tilt || 0, s.yaw, s.roll || 0, 'YXZ'); m.position.set(s.x, s.y, s.z); }   // hung, leant or laid as placed
           u.dock?.();
           if (it.fall) {                      // still on its way down: follow the path, already in its rest pose (no tumbling)
             const f = it.fall; f.t += dt;

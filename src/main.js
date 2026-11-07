@@ -272,8 +272,8 @@ async function start() {
   // the level plus the paintings that stood in front of a mark when it went on (they take no paint here)
   function withOccluders(occ) {
     if (!occ?.length) return hits;
-    const extra = occ.map(([x, y, z, yaw, tilt, art]) => {
-      const m = paintingMatrix(x, y, z, yaw, tilt), {w, h, d} = paintingSize(art);
+    const extra = occ.map(([x, y, z, yaw, tilt, art, roll = 0]) => {
+      const m = paintingMatrix(x, y, z, yaw, tilt, roll), {w, h, d} = paintingSize(art);
       return {c: new THREE.Vector3(0, 0, d / 2).applyMatrix4(m), r: Math.hypot(w, h, d) / 2,
         tris: boxTris(art).map(t => ({p: t.p.map(q => q.clone().applyMatrix4(m)), uv: [noUv, noUv, noUv], n: t.n.clone().transformDirection(m), noPaint: true}))};
     });
@@ -313,7 +313,7 @@ async function start() {
       const verts = kind === 'spray' ? sprayVerts(local, piece, surface) : splatVerts(local, surface);
       if (!verts.length) continue;
       const s = it.state;
-      parts.push(local); occ.push([r3(s.x), r3(s.y), r3(s.z), r3(s.yaw), r3(s.tilt || 0), s.art || 1]);
+      parts.push(local); occ.push([r3(s.x), r3(s.y), r3(s.z), r3(s.yaw), r3(s.tilt || 0), s.art || 1, ...(s.roll ? [r3(s.roll)] : [])]);
     }
     if (occ.length) base.occ = occ;
     return parts;
@@ -579,35 +579,31 @@ async function start() {
   // front of you and it falls (everyone replays the same fall to the spot it settles on)
   const DROP_REACH = 2.8;
   // ------------------------------------------------------------- paintings
-  // Where a painting in your hands would go: on a wall, hung flat against it; on the floor (or a table)
-  // right in front of a wall, leant back against that wall; anywhere else flat, face up, the right
-  // way round for you. {x, y, z, yaw, tilt, how} or null (nothing in reach to put it on).
+  // Where a painting in your hands would go: on a wall (straight, or the tunnel's curve sloping back
+  // low down or leaning over up high), hung flat against it; on the floor or a table right in front of
+  // a wall, leant back against that wall; anywhere else laid face up, its top pointing away from you.
+  // Either way it's fitted to the whole surface under it, not just the spot you aim at.
+  // {x, y, z, yaw, tilt, roll, how} or null (nothing in reach to put it on).
   const PLACE_REACH = 3.2, LEAN = -.2;
   function planPlace(h) {
-    const {w, h: ht, d} = paintingSize(h.state.art);
+    const {w, h: ht} = paintingSize(h.state.art);
     camera.updateMatrixWorld();
     const o = camera.getWorldPosition(new THREE.Vector3()), dir = camera.getWorldDirection(new THREE.Vector3());
     if (boom) o.addScaledVector(dir, camDist);
     const hit = hits.raycast(o, dir, PLACE_REACH, true);
-    if (!hit || hit.door !== undefined) return null;
+    if (!hit || hit.door !== undefined || onMachine(hit.mesh)) return null;
     const n = hit.normal, P = hit.point;
-    if (Math.abs(n.y) < .35) {
-      // hung: its back on the wall, the picture facing out, kept clear of the floor and the ceiling
-      const tilt = -Math.asin(Math.max(-1, Math.min(1, n.y))), yaw = Math.atan2(n.x, n.z);
-      const at = P.clone().addScaledVector(n, .003);
-      const down = hits.raycast(at.clone().addScaledVector(n, .05), new THREE.Vector3(0, -1, 0), ht);
-      if (down && down.distance < ht / 2 + .03) at.y += ht / 2 + .03 - down.distance;
-      const up = hits.raycast(at.clone().addScaledVector(n, .05), new THREE.Vector3(0, 1, 0), ht);
-      if (up && up.distance < ht / 2 + .01) at.y -= ht / 2 + .01 - up.distance;
-      return {x: at.x, y: at.y, z: at.z, yaw, tilt, how: 'hang'};
+    if (n.y <= -.6) return null;                                  // a ceiling
+    if (n.y < .7) {
+      const plan = fitOn(P, n, w, ht, new THREE.Vector3(0, 1, 0));
+      return plan && {...plan, how: 'hang'};
     }
-    if (n.y < .7) return null;                                   // too steep to put it down on, or a ceiling
     // a wall just beyond where you're aiming: lean it there, picture facing you
     const fwd = new THREE.Vector3(dir.x, 0, dir.z);
     if (fwd.lengthSq() > 1e-6) {
       fwd.normalize();
       const wall = hits.raycast(P.clone().add(new THREE.Vector3(0, .3, 0)).addScaledVector(fwd, -.05), fwd, .55);
-      if (wall && Math.abs(wall.normal.y) < .35) {
+      if (wall && Math.abs(wall.normal.y) < .35 && !onMachine(wall.mesh)) {
         const wn = new THREE.Vector3(wall.normal.x, 0, wall.normal.z).normalize();
         const yaw = Math.atan2(wn.x, wn.z), sinT = Math.sin(LEAN), cosT = Math.cos(LEAN);
         // the top of its back touches the wall, the bottom of its back sits on the floor
@@ -615,14 +611,97 @@ async function start() {
         const along = P.clone().sub(wall.point); along.addScaledVector(wn, -along.dot(wn)); along.y = 0;
         const at = wall.point.clone().add(along).addScaledVector(wn, out);
         at.y = P.y + (ht / 2) * cosT + .002;
-        return {x: at.x, y: at.y, z: at.z, yaw, tilt: LEAN, how: 'lean'};
+        return {x: at.x, y: at.y, z: at.z, yaw, tilt: LEAN, roll: 0, how: 'lean'};
       }
     }
-    // flat, face up, its top away from you
-    return {x: P.x, y: P.y + .002, z: P.z, yaw: controls.state.yaw, tilt: -Math.PI / 2, how: 'lay'};
+    // laid down, its top away from you
+    const plan = fitOn(P, n, w, ht, fwd.lengthSq() > 1e-6 ? fwd : new THREE.Vector3(0, 0, -1));
+    return plan && {...plan, how: 'lay'};
+  }
+  // nothing goes on the lap timer machine
+  const onMachine = m => { for (let q = m; q; q = q.parent) if (q === machine.root) return true; return false; };
+  // Fitted to a surface: the surface is felt for at 25 points across the painting's back and the painting
+  // turned to the plane that fits them best (a few rounds, since turning it moves the points), then brought
+  // out until nothing of the surface comes through it. Points on a different surface (the floor below a
+  // wall, the wall beside a floor) are left out. `top` is which way its top should point.
+  function fitOn(P, n0, w, ht, top) {
+    const n = n0.clone(), c = P.clone(), right = new THREE.Vector3(), up = new THREE.Vector3(), back = new THREE.Vector3();
+    const frame = () => {
+      up.copy(top).addScaledVector(n, -top.dot(n));
+      if (up.lengthSq() < 1e-4) up.set(0, 0, 1).addScaledVector(n, -n.z);
+      up.normalize(); right.crossVectors(up, n).normalize();
+    };
+    const feel = () => {
+      const pts = [];
+      back.copy(n).negate();
+      for (const sx of [-1, -.5, 0, .5, 1]) for (const sy of [-1, -.5, 0, .5, 1]) {
+        const x = sx * w / 2 * .97, y = sy * ht / 2 * .97;
+        const from = c.clone().addScaledVector(right, x).addScaledVector(up, y).addScaledVector(n, .35);
+        const h = hits.raycast(from, back, 1, true);
+        if (h && h.door === undefined && !onMachine(h.mesh) && h.normal.dot(n0) > .5) pts.push({x, y, z: h.point.clone().sub(c).dot(n)});
+      }
+      return pts;
+    };
+    for (let round = 0; round < 3; round++) {
+      frame();
+      const pts = feel();
+      if (pts.length < 12) return null;                          // mostly over thin air: an edge or a doorway
+      // least squares: depth z = a x + b y + k over the points
+      let sxx = 0, sxy = 0, syy = 0, sx = 0, sy = 0, sxz = 0, syz = 0, sz = 0;
+      for (const q of pts) { sxx += q.x * q.x; sxy += q.x * q.y; syy += q.y * q.y; sx += q.x; sy += q.y; sxz += q.x * q.z; syz += q.y * q.z; sz += q.z; }
+      const M = new THREE.Matrix3().set(sxx, sxy, sx, sxy, syy, sy, sx, sy, pts.length);
+      if (Math.abs(M.determinant()) < 1e-9) break;
+      const [a, b, k] = new THREE.Vector3(sxz, syz, sz).applyMatrix3(M.invert()).toArray();
+      c.addScaledVector(n, k);
+      n.addScaledVector(right, -a).addScaledVector(up, -b).normalize();
+      if (n.dot(n0) < .7) return null;                            // nothing like flat there
+    }
+    frame();
+    const settle = () => {
+      const pts = feel();
+      if (pts.length < 12) return false;
+      c.addScaledVector(n, Math.max(...pts.map(q => q.z)) + .003);   // its back just clear of the nearest bit of it
+      return true;
+    };
+    if (!settle()) return null;
+    // something else coming through it (the wall beside a floor, the ceiling's curve over a wall):
+    // slide it away from that, a few centimetres at a time, up to half a metre
+    for (let step = 0; ; step++) {
+      let ix = 0, iy = 0, count = 0;
+      back.copy(n).negate();
+      for (const sx of [-1, -.5, 0, .5, 1]) for (const sy of [-1, -.5, 0, .5, 1]) {
+        const x = sx * (w / 2 + .006), y = sy * (ht / 2 + .006);   // (a few millimetres past its edges: never flush into a wall)
+        const h = hits.raycast(c.clone().addScaledVector(right, x).addScaledVector(up, y).addScaledVector(n, .3), back, .3);
+        // and across its face from the middle (a wall it reaches right into, where the ray above starts inside it)
+        const mid = c.clone().addScaledVector(n, .025), to = new THREE.Vector3().addScaledVector(right, x).addScaledVector(up, y), far = to.length();
+        const across = far > .01 && hits.raycast(mid, to.divideScalar(far), far);
+        if ((h && h.distance < .296) || across) { ix += x; iy += y; count++; }
+      }
+      if (!count) break;
+      if (step >= 10) return null;
+      const len = Math.hypot(ix, iy) || 1;
+      c.addScaledVector(right, -ix / len * .05).addScaledVector(up, -iy / len * .05);
+      if (!settle()) return null;
+    }
+    // hung: its bottom edge kept off the floor (slid up the wall), its top off the ceiling
+    if (n.y < .7) {
+      let lift = 0;
+      for (const sx of [-1, 0, 1]) {
+        const corner = c.clone().addScaledVector(right, sx * w / 2).addScaledVector(up, -ht / 2).addScaledVector(n, .02);
+        const down = hits.raycast(corner.clone().add(new THREE.Vector3(0, .6, 0)), new THREE.Vector3(0, -1, 0), 1.2);
+        if (down && down.normal.y > .7 && corner.y < down.point.y + .02) lift = Math.max(lift, (down.point.y + .02 - corner.y) / Math.max(.3, up.y));
+      }
+      c.addScaledVector(up, lift);
+      const above = hits.raycast(c.clone().addScaledVector(n, .05), new THREE.Vector3(0, 1, 0), ht);
+      const reach = ht / 2 * Math.abs(up.y);
+      if (above && above.distance < reach + .01) c.y -= reach + .01 - above.distance;
+    }
+    // as yaw, tilt and roll: the frame (right, up, out of the front) as a rotation
+    const e = new THREE.Euler().setFromRotationMatrix(new THREE.Matrix4().makeBasis(right, up, n), 'YXZ');
+    return {x: c.x, y: c.y, z: c.z, yaw: e.y, tilt: e.x, roll: e.z};
   }
   function placePainting(h, plan) {
-    network.send({type: 'drop', id: h.state.id, x: r3(plan.x), y: r3(plan.y), z: r3(plan.z), yaw: r3(plan.yaw), tilt: r3(plan.tilt)});
+    network.send({type: 'drop', id: h.state.id, x: r3(plan.x), y: r3(plan.y), z: r3(plan.z), yaw: r3(plan.yaw), tilt: r3(plan.tilt), roll: r3(plan.roll || 0)});
     learn('place'); learn('drop');
   }
   // a faint outline of the painting where a click would put it
@@ -642,7 +721,7 @@ async function start() {
       scene.add(placeGhost); placeGhostArt = h.state.art;
     }
     placeGhost.visible = !!placePlan;
-    if (placePlan) { paintingMatrix(placePlan.x, placePlan.y, placePlan.z, placePlan.yaw, placePlan.tilt, placeGhost.matrix); placeGhost.matrixWorldNeedsUpdate = true; }
+    if (placePlan) { paintingMatrix(placePlan.x, placePlan.y, placePlan.z, placePlan.yaw, placePlan.tilt, placePlan.roll || 0, placeGhost.matrix); placeGhost.matrixWorldNeedsUpdate = true; }
   }
   function secondary() {
     // hands empty, a game over and the crown still on: right-click takes it off
@@ -1451,7 +1530,7 @@ async function start() {
   });
   document.body.classList.add('ready');
   window.__111k = {scene, camera, player, peers, network, renderer, items, controls, hits, doors, me, meView, vertical,
-    voice, cleaning, mimic, get cleanTarget() { return cleanTarget; }, splatMarks, sprayMarks, addSplat, doorBatches, setView: v => { thirdPerson = v; }, primary, secondary, shoot, spray, choosePiece, choosePaint, toggleGallery, get pieces() { return pieces; }};
+    voice, cleaning, mimic, planPlace, get cleanTarget() { return cleanTarget; }, splatMarks, sprayMarks, addSplat, doorBatches, setView: v => { thirdPerson = v; }, primary, secondary, shoot, spray, choosePiece, choosePaint, toggleGallery, get pieces() { return pieces; }};
 }
 
 start().catch(err => {

@@ -65,7 +65,7 @@ function dropAt(item, pose, dx = 0, dz = 0, y = null) {
   item.x = pose.x + dx; item.z = pose.z + dz; item.y = y ?? (pose.g || 0) + (item.type === 'painting' ? .002 : .03);   // on whatever they stood on
   item.yaw = pose.yaw || 0;
   if (item.type === 'crown') item.on = false;   // a crown on the ground isn't on anyone's head
-  if (item.type === 'painting') item.tilt = -Math.PI / 2;   // a painting let go of falls flat, face up
+  if (item.type === 'painting') { item.tilt = -Math.PI / 2; item.roll = 0; }   // a painting let go of falls flat, face up
 }
 // a worn crown sits on its wearer's head, leaving their hands free
 const worn = it => it.type === 'crown' && it.on;
@@ -288,6 +288,7 @@ function handle(player, data, now, room) {
     if (Number.isFinite(m.yaw)) item.yaw = Math.round(m.yaw * 1000) / 1000;
     // a painting hung on a wall, leant against one or laid down
     if (item.type === 'painting' && Number.isFinite(m.tilt)) item.tilt = Math.round(Math.max(-Math.PI / 2, Math.min(Math.PI / 2, m.tilt)) * 1000) / 1000;
+    if (item.type === 'painting') item.roll = Number.isFinite(m.roll) ? Math.round(Math.max(-Math.PI, Math.min(Math.PI, m.roll)) * 1000) / 1000 : 0;
     // how it fell (start and velocity): everyone replays the same fall to where it came to rest
     const fp = m.fall && Array.isArray(m.fall.p) && m.fall.p.length === 3 && m.fall.p.every(Number.isFinite) ? m.fall.p : null;
     const fv = m.fall && Array.isArray(m.fall.v) && m.fall.v.length === 3 && m.fall.v.every(Number.isFinite) ? m.fall.v : null;

@@ -83,6 +83,7 @@ export function cleanItem(it) {
   // a painting: how it tilts (0 hung upright, a little back leaning on a wall, -pi/2 lying face up) and which art
   if (out.type === 'painting') {
     out.tilt = Number.isFinite(it.tilt) ? round(Math.max(-1.571, Math.min(1.571, it.tilt))) : 0;
+    out.roll = Number.isFinite(it.roll) ? round(Math.max(-3.142, Math.min(3.142, it.roll))) : 0;
     out.art = Number.isInteger(it.art) && it.art > 0 && it.art < 10000 ? it.art : 1;
   }
   return out;
@@ -90,13 +91,13 @@ export function cleanItem(it) {
 // paintings are items pt1, pt2, ...: marks on one are kept in its own space and ride along with it
 export const PAINTING_ID = /^pt\d{1,4}$/;
 // Where a mark sits relative to paintings: `pi`, on that painting (p, n, up, v in its own space);
-// `occ`, the paintings that stood in front of it when it went on ([x, y, z, yaw, tilt, art] each),
+// `occ`, the paintings that stood in front of it when it went on ([x, y, z, yaw, tilt, art, roll?] each),
 // which keep their shape cut out of it wherever they go afterwards.
 function paintingFields(s, out) {
   if (typeof s.pi === 'string' && PAINTING_ID.test(s.pi)) { out.pi = s.pi; delete out.d; return out; }
   if (Array.isArray(s.occ)) {
-    const occ = s.occ.slice(0, 6).map(a => Array.isArray(a) && a.length === 6 && a.every(Number.isFinite) && a.slice(0, 3).every(v => Math.abs(v) <= 500)
-      ? [...a.slice(0, 5).map(v => round(v)), Math.max(1, Math.min(9999, Math.round(a[5])))] : null).filter(Boolean);
+    const occ = s.occ.slice(0, 6).map(a => Array.isArray(a) && (a.length === 6 || a.length === 7) && a.every(Number.isFinite) && a.slice(0, 3).every(v => Math.abs(v) <= 500)
+      ? [...a.slice(0, 5).map(v => round(v)), Math.max(1, Math.min(9999, Math.round(a[5]))), ...(a.length === 7 ? [round(a[6])] : [])] : null).filter(Boolean);
     if (occ.length) out.occ = occ;
   }
   return out;

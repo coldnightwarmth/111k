@@ -9,7 +9,7 @@ export const ART = {
   1: {url: `${CDN}1.png`, w: 932, h: 1006},
 };
 export const PAINTING_LONG = .8;     // metres along the longer side
-export const PAINTING_DEPTH = .035;  // the stretcher's depth (the canvas wraps round it)
+export const PAINTING_DEPTH = .05;   // the stretcher's depth (the canvas wraps round it)
 
 // width, height, depth in metres
 export function paintingSize(art) {
@@ -18,9 +18,10 @@ export function paintingSize(art) {
 }
 
 // A painting's pose: its origin is the middle of its back, local +z out of the front, +y up the canvas.
-// tilt 0 hangs it upright; a little negative leans its top back against a wall; -pi/2 lies it face up.
-export function paintingMatrix(x, y, z, yaw, tilt, out = new THREE.Matrix4()) {
-  return out.compose(new THREE.Vector3(x, y, z), new THREE.Quaternion().setFromEuler(new THREE.Euler(tilt, yaw, 0, 'YXZ')), new THREE.Vector3(1, 1, 1));
+// tilt 0 hangs it upright; a little negative leans its top back against a wall; -pi/2 lies it face up;
+// roll turns it in its own plane (lying on a slope, it keeps its top pointing where it was put down).
+export function paintingMatrix(x, y, z, yaw, tilt, roll = 0, out = new THREE.Matrix4()) {
+  return out.compose(new THREE.Vector3(x, y, z), new THREE.Quaternion().setFromEuler(new THREE.Euler(tilt, yaw, roll, 'YXZ')), new THREE.Vector3(1, 1, 1));
 }
 
 // The canvas as a closed box in its own space (front, the four wrapped sides, the back): the
