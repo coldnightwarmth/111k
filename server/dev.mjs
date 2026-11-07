@@ -9,7 +9,7 @@ import {extname, join, normalize, resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {INACTIVE_MS, IDLE_RESET_MS, MAX_PLAYERS} from '../src/protocol.js';
 import {freshRace, publicRace} from '../src/race.js';
-import {handleMessage, newPlayer, snapshot, freshItems, releaseItems, freshMarks, marksMessage, itemsAtSpawn, kothTick, freshKoth, publicKoth} from './room.js';
+import {handleMessage, newPlayer, snapshot, freshItems, releaseItems, letGo, freshMarks, marksMessage, itemsAtSpawn, kothTick, freshKoth, publicKoth} from './room.js';
 
 const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const PORT = Number(process.env.PORT || 8000);
@@ -127,7 +127,8 @@ function close(c) {
     if (!clients.size) { items = freshItems(); koth = freshKoth(); }
     else setTimeout(() => {   // a refresh comes back within a few seconds: keep their item for them
       if ([...clients].some(o => o.player.id === c.player.id)) return;
-      for (const {msg} of releaseItems(items, c.player)) broadcast(msg);
+      const others = [...clients].some(o => !o.player.inactive);
+      for (const {msg} of letGo(items, c.player, {others, koth})) broadcast(msg);
       runKoth('left');
     }, 8000);
   }
@@ -138,7 +139,8 @@ setInterval(() => {
   for (const c of clients) {
     if (c.player.inactive || now - c.player.lastActive < INACTIVE_MS) continue;
     c.player.inactive = true; broadcast({type: 'leave', id: c.player.id});
-    for (const {msg} of releaseItems(items, c.player)) broadcast(msg);
+    const others = [...clients].some(o => o !== c && !o.player.inactive);
+    for (const {msg} of letGo(items, c.player, {others, koth})) broadcast(msg);
     runKoth('left');
   }
   // nobody's done anything for a while: every item goes back where it started

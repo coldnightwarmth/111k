@@ -4,7 +4,7 @@
 // straight on your head. Shared by the client (which shows it) and the server (which runs it).
 export const KOTH_GRACE_MS = 10 * 1000;
 export const KOTH_WIN_MS = 60 * 1000;
-export const KOTH_UNCLAIMED_MS = 2 * 60 * 1000;   // the crown lies unclaimed this long: the game is called off
+export const KOTH_UNCLAIMED_MS = 60 * 1000;   // the crown lies unclaimed this long: the game is off, the crown goes home
 
 // state: idle | grace | running | done | cancelled
 // times: banked ms per player id; wearer: who has it on now (banking since `since` once the grace is over)

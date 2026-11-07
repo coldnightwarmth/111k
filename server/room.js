@@ -90,6 +90,18 @@ function trackRunner(r, player, now, out) {
   return true;
 }
 
+// What someone held when they left or went idle: dropped where they were if anyone else is about (a crown
+// mid-game always drops, for the game to go on), otherwise back where it started for whoever comes next.
+export function letGo(items, player, {others = false, koth = null} = {}) {
+  const out = [], spawn = new Map(ITEM_SPAWNS.map(s => [s.id, s]));
+  for (const it of Object.values(items)) {
+    if (it.holder !== player.id || others || (it.type === 'crown' && kothActive(koth)) || !spawn.has(it.id)) continue;
+    Object.assign(it, cleanItem({...spawn.get(it.id), holder: null, on: spawn.get(it.id).on === true}));
+    out.push({to: 'all', msg: {type: 'item', item: cleanItem(it)}});
+  }
+  return [...out, ...releaseItems(items, player)];
+}
+
 // Drop whatever this player holds (they left, went idle, or got punched). A crown pops up off the head;
 // with more than one thing (a crown and what's in their hands) they fly apart a little, landing about
 // 0.4 m out on different sides (inside the space their body took up, so never in a wall), easy to grab one at a time.
@@ -398,9 +410,14 @@ export function kothTick(room, now) {
     kothChanged = true;
     send('take', {by: crown.holder, byName: k.names[crown.holder], time: k.times[crown.holder] || 0});
   }
-  // nobody's picked it up in ages: the game's off
+  // nobody's picked it up for a minute: the game's off and the crown goes back where it started
   if (!k.wearer && now - k.droppedAt >= KOTH_UNCLAIMED_MS) {
     Object.assign(k, {state: 'cancelled', endedAt: now, hits: []}); kothChanged = true;
+    const home = crown && ITEM_SPAWNS.find(s => s.id === crown.id);
+    if (home) {
+      Object.assign(crown, cleanItem({...home, holder: null, on: false}));
+      out.push({to: 'all', msg: {type: 'item', item: cleanItem(crown)}}); itemsChanged = true;
+    }
     send('cancel');
   }
   delete k.cause; delete k.causeBy; delete k.lostAt;

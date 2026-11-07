@@ -425,6 +425,31 @@ test('king of the hill: start with the crown, grace, knocked off by punch and pa
   // left lying too long, the game is called off
   items.pb1.holder = 'bbb'; b.pose.x = a.pose.x + .5; b.pose.z = a.pose.z;
   send(b, {type: 'punch', target: 'aaa'});
-  assert.deepEqual(tick(K.KOTH_UNCLAIMED_MS).map(m => m.event), ['grace', 'cancel']);
+  const off = tick(K.KOTH_UNCLAIMED_MS);
+  assert.deepEqual(off.filter(m => m.type === 'koth').map(m => m.event), ['grace', 'cancel']);
   assert.equal(koth.state, 'cancelled');
+  const home = ITEM_SPAWNS.find(s => s.id === 'cr1');
+  assert.deepEqual([crown.x, crown.y, crown.z, crown.holder, crown.on], [home.x, home.y, home.z, null, false], 'the crown goes home');
+  assert.ok(off.some(m => m.type === 'item' && m.item.id === 'cr1'));
+});
+
+test('leaving: what you held drops where you were if anyone else is here, otherwise goes home (a crown mid-game always drops)', async () => {
+  const {letGo, newPlayer} = await import('../room.js');
+  const K = await import('../../src/koth.js');
+  const {ITEM_SPAWNS} = await import('../../src/world-items.js');
+  const fresh = () => Object.fromEntries(ITEM_SPAWNS.map(s => [s.id, {...s, holder: null, on: s.on === true}]));
+  const a = newPlayer('aaa', 0); a.pose = {x: 10, y: 1.45, z: 5, yaw: 0, pitch: 0, g: 0};
+  let items = fresh(); items.fl1.holder = 'aaa';
+  letGo(items, a, {others: true});
+  assert.deepEqual([items.fl1.x, items.fl1.z, items.fl1.holder], [10, 5, null], 'dropped where they stood');
+  items = fresh(); items.fl1.holder = 'aaa';
+  const spawn = ITEM_SPAWNS.find(s => s.id === 'fl1');
+  letGo(items, a, {others: false});
+  assert.deepEqual([items.fl1.x, items.fl1.z, items.fl1.holder], [spawn.x, spawn.z, null], 'nobody else here: back home');
+  items = fresh(); items.cr1.holder = 'aaa'; items.cr1.on = true;
+  letGo(items, a, {others: false, koth: {...K.freshKoth(), state: 'running'}});
+  assert.deepEqual([items.cr1.x, items.cr1.z, items.cr1.on], [10, 5, false], 'a crown mid-game drops for the game to go on');
+  items = fresh(); items.cr1.holder = 'aaa'; items.cr1.on = true;
+  letGo(items, a, {others: false, koth: {...K.freshKoth(), state: 'done'}});
+  assert.equal(items.cr1.x, ITEM_SPAWNS.find(s => s.id === 'cr1').x, 'after a game it goes home like anything else');
 });

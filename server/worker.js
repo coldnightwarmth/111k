@@ -3,7 +3,7 @@
 // WebSockets plus automatic ping/pong mean an idle room costs nothing.
 import {INACTIVE_MS, IDLE_RESET_MS, MAX_PLAYERS} from '../src/protocol.js';
 import {freshRace, publicRace} from '../src/race.js';
-import {handleMessage, newPlayer, snapshot, freshItems, validItems, releaseItems, validMarks, marksMessage, itemsAtSpawn,
+import {handleMessage, newPlayer, snapshot, freshItems, validItems, releaseItems, letGo, validMarks, marksMessage, itemsAtSpawn,
   kothTick, kothNext, freshKoth, publicKoth} from './room.js';
 
 function allowedOrigins(env) {
@@ -139,7 +139,8 @@ export class Room {
       if (!p || p.inactive || now - p.lastActive < INACTIVE_MS) continue;
       p.inactive = true; ws.serializeAttachment(p);
       this.broadcast({type: 'leave', id: p.id});
-      const dropped = releaseItems(await this.loadItems(), p);
+      const others = this.players().some(o => o.id !== p.id && !o.inactive);
+      const dropped = letGo(await this.loadItems(), p, {others, koth: await this.loadKoth()});
       for (const {msg} of dropped) this.broadcast(msg);
       if (dropped.length) { await this.saveItems(); await this.runKoth(now, 'left'); }
     }
@@ -169,19 +170,23 @@ export class Room {
       this.koth = freshKoth(); await this.saveKoth(); return;
     }
     // a refresh reconnects within a few seconds as the same player: keep their item for them,
-    // and let an alarm (which survives hibernation) drop it if they don't come back
+    // and let an alarm (which survives hibernation) drop it where they were if they don't come back
+    if (p.pose && Object.values(items).some(it => it.holder === p.id)) { const left = (await this.ctx.storage.get?.('left')) || {}; left[p.id] = p.pose; await this.ctx.storage.put?.('left', left); }
     const soon = Date.now() + 9000, current = await this.ctx.storage.getAlarm?.();
     if (!current || current > soon) await this.ctx.storage.setAlarm(soon);
   }
   // items held by someone who is no longer connected go down where they were
   async releaseOrphans() {
     const items = await this.loadItems(), here = new Set(this.players().map(p => p.id));
+    const left = (await this.ctx.storage.get?.('left')) || {}, others = this.players().some(p => !p.inactive);
     let changed = false;
     for (const it of Object.values(items)) {
       if (!it.holder || here.has(it.holder)) continue;
-      for (const {msg} of releaseItems(items, {id: it.holder, pose: null})) this.broadcast(msg);
+      const id = it.holder;
+      for (const {msg} of letGo(items, {id, pose: left[id] || null}, {others, koth: await this.loadKoth()})) this.broadcast(msg);
+      delete left[id];
       changed = true;
     }
-    if (changed) { await this.saveItems(); await this.runKoth(Date.now(), 'left'); }
+    if (changed) { await this.ctx.storage.put?.('left', left); await this.saveItems(); await this.runKoth(Date.now(), 'left'); }
   }
 }

@@ -887,7 +887,7 @@ async function start() {
           const how = by && (m.how === 'punch' || m.how === 'paintball') ? ` to ${by} ${m.how}` : '';
           say(`${at} lost the crown${how}`);
         } else if (m.event === 'win') { say(`${who} won the king's crown!`); kothWonAt = performance.now(); }
-        else if (m.event === 'cancel') say(`the king's crown game is off: nobody picked the crown back up`);
+        else if (m.event === 'cancel') say('we wait another day for our king...');
       } else if (m.type === 'race') {
         machine.setRace(m.race);
         if (m.by && m.by !== network.id) machine.press();
