@@ -80,6 +80,8 @@ function createPortraits() {
       ctx.fillStyle = g; ctx.beginPath(); ctx.arc(0, 0, rx, 0, Math.PI * 2); ctx.fill(); ctx.restore();
       ctx.drawImage(renderer.domElement, 0, 0, w, h);
     },
+    // done with one (its card was rerolled away)
+    drop(entry) { if (loaded.delete(entry)) entry.a.dispose(); },
     dispose() { for (const e of loaded) e.a.dispose(); loaded.clear(); renderer.dispose(); pmrem.dispose(); renderer.forceContextLoss?.(); },
   };
 }
@@ -99,12 +101,16 @@ export function pickAvatar({previous = null, name = '', extra = null} = {}) {
   const looks = Object.fromEntries(KINDS.map(([kind]) => [kind, Array.from({length: 6}, () => randomLook(kind))]));
   let kind = previous?.character === 'drilady' ? 'drilady' : 'drifella';
   let chosen = previous ? 'previous' : null;
+  const DICE = '<svg viewBox="0 0 20 20" aria-hidden="true"><rect x="2.5" y="2.5" width="15" height="15" rx="3.5"/><circle cx="6.8" cy="6.8" r="1.25"/><circle cx="13.2" cy="6.8" r="1.25"/><circle cx="10" cy="10" r="1.25"/><circle cx="6.8" cy="13.2" r="1.25"/><circle cx="13.2" cy="13.2" r="1.25"/></svg>';
   const LADDER = '<svg viewBox="0 0 16 20" aria-hidden="true"><path d="M4 1v18M12 1v18M4 5.5h8M4 10h8M4 14.5h8"/></svg>';
   root.setAttribute('role', 'dialog'); root.setAttribute('aria-label', "who's going down?");
   root.innerHTML = `
     <div class="sheet">
       <label class="name"><span>name</span><input type="text" maxlength="24" placeholder="anon" autocomplete="off" spellcheck="false"></label>
-      <div class="tabs" role="tablist" aria-label="who">${KINDS.map(([k, label]) => `<button type="button" role="tab" data-kind="${k}">${label}</button>`).join('')}</div>
+      <div class="who">
+        <div class="tabs" role="tablist" aria-label="who">${KINDS.map(([k, label]) => `<button type="button" role="tab" data-kind="${k}">${label}</button>`).join('')}</div>
+        <button type="button" class="reroll" aria-label="new options" title="new options">${DICE}</button>
+      </div>
       ${previous ? `<div class="previous"><p>last time</p><button type="button" class="card" data-id="previous"><canvas width="${W}" height="${H}"></canvas></button></div>` : ''}
       <div class="grid"></div>
       <div class="extra"></div>
@@ -116,11 +122,15 @@ export function pickAvatar({previous = null, name = '', extra = null} = {}) {
   input.value = name || '';
   for (const type of ['keydown', 'keyup']) input.addEventListener(type, e => e.stopPropagation());
   const portraits = createPortraits();
-  const drawn = new Map(), entries = new Map();
+  const drawn = new Map(), entries = new Map(), retired = new WeakSet();
   // one portrait at a time keeps the GPU and network calm
   let queue = Promise.resolve();
   const draw = (look, card) => {
-    queue = queue.then(() => portraits.load(look)).then(e => { entries.set(card, e); portraits.paint(e, card.querySelector('canvas')); })
+    queue = queue.then(() => retired.has(card) ? null : portraits.load(look)).then(e => {
+      if (!e) return;
+      if (retired.has(card)) { portraits.drop(e); return; }    // rerolled away while it loaded
+      entries.set(card, e); portraits.paint(e, card.querySelector('canvas'));
+    })
       .catch(err => console.warn('portrait', err));
     return queue;
   };
@@ -173,8 +183,7 @@ export function pickAvatar({previous = null, name = '', extra = null} = {}) {
   }
 
   const cards = {};
-  for (const [k] of KINDS) {
-    cards[k] = looks[k].map((look, i) => {
+  const makeCards = k => looks[k].map((look, i) => {
       const b = document.createElement('button');
       b.type = 'button'; b.className = 'card loading'; b.dataset.id = `${k}:${i}`;
       b.innerHTML = `<canvas width="${W}" height="${H}"></canvas>`;
@@ -182,7 +191,18 @@ export function pickAvatar({previous = null, name = '', extra = null} = {}) {
       b.addEventListener('click', () => select(b.dataset.id));
       return b;
     });
-  }
+  for (const [k] of KINDS) cards[k] = makeCards(k);
+  // the dice: six new options for the side you're looking at (the old ones are let go)
+  root.querySelector('.reroll').addEventListener('click', e => {
+    const k = kind;
+    for (const b of cards[k]) { retired.add(b); drawn.delete(b); const ent = entries.get(b); if (ent) { portraits.drop(ent); entries.delete(b); } }
+    if (spinning && cards[k].includes(spinning.card)) { cancelAnimationFrame(spinning.raf); spinning = null; }
+    looks[k] = Array.from({length: 6}, () => randomLook(k));
+    cards[k] = makeCards(k);
+    if (chosen?.startsWith(`${k}:`)) select(null);
+    show(k);
+    const dice = e.currentTarget; dice.classList.remove('rolled'); void dice.offsetWidth; dice.classList.add('rolled');
+  });
   function show(k) {
     kind = k;
     grid.replaceChildren(...cards[k]);

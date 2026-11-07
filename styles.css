@@ -186,7 +186,15 @@ body.touch #chat .log { max-height: min(30vh, calc(100vh - 260px)); }
   background: rgba(8, 8, 9, .7); color: var(--ink); font: inherit; font-size: 16px; outline: none; user-select: text;
   transition: border-color .15s, box-shadow .15s; }
 #picker .name input:focus { border-color: rgba(255, 79, 160, .6); box-shadow: 0 0 0 3px rgba(255, 79, 160, .14); }
-#picker .tabs { grid-area: tabs; display: flex; padding: 3px; gap: 3px; border: 1px solid var(--line); border-radius: 8px; background: rgba(255, 255, 255, .025); }
+#picker .who { grid-area: tabs; display: flex; gap: 8px; }
+#picker .reroll { flex: none; width: 44px; display: grid; place-items: center; padding: 0; border: 1px solid var(--line); border-radius: 8px;
+  background: rgba(255, 255, 255, .025); color: var(--dim); cursor: pointer; transition: color .15s, border-color .15s; }
+#picker .reroll:hover { color: var(--ink); border-color: rgba(233, 230, 220, .32); }
+#picker .reroll svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.6; }
+#picker .reroll svg circle { fill: currentColor; stroke: none; }
+#picker .reroll.rolled svg { animation: roll .5s cubic-bezier(.3, 1.4, .5, 1); }
+@keyframes roll { from { transform: rotate(-200deg) scale(.8); } to { transform: none; } }
+#picker .tabs { flex: 1; display: flex; padding: 3px; gap: 3px; border: 1px solid var(--line); border-radius: 8px; background: rgba(255, 255, 255, .025); }
 #picker .tabs button { flex: 1; padding: 8px 16px; border: 0; border-radius: 5px; background: transparent; color: var(--dim);
   cursor: pointer; letter-spacing: .12em; transition: background .15s, color .15s; }
 #picker .tabs button:hover { color: var(--ink); }
