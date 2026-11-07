@@ -192,9 +192,15 @@ async function start() {
     onLockChange: locked => {
       document.body.classList.toggle('locked', locked);
       if (locked) { toggleGallery(false); return; }
-      // Esc while holding a can opens the piece gallery (or, holding the paintball gun, the paint list)
-      if (!menuRelease && ['spray', 'paintball'].includes(heldType()) && !chat.open && emoteMenu.hidden) toggleGallery(true);
+      // Esc (or Tab) while holding a can opens the piece gallery (or, holding the paintball gun, the paint list)
+      const byYou = !menuRelease && !chat.open && emoteMenu.hidden;
+      if (byYou && ['spray', 'paintball'].includes(heldType())) toggleGallery(true);
       menuRelease = false;
+      // and it opens the chat box, ready to type (staying out of the world once you've sent or shut it).
+      // Not when the mouse went because the window lost focus (switching apps, a system dialog).
+      if (byYou && !controls.state.touch) setTimeout(() => {
+        if (document.hasFocus() && document.visibilityState === 'visible' && !controls.state.locked && !chat.open && emoteMenu.hidden) { relock = false; chat.setOpen(true); }
+      }, 60);
     },
     onPrimary: () => primary(),
     onSecondary: () => secondary(),
