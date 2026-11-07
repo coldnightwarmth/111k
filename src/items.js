@@ -307,7 +307,20 @@ function artTexture(art) {
   }
   return artTextures.get(art);
 }
-let woodTex = null, linenTex = null;
+let woodTex = null, linenTex = null, primedTex = null;
+// white primed canvas: gesso over the weave, the weave just showing through
+function primedTexture() {
+  const c = document.createElement('canvas'); c.width = c.height = 64;
+  const g = c.getContext('2d');
+  g.fillStyle = '#f2efe8'; g.fillRect(0, 0, 64, 64);
+  let seed = 7; const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+  for (let i = 0; i < 64; i += 2) {
+    g.fillStyle = `rgba(170,160,140,${.04 + rnd() * .05})`; g.fillRect(0, i, 64, 1);
+    g.fillStyle = `rgba(170,160,140,${.04 + rnd() * .05})`; g.fillRect(i, 0, 1, 64);
+  }
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  return t;
+}
 function grainTexture() {
   const c = document.createElement('canvas'); c.width = 64; c.height = 256;
   const g = c.getContext('2d');
@@ -341,21 +354,23 @@ function linenTexture() {
 }
 function paintingModel(id, state) {
   const art = state?.art || 1, {w, h, d} = paintingSize(art), x = w / 2, y = h / 2;
-  const a = ART[art] || ART[1], eu = .5 / a.w, ev = .5 / a.h;   // half a pixel in: the outermost row and column
   const g = new THREE.Group();
-  // the picture: front, then each side taking its edge's pixels across the depth
+  // the picture on the front; the canvas wrapped round the sides is plain white primed canvas
   const pos = [], uv = [], idx = [];
   const quad = (p, t) => { const b = pos.length / 3; p.forEach(q => pos.push(...q)); t.forEach(q => uv.push(...q)); idx.push(b, b + 1, b + 2, b, b + 2, b + 3); };
   quad([[-x, -y, d], [x, -y, d], [x, y, d], [-x, y, d]], [[0, 0], [1, 0], [1, 1], [0, 1]]);
-  quad([[-x, y, d], [x, y, d], [x, y, 0], [-x, y, 0]], [[0, 1 - ev], [1, 1 - ev], [1, 1 - ev], [0, 1 - ev]]);     // top
-  quad([[-x, -y, 0], [x, -y, 0], [x, -y, d], [-x, -y, d]], [[0, ev], [1, ev], [1, ev], [0, ev]]);                 // bottom
-  quad([[x, -y, d], [x, -y, 0], [x, y, 0], [x, y, d]], [[1 - eu, 0], [1 - eu, 0], [1 - eu, 1], [1 - eu, 1]]);     // right
-  quad([[-x, -y, 0], [-x, -y, d], [-x, y, d], [-x, y, 0]], [[eu, 0], [eu, 0], [eu, 1], [eu, 1]]);                 // left
-  const pic = new THREE.BufferGeometry();
-  pic.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); pic.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
-  pic.setIndex(idx); pic.computeVertexNormals();
+  const geo = () => { const b = new THREE.BufferGeometry(); b.setAttribute('position', new THREE.Float32BufferAttribute(pos.splice(0), 3));
+    b.setAttribute('uv', new THREE.Float32BufferAttribute(uv.splice(0), 2)); b.setIndex(idx.splice(0)); b.computeVertexNormals(); return b; };
   const canvasMat = new THREE.MeshStandardMaterial({map: artTexture(art), roughness: .82, metalness: 0});
-  const front = new THREE.Mesh(pic, canvasMat); front.name = 'canvas'; g.add(front);
+  const front = new THREE.Mesh(geo(), canvasMat); front.name = 'canvas'; g.add(front);
+  // sides: the weave running along each edge
+  const tw = w * 4, th = h * 4, td = d * 4;
+  quad([[-x, y, d], [x, y, d], [x, y, 0], [-x, y, 0]], [[0, td], [tw, td], [tw, 0], [0, 0]]);       // top
+  quad([[-x, -y, 0], [x, -y, 0], [x, -y, d], [-x, -y, d]], [[0, 0], [tw, 0], [tw, td], [0, td]]);   // bottom
+  quad([[x, -y, d], [x, -y, 0], [x, y, 0], [x, y, d]], [[td, 0], [0, 0], [0, th], [td, th]]);       // right
+  quad([[-x, -y, 0], [-x, -y, d], [-x, y, d], [-x, y, 0]], [[0, 0], [td, 0], [td, th], [0, th]]);   // left
+  primedTex ||= primedTexture();
+  part(g, geo(), new THREE.MeshStandardMaterial({map: primedTex, roughness: .9, metalness: 0}));
   // the back: raw canvas behind the picture, folded over the stretcher's back edge and stapled
   woodTex ||= grainTexture(); linenTex ||= linenTexture();
   const linen = new THREE.MeshStandardMaterial({map: linenTex, roughness: .95, metalness: 0, side: THREE.DoubleSide});
@@ -445,12 +460,51 @@ function outlineMaterial(width, opacity) {
   return m;
 }
 const OUTLINES = [outlineMaterial(.007, 1), outlineMaterial(.016, .35)];
+// A painting hangs flush against a wall (or lies flat on the floor), so a glow pushed out round it would be
+// half inside that wall. Its glow is drawn over everything instead, minus wherever the line of sight passes
+// through the painting itself (tested against its box): just the ring round its outline, from any angle.
+// (Only shown while you're aiming at it in plain view, so drawing it over things is fine.)
+const boxOutlines = new Map();
+function boxOutlineMaterials(w, h, d) {
+  const key = `${w.toFixed(3)}|${h.toFixed(3)}|${d.toFixed(3)}`;
+  if (!boxOutlines.has(key)) boxOutlines.set(key, [[.007, 1], [.016, .35]].map(([width, opacity]) => {
+    const m = outlineMaterial(width, opacity);
+    m.depthTest = false;
+    const before = m.onBeforeCompile;
+    m.onBeforeCompile = sh => {
+      before(sh);
+      sh.uniforms.boxMin = {value: new THREE.Vector3(-w / 2, -h / 2, 0)};
+      sh.uniforms.boxMax = {value: new THREE.Vector3(w / 2, h / 2, d)};
+      sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vObj;\nvarying vec3 vEye;')
+        .replace('gl_Position = projectionMatrix * mvPosition;', `gl_Position = projectionMatrix * mvPosition;
+      vObj = (inverse(modelViewMatrix) * mvPosition).xyz;
+      vEye = (inverse(modelMatrix) * vec4(cameraPosition, 1.0)).xyz;`);
+      sh.fragmentShader = sh.fragmentShader.replace('#include <common>', `#include <common>
+uniform vec3 boxMin; uniform vec3 boxMax;
+varying vec3 vObj; varying vec3 vEye;`)
+        .replace('#include <clipping_planes_fragment>', `#include <clipping_planes_fragment>
+      {
+        vec3 dir = vObj - vEye;
+        vec3 inv = 1.0 / dir;
+        vec3 t0 = (boxMin - vEye) * inv, t1 = (boxMax - vEye) * inv;
+        vec3 lo = min(t0, t1), hi = max(t0, t1);
+        float tin = max(max(lo.x, lo.y), lo.z), tout = min(min(hi.x, hi.y), hi.z);
+        if (tout >= max(tin, 0.0)) discard;        // the painting itself is here
+      }`);
+    };
+    m.customProgramCacheKey = () => `box-outline-${width}-${key}`;
+    return m;
+  }));
+  return boxOutlines.get(key);
+}
 export function addOutline(model) {
   const shells = new THREE.Group(); shells.visible = false;
   const meshes = [];
-  if (model.userData.outline) meshes.push(new THREE.Mesh(model.userData.outline));   // a shape made for glowing round
+  const u = model.userData;
+  if (u.outline) meshes.push(new THREE.Mesh(u.outline));   // a shape made for glowing round
   else model.traverse(o => { if (o.isMesh) meshes.push(o); });
-  for (const o of meshes) for (const mat of OUTLINES) {
+  const mats = u.outline && u.painting ? boxOutlineMaterials(u.w, u.h, u.d) : OUTLINES;
+  for (const o of meshes) for (const mat of mats) {
     const shell = new THREE.Mesh(o.geometry, mat);
     o.updateMatrix(); shell.matrixAutoUpdate = false;
     // the part's transform relative to the model, so the shell sits on it wherever the model goes
