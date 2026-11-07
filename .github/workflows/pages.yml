@@ -27,6 +27,12 @@ jobs:
         run: |
           mkdir _site
           cp -r index.html styles.css favicon.svg src vendor assets _site/
+          # every deploy's code gets its own version in its import paths, so browsers fetch the new code
+          # straight away instead of running what they cached from the last deploy for up to ten minutes
+          V="${GITHUB_SHA::10}"
+          find _site/src -name '*.js' -o -name '*.mjs' | xargs sed -i -E "s#((from|import)[[:space:]]*\(?[[:space:]]*'\.\.?/[^']+\.m?js)'#\1?v=$V'#g"
+          sed -i -E "s#src=\"src/main\.js\"#src=\"src/main.js?v=$V\"#; s#href=\"styles\.css\"#href=\"styles.css?v=$V\"#" _site/index.html
+          grep -q "main.js?v=$V" _site/index.html
           touch _site/.nojekyll
           if [ -f CNAME ]; then cp CNAME _site/; fi
       - uses: actions/configure-pages@v5

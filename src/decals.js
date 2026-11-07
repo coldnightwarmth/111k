@@ -249,10 +249,12 @@ const DEPTH_EPS = .015;
 // Only what the throw can see gets paint either way: everything in front casts an exact shadow.
 // `thrower`, when known, is how far back along the throw the thrower stood: nothing behind the
 // nozzle can take paint or block it.
-// `apart`: something standing clear of the surface that was hit (further out from it than this, with that
-// surface carrying on behind it: a box in front of a wall) takes no paint and casts no shadow; the piece goes
-// on the wall behind it, the way a sticker would. null turns this off (a painting's own space).
-const APART = .04;
+// `apart`: a separate thing standing clear of the surface that was hit, with a gap all round between it and
+// that surface (a box in front of a wall, a pipe on standoffs), takes no paint and casts no shadow: the piece
+// goes on the wall behind it, the way a sticker would. Something built against the wall (a pillar, a ledge, a
+// door frame), touching it somewhere, is part of the wall as far as paint goes and gets wrapped. null turns
+// this off (a painting's own space).
+const APART = .04, TOUCH = .03;
 export function cutDecal(hits, {point, normal, up, width, height, dir = null, front = .15, back = .3, shade = .3, slab = null, thrower = null, apart = APART}) {
   const z = dir ? dir.clone().negate().normalize() : normal.clone().normalize();
   const y = up.clone().addScaledVector(z, -up.dot(z));
@@ -279,19 +281,56 @@ export function cutDecal(hits, {point, normal, up, width, height, dir = null, fr
   const fromHit = hn.z > .05 ? l => l.z + (hn.x * l.x + hn.y * l.y) / hn.z : l => l.z;
   const e1 = new THREE.Vector3(), e2 = new THREE.Vector3();
   // the surface that was hit, as unfolded, in the throw's frame: what a separate thing in front might stand clear of
-  const primary = apart === null ? [] : [...flatOn.keys()].map(t => {
+  // (just the faces turned much the same way as the one hit: the wall, not the floor it meets)
+  const primary = apart === null ? [] : [...flatOn.keys()].filter(t => {
+    const n = new THREE.Vector3().crossVectors(_w.subVectors(t.p[1], t.p[0]), new THREE.Vector3().subVectors(t.p[2], t.p[0])).normalize();
+    return Math.abs(n.dot(nh)) > .7;
+  }).map(t => {
     const p = t.p.map(local);
     return {p, minX: Math.min(p[0].x, p[1].x, p[2].x), maxX: Math.max(p[0].x, p[1].x, p[2].x), minY: Math.min(p[0].y, p[1].y, p[2].y), maxY: Math.max(p[0].y, p[1].y, p[2].y)};
   });
-  // is this spot (in the throw's frame) in front of the hit surface by more than `apart`, with that surface behind it?
-  const backed = l => primary.some(({p: [a, b, c], minX, maxX, minY, maxY}) => {
-    if (l.x < minX || l.x > maxX || l.y < minY || l.y > maxY) return false;
-    const d = (b.y - c.y) * (a.x - c.x) + (c.x - b.x) * (a.y - c.y);
-    if (Math.abs(d) < 1e-12) return false;
-    const w0 = ((b.y - c.y) * (l.x - c.x) + (c.x - b.x) * (l.y - c.y)) / d, w1 = ((c.y - a.y) * (l.x - c.x) + (a.x - c.x) * (l.y - c.y)) / d, w2 = 1 - w0 - w1;
-    if (w0 < -1e-6 || w1 < -1e-6 || w2 < -1e-6) return false;
-    return l.z - (w0 * a.z + w1 * b.z + w2 * c.z) > apart;
-  });
+  // how far in front of the hit surface this spot (in the throw's frame) stands, where that surface is behind it (or null)
+  const standOff = l => {
+    let best = null;
+    for (const {p: [a, b, c], minX, maxX, minY, maxY} of primary) {
+      if (l.x < minX - 1e-6 || l.x > maxX + 1e-6 || l.y < minY - 1e-6 || l.y > maxY + 1e-6) continue;
+      const d = (b.y - c.y) * (a.x - c.x) + (c.x - b.x) * (a.y - c.y);
+      if (Math.abs(d) < 1e-12) continue;
+      const w0 = ((b.y - c.y) * (l.x - c.x) + (c.x - b.x) * (l.y - c.y)) / d, w1 = ((c.y - a.y) * (l.x - c.x) + (a.x - c.x) * (l.y - c.y)) / d, w2 = 1 - w0 - w1;
+      if (w0 < -1e-4 || w1 < -1e-4 || w2 < -1e-4) continue;
+      const gap = l.z - (w0 * a.z + w1 * b.z + w2 * c.z);
+      if (best === null || Math.abs(gap) < Math.abs(best)) best = gap;
+    }
+    return best;
+  };
+  // separate things, each whole piece (its triangles joined by shared corners), and whether it stands clear
+  const pieceOf = new Map(), members = new Map();
+  if (primary.length) {
+    const key = p => `${Math.round(p.x * 500)},${Math.round(p.y * 500)},${Math.round(p.z * 500)}`;
+    const root = tris.map((_, i) => i), find = i => { while (root[i] !== i) { root[i] = root[root[i]]; i = root[i]; } return i; };
+    const at = new Map();
+    tris.forEach((t, i) => { for (const p of t.p) { const k = key(p); if (at.has(k)) root[find(i)] = find(at.get(k)); else at.set(k, i); } });
+    tris.forEach((t, i) => { const id = find(i); pieceOf.set(t, id); if (!members.has(id)) members.set(id, []); members.get(id).push(t); });
+  }
+  const clearOf = new Map();
+  function standsClear(t) {
+    const id = pieceOf.get(t);
+    if (clearOf.has(id)) return clearOf.get(id);
+    // clear if some of it is well out in front of the wall and none of it comes near the wall
+    let out = false, touching = false;
+    for (const u of members.get(id)) {
+      for (const p of u.p) {
+        const g = standOff(local(p));
+        if (g === null) continue;
+        if (g <= TOUCH) { touching = true; break; }
+        if (g > apart) out = true;
+      }
+      if (touching) break;
+    }
+    const clear = out && !touching;
+    clearOf.set(id, clear);
+    return clear;
+  }
   // 1. faces that see the thrower, clipped to the box (a deeper box for the ones that only cast shadows)
   const faces = [], occ = [];
   for (const t of tris) {
@@ -304,10 +343,7 @@ export function cutDecal(hits, {point, normal, up, width, height, dir = null, fr
     const q = flatOn.get(t);
     let poly = t.p.map((p, k) => ({l: local(p), uv: t.uv[k], q: q ? q[k] : along(p)}));
     // a separate thing standing clear in front of the hit surface: left out (unless it's a painting's outline)
-    if (!q && !t.noPaint && primary.length) {
-      const c = poly[0].l.clone().add(poly[1].l).add(poly[2].l).divideScalar(3);
-      if (backed(c) || poly.some(v => backed(v.l))) continue;
-    }
+    if (!q && !t.noPaint && primary.length && standsClear(t)) continue;
     poly = clipToDecal(poly, hx, hy);
     if (poly.length >= 3 && thrower !== null) poly = clipBy(poly, l => l.z - (thrower - .05));
     if (poly.length < 3) continue;
