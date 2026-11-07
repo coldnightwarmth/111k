@@ -77,27 +77,20 @@ export function pickAvatar({previous = null, name = '', extra = null} = {}) {
   const looks = Object.fromEntries(KINDS.map(([kind]) => [kind, Array.from({length: 6}, () => randomLook(kind))]));
   let kind = previous?.character === 'drilady' ? 'drilady' : 'drifella';
   let chosen = previous ? 'previous' : null;
+  const LADDER = '<svg viewBox="0 0 16 20" aria-hidden="true"><path d="M4 1v18M12 1v18M4 5.5h8M4 10h8M4 14.5h8"/></svg>';
+  root.setAttribute('role', 'dialog'); root.setAttribute('aria-label', "who's going down?");
   root.innerHTML = `
     <div class="sheet">
-      <header class="head">
-        <h1>who's going down?</h1>
-        <p>an abandoned room off the loop. pick someone to be.</p>
-      </header>
-      <div class="bar">
-        <label class="name"><span>name</span><input type="text" maxlength="24" placeholder="anon" autocomplete="off" spellcheck="false"></label>
-        <div class="tabs" role="tablist" aria-label="who">${KINDS.map(([k, label]) => `<button type="button" role="tab" data-kind="${k}">${label}</button>`).join('')}</div>
-      </div>
-      <div class="cards">
-        ${previous ? `<div class="previous"><button type="button" class="card" data-id="previous"><canvas width="${W}" height="${H}"></canvas><span>last time</span></button></div>` : ''}
-        <div class="grid"></div>
-      </div>
+      <label class="name"><span>name</span><input type="text" maxlength="24" placeholder="anon" autocomplete="off" spellcheck="false"></label>
+      <div class="tabs" role="tablist" aria-label="who">${KINDS.map(([k, label]) => `<button type="button" role="tab" data-kind="${k}">${label}</button>`).join('')}</div>
+      ${previous ? `<div class="previous"><button type="button" class="card" data-id="previous"><canvas width="${W}" height="${H}"></canvas></button><p>last time</p></div>` : ''}
+      <div class="grid"></div>
       <div class="extra"></div>
-    </div>
-    <footer class="foot"><div class="inner"><p class="chosen-note">pick someone</p><button type="button" class="go" disabled>go down <span aria-hidden="true">↓</span></button></div></footer>`;
+      <div class="foot"><button type="button" class="go" disabled>enter the tunnel ${LADDER}</button></div>
+    </div>`;
   root.hidden = false;
   if (extra) root.querySelector('.extra').append(extra);
   const input = root.querySelector('input'), grid = root.querySelector('.grid'), go = root.querySelector('.go');
-  const note = root.querySelector('.chosen-note');
   input.value = name || '';
   for (const type of ['keydown', 'keyup']) input.addEventListener(type, e => e.stopPropagation());
   const portraits = createPortraits();
@@ -129,7 +122,6 @@ export function pickAvatar({previous = null, name = '', extra = null} = {}) {
     chosen = id;
     for (const c of root.querySelectorAll('.card')) c.classList.toggle('chosen', c.dataset.id === id);
     go.disabled = !id;
-    note.textContent = !id ? 'pick someone' : id === 'previous' ? 'you, like last time' : `${id.split(':')[0]} #${Number(id.split(':')[1]) + 1}`;
   }
   for (const t of root.querySelectorAll('.tabs button')) t.addEventListener('click', () => show(t.dataset.kind));
   if (previous) {
