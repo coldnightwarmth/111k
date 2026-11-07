@@ -8,7 +8,7 @@ const BEAM_FAR = 42, BEAM_FADE = 10;   // torches on the floor: full strength to
 import {EYE_HEIGHT} from './motion.js';
 import {PAINT_COLORS, RANDOM_PAINT} from './decals.js';
 import {ART, paintingSize} from './paintings.js';
-import {mergeVertices} from '../vendor/three/BufferGeometryUtils.js';
+import {mergeVertices, mergeGeometries} from '../vendor/three/BufferGeometryUtils.js';
 
 const BEAM_COLOR = new THREE.Color(1, .93, .8);
 export const ITEM_NAMES = {flashlight: 'flashlight', paintball: 'paintball marker', spray: 'spray can', bucket: 'bucket and sponge', crown: 'golden crown', painting: 'painting'};
@@ -140,18 +140,21 @@ function paintballModel() {
     .scale.set(.052 * Math.sin(Math.PI * .36), .098 * Math.sin(Math.PI * .36), .1);
   part(g, new THREE.BoxGeometry(.018, .006, .03), accent, [0, .174, -.03], [-.15, 0, 0]);                  // lid latch
   // the paint inside: balls settled into the bottom of the pod
-  const balls = [], ballGeo = new THREE.SphereGeometry(.0087, 12, 8);
-  for (let layer = 0; layer < 3; layer++) for (let i = 0; i < 11; i++) {
+  // (one instanced mesh, a colour per ball: the same 33 balls in one draw)
+  const balls = new THREE.InstancedMesh(new THREE.SphereGeometry(.0087, 12, 8), std(0xffffff, .25, 0, {emissive: 0x000000}), 33);
+  const at = new THREE.Matrix4(), tint = new THREE.Color();
+  for (let layer = 0, n = 0; layer < 3; layer++) for (let i = 0; i < 11; i++, n++) {
     const a = i / 11 * Math.PI * 2 + layer * .5, rr = layer === 2 ? .45 : .72;
-    const b = part(g, ballGeo, std(0xffffff, .25, 0, {emissive: 0x000000}),
-      [Math.cos(a) * .052 * rr * .78, .085 + layer * .016, .005 + Math.sin(a) * .098 * rr * .8]);
-    b.renderOrder = 1; balls.push(b);
+    balls.setMatrixAt(n, at.makeTranslation(Math.cos(a) * .052 * rr * .78, .085 + layer * .016, .005 + Math.sin(a) * .098 * rr * .8));
+    balls.setColorAt(n, tint.setHex(0xffffff));
   }
+  balls.renderOrder = 1; balls.computeBoundingSphere(); g.add(balls);
   let shown = null;
   const setPaint = (color, palette) => {
     if (color === shown) return;
     shown = color;
-    balls.forEach((b, i) => b.material.color.setHex(color < 0 ? palette[(i * 7 + 3) % palette.length] : color));
+    for (let i = 0; i < balls.count; i++) balls.setColorAt(i, tint.setHex(color < 0 ? palette[(i * 7 + 3) % palette.length] : color));
+    balls.instanceColor.needsUpdate = true;
   };
   const body = new THREE.Group(); body.scale.setScalar(GUN_SCALE);
   while (g.children.length) body.add(g.children[0]);
@@ -552,6 +555,41 @@ export function glowBox(min, max, cyl = null, ell = null) {
   for (const geo of geos) for (const mat of boxOutlineMaterials(min, max, cyl, ell)) { const s = new THREE.Mesh(geo, mat); s.renderOrder = 5; s.frustumCulled = false; shells.add(s); }
   return shells;
 }
+// The small parts of a model that never move against each other, merged: per parent and material, the
+// same triangles in the same places, drawn in one go instead of one draw (or two) per part. Left alone:
+// anything the code reaches for later (in userData), transparent or ordered parts, instanced ones,
+// mirrored ones (baking a mirror would turn their faces inside out), and parts with children.
+export function mergeParts(model) {
+  const keep = new Set();
+  const mark = v => { if (v?.isObject3D) v.traverse(o => keep.add(o)); else if (Array.isArray(v)) v.forEach(mark); };
+  for (const v of Object.values(model.userData)) mark(v);
+  const lists = new Map();
+  model.traverse(o => {
+    if (!o.isMesh || o.isInstancedMesh || o.isSkinnedMesh || keep.has(o) || Array.isArray(o.material) || o.material.transparent
+      || o.renderOrder || o.children.length || !o.visible || o.geometry.morphAttributes.position) return;
+    o.updateMatrix();
+    if (o.matrix.determinant() <= 0) return;
+    const key = `${o.parent.uuid}/${o.material.uuid}`;
+    (lists.get(key) || lists.set(key, []).get(key)).push(o);
+  });
+  for (const list of lists.values()) {
+    if (list.length < 2) continue;
+    const names = Object.keys(list[0].geometry.attributes).sort().join();
+    if (!['normal,position', 'normal,position,uv'].includes(names) || list.some(m => Object.keys(m.geometry.attributes).sort().join() !== names)) continue;
+    const geos = list.map(m => {
+      const g = m.geometry.clone().applyMatrix4(m.matrix);
+      if (!g.index) g.setIndex([...Array(g.attributes.position.count).keys()]);
+      return g;
+    });
+    const merged = mergeGeometries(geos);
+    if (!merged) continue;
+    const mesh = new THREE.Mesh(merged, list[0].material);
+    mesh.castShadow = list[0].castShadow; mesh.receiveShadow = list[0].receiveShadow;
+    list[0].parent.add(mesh);
+    for (const m of list) m.removeFromParent();
+  }
+  return model;
+}
 export function addOutline(model) {
   const shells = new THREE.Group(); shells.visible = false;
   const meshes = [];
@@ -560,7 +598,8 @@ export function addOutline(model) {
   else model.traverse(o => { if (o.isMesh) meshes.push(o); });
   const mats = u.outline && u.painting ? boxOutlineMaterials(new THREE.Vector3(-u.w / 2, -u.h / 2, 0), new THREE.Vector3(u.w / 2, u.h / 2, u.d)) : OUTLINES;
   for (const o of meshes) for (const mat of mats) {
-    const shell = new THREE.Mesh(o.geometry, mat);
+    const shell = o.isInstancedMesh ? new THREE.InstancedMesh(o.geometry, mat, o.count) : new THREE.Mesh(o.geometry, mat);
+    if (o.isInstancedMesh) { shell.instanceMatrix = o.instanceMatrix; shell.boundingSphere = o.boundingSphere; }
     o.updateMatrix(); shell.matrixAutoUpdate = false;
     // the part's transform relative to the model, so the shell sits on it wherever the model goes
     shell.matrix.copy(o.matrix); let q = o.parent;
@@ -611,7 +650,7 @@ export function createItems({scene, camera, hits, shadows = null}) {
     let it = items.get(state.id);
     if (!it || it.state.type !== state.type) {
       if (it) it.model.removeFromParent();
-      const model = (MODELS[state.type] || flashlightModel)(state.id, state);
+      const model = mergeParts((MODELS[state.type] || flashlightModel)(state.id, state));
       // items are culled like anything else when they're out of view (they only ever move, so their bounds hold)
       model.traverse(o => { o.castShadow = false; });
       it = {state, model, sway: 0, kick: 0, shake: 0, outline: addOutline(model), fall: null};
