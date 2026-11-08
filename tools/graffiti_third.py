@@ -107,8 +107,33 @@ def rough(mask, r, amount=1.2, sigma=1.5):
     return (d + noise(*mask.shape, r, sigma) * amount) > 0
 
 
+# Spray mode (after review: "make them feel more like spray paint"): every fill goes on the way a can puts it on,
+# soft-edged with overspray and uneven coverage, and the things that gave the print/glass/paper look (paper
+# texture, glaze, gloss, shadows) give way to sprayed versions. Set per piece by build_third.
+SPRAY = False
+_R = np.random.default_rng(0)
+
+
+def coverage(shape, r, amount=0.12):
+    """uneven coverage: where the can went over once rather than twice"""
+    return np.clip(1 - amount * np.clip(noise(*shape, r, 9), 0, 3), 0, 1)
+
+
 def flat(cv, mask, color, alpha=1.0):
+    if SPRAY and np.any(mask):
+        m = mask.astype(bool)
+        small = m.sum() < 400              # (fine detail: not blurred away)
+        paint_mask(cv, m, color, _R, soft=0.7 if small else 1.0, mist=0.6 if small else 1.3, streak=0.0 if small else 0.25,
+                   opacity=alpha)
+        return
     cv.over(color, mask.astype(float) * alpha)
+
+
+def light_drips(cv, color, r, mask=None, rate=0.18, length=0.1):
+    """a few short runs, no more"""
+    if SPRAY and not G.NODRIPS:
+        return add_drips(cv, color, r, rate=rate, max_len_m=length, width_px=2.4, from_mask=mask)
+    return cv
 
 
 def pad_canvas(mask, pad):
@@ -316,7 +341,7 @@ def hand_strokes(lines, r, height_px, pad, slant=0.15, spacing=0.14, bounce=0.06
 
 # ------------------------------------------------------------------ the styles
 
-def blockbuster(text, fill, outline, r, height_m=0.5, fill2=None, shadow=None, cut=None, kind='black', drips=0.6):
+def blockbuster(text, fill, outline, r, height_m=0.5, fill2=None, shadow=None, cut=None, kind='black', drips=0.6, streak=0.85):
     """Huge square letters jammed together, rollered fill (split into two colours along a ruled line),
     a hard outline round each letter and a block shadow."""
     cap = height_m * PX
@@ -341,9 +366,9 @@ def blockbuster(text, fill, outline, r, height_m=0.5, fill2=None, shadow=None, c
     for i, m in enumerate(masks):          # each letter's fill inside its own outline, in reading order
         inner = m & ~dilate(np.any(masks[i + 1:], 0), ow) if i < len(masks) - 1 else m
         top = inner & (ys < split)
-        paint_mask(cv, full(top if fill2 is not None else inner), fill, r, soft=0.95, mist=0.5, streak=0.85)
+        paint_mask(cv, full(top if fill2 is not None else inner), fill, r, soft=0.95, mist=0.5, streak=streak)
         if fill2 is not None:
-            paint_mask(cv, full(inner & ~top), fill2, r, soft=0.95, mist=0.5, streak=0.85)
+            paint_mask(cv, full(inner & ~top), fill2, r, soft=0.95, mist=0.5, streak=streak)
     if cut is not None:                    # the ruled line between the colours
         line = (np.abs(ys - split) < max(1.2, cap * 0.018)) & union
         paint_mask(cv, full(line), cut, r, soft=0.8, mist=0.3)
@@ -362,7 +387,8 @@ def slap(kind, r, text='', lines=None, color=BLOOD, ink=BLACK, size_m=0.34, word
         sticker = np.zeros(body.shape + (4,))
         cv = G.Canvas(body.shape[1] + 6, body.shape[0] + 6)
         sh = np.pad(body, ((0, 6), (0, 6)))
-        cv.over(BLACK, ndimage.gaussian_filter(shift(sh, 2, 3).astype(float), 1.2) * 0.35)
+        if not SPRAY:
+            cv.over(BLACK, ndimage.gaussian_filter(shift(sh, 2, 3).astype(float), 1.2) * 0.35)
         flat(cv, sh, WHITE)
         flat(cv, np.pad(m, ((0, 6), (0, 6))), color)
         if ink is not None:                # a second print colour: an inner line
@@ -377,7 +403,8 @@ def slap(kind, r, text='', lines=None, color=BLOOD, ink=BLACK, size_m=0.34, word
     im = Image.new('L', (w + 8, h + 8), 0)
     ImageDraw.Draw(im).rounded_rectangle((2, 2, w + 1, h + 1), rr, fill=255)
     card = np.asarray(im) > 127
-    cv.over(BLACK, ndimage.gaussian_filter(shift(card, 2, 3).astype(float), 1.2) * 0.35)
+    if not SPRAY:
+        cv.over(BLACK, ndimage.gaussian_filter(shift(card, 2, 3).astype(float), 1.2) * 0.35)
     if kind == 'hello':
         flat(cv, card, color)
         panel = Image.new('L', card.shape[::-1], 0)
@@ -390,6 +417,9 @@ def slap(kind, r, text='', lines=None, color=BLOOD, ink=BLACK, size_m=0.34, word
         write_in(cv, lines or [text], ink, r, (2 + w * 0.1, 2 + h * 0.44, w + 1 - w * 0.1, h + 1 - h * 0.16))
     else:                                  # a plain white shipping label, ruled, written on in marker
         flat(cv, card, (0.97, 0.97, 0.95))
+        if SPRAY:                          # a sprayed white panel and big sprayed writing, nothing printed
+            write_in(cv, lines or [text], ink, r, (2 + w * 0.06, 2 + h * 0.1, w + 1 - w * 0.06, h + 1 - h * 0.12), width_frac=0.1)
+            return rotate_canvas(light_drips(cv, (0.97, 0.97, 0.95), r, None, rate=0.1), r.normal(0, 0.04))
         rule = np.zeros_like(card)
         for k in range(5):
             y = int(2 + h * (0.3 + k * 0.14))
@@ -405,6 +435,8 @@ def slap(kind, r, text='', lines=None, color=BLOOD, ink=BLACK, size_m=0.34, word
 
 def gloss(cv, mask, r):
     """a faint sheen across a sticker"""
+    if SPRAY:
+        return
     h, w = mask.shape
     yy, xx = np.mgrid[:h, :w]
     band = np.clip(1 - np.abs((xx * 0.7 + yy) / max(1, w * 0.7 + h) - r.uniform(0.25, 0.45)) * 8, 0, 1)
@@ -432,7 +464,7 @@ def write_in(cv, lines, ink, r, box, width_frac=0.085):
     k = min((x1 - x0) / W, (y1 - y0) / H)
     ox, oy = x0 + ((x1 - x0) - W * k) / 2, y0 + ((y1 - y0) - H * k) / 2
     paths = [p * k + (ox, oy) for p in paths]
-    can = G.Can(cv, ink, max(2.0, hp * k * width_frac), r, marker=True)
+    can = G.Can(cv, ink, max(2.0, hp * k * width_frac) * (1.25 if SPRAY else 1), r, marker=not SPRAY, drips=0.06 if SPRAY else 1.0)
     for p in paths:
         can.stroke(p)
     can.spray()
@@ -449,7 +481,13 @@ def rotate_canvas(cv, angle):
 
 
 def paper(cv, mask, color, r, wrinkle=0.5, torn=True):
-    """a sheet of paper on the wall: off-white with fibre noise and wrinkles, edges a little torn"""
+    """a sheet of paper on the wall: off-white with fibre noise and wrinkles, edges a little torn
+    (spray mode: a panel sprayed on instead, rough-edged and a bit streaky)"""
+    if SPRAY:
+        mask = rough(mask, r, 2.0, 2.5)
+        paint_mask(cv, mask, color, r, soft=1.3, mist=1.6, streak=0.55)
+        cv.over(mix(color, BLACK, 0.15), (mask * (1 - coverage(mask.shape, r, 0.6))) * 0.4)
+        return mask
     if torn:
         mask = rough(mask, r, 1.6, 1.0) & rough(mask, r, 0.8, 4.0)
     h, w = mask.shape
@@ -472,7 +510,10 @@ def paper(cv, mask, color, r, wrinkle=0.5, torn=True):
 
 def poster(lines, r, kind='type', width_m=0.7, font_kind='black', ink=BLACK, sheet=PAPER, small=None, line_gap=1.12,
            margin=0.1):
-    """A wheatpasted print. kind: 'type' (ink on paper), anything else is just the colours given."""
+    """A wheatpasted print. kind: 'type' (ink on paper), anything else is just the colours given.
+    (Spray mode: a sprayed panel with big sprayed block letters on it.)"""
+    if SPRAY:
+        font_kind, margin = 'black', min(margin, 0.06)
     width = width_m * PX
     # size the type so the longest line fills the sheet
     probe = type_masks(lines, font_kind, 100, r, tracking=-0.01, line_gap=line_gap, per_letter=False)[1]
@@ -489,11 +530,15 @@ def poster(lines, r, kind='type', width_m=0.7, font_kind='black', ink=BLACK, she
     cv = G.Canvas(W + 10, H + 10)
     sheet_mask = np.zeros((cv.h, cv.w), bool)
     sheet_mask[5:5 + H, 5:5 + W] = True
-    cv.over(BLACK, ndimage.gaussian_filter(shift(sheet_mask, 1, 2).astype(float), 1.5) * 0.25)
+    if not SPRAY:
+        cv.over(BLACK, ndimage.gaussian_filter(shift(sheet_mask, 1, 2).astype(float), 1.5) * 0.25)
     sheet_mask = paper(cv, sheet_mask, sheet, r)
     place(cv, m, ink, cv.w / 2, 5 + mh, 0.93)
     if sm is not None:
         place(cv, sm, ink, cv.w / 2, 5 + mh + m.shape[0] + mh * 0.6, 0.9)
+    if SPRAY:                              # a few short runs off the panel's bottom edge
+        cv = light_drips(cv, sheet, r, sheet_mask, rate=0.12)
+        return rotate_canvas(cv, r.normal(0, 0.015))
     # print wear: ink missing in specks where the paper didn't take it
     specks = (noise(cv.h, cv.w, r, 0.7) > 2.2) & sheet_mask
     cv.over(sheet, specks * 0.8)
@@ -509,8 +554,11 @@ RANSOM_PAPERS = [(PAPER, BLACK), (NEWSPRINT, BLACK), (YELLOW, BLACK), (BLACK, WH
 
 
 def ransom(lines, r, height_m=0.12, words_per_line=None):
-    """Every letter cut from something different and glued down crooked."""
+    """Every letter cut from something different and glued down crooked.
+    (Spray mode: every letter sprayed in its own font and colour, each with its own outline.)"""
     cap = height_m * PX
+    if SPRAY:
+        return ransom_sprayed(lines, r, cap)
     cuts = []
     y = 0.0
     width = 0.0
@@ -542,16 +590,54 @@ def ransom(lines, r, height_m=0.12, words_per_line=None):
     W, H = int(width + cap), int(y + cap * 0.6)
     cv = G.Canvas(W, H)
     for tile, x, yy in cuts:
-        sh = G.Canvas(tile.w, tile.h)
-        sh.over(BLACK, ndimage.gaussian_filter(tile.a, 1.0) * 0.3)
-        paste(cv, sh, x + cap * 0.3 + 2, yy + cap * 0.15 + 2)
+        if not SPRAY:
+            sh = G.Canvas(tile.w, tile.h)
+            sh.over(BLACK, ndimage.gaussian_filter(tile.a, 1.0) * 0.3)
+            paste(cv, sh, x + cap * 0.3 + 2, yy + cap * 0.15 + 2)
         paste(cv, tile, x + cap * 0.3, yy + cap * 0.15)
     return cv
+
+
+def ransom_sprayed(lines, r, cap):
+    pieces, y, width = [], 0.0, 0.0
+    for line in lines:
+        x = 0.0
+        for ch in line:
+            if ch == ' ':
+                x += cap * 0.5
+                continue
+            kind = RANSOM_FONTS[r.integers(len(RANSOM_FONTS))]
+            bg, ink = RANSOM_PAPERS[r.integers(len(RANSOM_PAPERS))]
+            fill, line_c = (ink, bg) if r.random() < 0.5 else (bg, ink)
+            if fill in (BLACK, NAVY, FOREST, OXBLOOD):
+                fill, line_c = line_c, fill
+            if ch.isalpha() and r.random() < 0.35:
+                ch = ch.swapcase()
+            m, asc, adv = char_mask(ch, kind, cap * r.uniform(0.85, 1.25), r.normal(0, 0.12))
+            if not m.any():
+                continue
+            m = crop_masks([m], int(cap * 0.2))[0]
+            pieces.append((m, fill, line_c, x, y + r.normal(0, cap * 0.08)))
+            x += m.shape[1] - cap * 0.3
+        width = max(width, x)
+        y += cap * 1.55
+    W, H = int(width + cap), int(y + cap * 0.8)
+    cv = G.Canvas(W, H)
+    for m, fill, line_c, x, yy in pieces:
+        full = np.zeros((H, W), bool)
+        xi, yi = int(x), int(yy + cap * 0.1)
+        hh, ww = min(m.shape[0], H - yi), min(m.shape[1], W - xi)
+        full[yi:yi + hh, xi:xi + ww] = m[:hh, :ww]
+        flat(cv, dilate(full, max(2, cap * 0.07)), line_c)
+        flat(cv, full, fill)
+    return light_drips(M.grow(cv, bottom=int(PX * 0.1)), BLACK, r, rate=0.06)
 
 
 def mosaic(lines, r, cell_m=0.045, rows=7, colors=(SKY,), shade=None, frame=None, back=None, kind='mono'):
     """Glazed square tiles cemented on, a few tiles high per line of letters."""
     g = pixel_text(lines)
+    if SPRAY:
+        frame = back = None
     if shade is not None:                  # a one-tile drop shadow in another colour
         sh = np.pad(g, ((0, 1), (0, 1)))
         sh = (np.roll(np.roll(sh, 1, 0), 1, 1)) & ~np.pad(g, ((0, 1), (0, 1)))
@@ -563,7 +649,7 @@ def mosaic(lines, r, cell_m=0.045, rows=7, colors=(SKY,), shade=None, frame=None
     rows_n, cols_n = g.shape
     cell = cell_m * PX
     cv = G.Canvas(cols_n * cell + 6, rows_n * cell + 6)
-    grout = max(1.0, cell * 0.14)
+    grout = max(1.0, cell * (0.22 if SPRAY else 0.14))
     tile_cols = {}
     if back is not None:                   # a panel of background tiles (and the grout between them)
         panel = np.zeros((cv.h, cv.w), bool)
@@ -588,8 +674,11 @@ def mosaic(lines, r, cell_m=0.045, rows=7, colors=(SKY,), shade=None, frame=None
             ImageDraw.Draw(im).rectangle((x0 + r.normal(0, 0.3), y0 + r.normal(0, 0.3), x0 + s, y0 + s), fill=255)
             m = np.asarray(im) > 127
             flat(cv, m, c)
-            hl = m & ~shift(m, 1, 1)       # the glaze catching the light on two edges
-            cv.over(WHITE, hl * 0.35)
+            if not SPRAY:
+                hl = m & ~shift(m, 1, 1)   # the glaze catching the light on two edges
+                cv.over(WHITE, hl * 0.35)
+    if SPRAY:
+        return light_drips(M.grow(cv, bottom=int(PX * 0.1)), colors[0], r, rate=0.1)
     return cv
 
 
@@ -612,6 +701,8 @@ def ticker(lines, r, color=AMBER, rows=7, dot_m=0.028, kind='mono', arrow=None):
     panel = Image.new('L', (cv.w, cv.h), 0)
     ImageDraw.Draw(panel).rounded_rectangle((2, 2, W + 1, H + 1), int(frame * 0.6), fill=255)
     pm = np.asarray(panel) > 127
+    if SPRAY:
+        pm = rough(pm, r, 2.0, 2.5)
     flat(cv, pm, (0.08, 0.08, 0.09))
     flat(cv, pm & ~erode(pm, max(1.5, frame * 0.25)), (0.25, 0.25, 0.27))
     on = np.zeros((cv.h, cv.w), bool)
@@ -626,9 +717,13 @@ def ticker(lines, r, color=AMBER, rows=7, dot_m=0.028, kind='mono', arrow=None):
             (on if g[y, x] else off)[y0:y1, x0:x1] |= d
     flat(cv, off, mix(color, (0.08, 0.08, 0.09), 0.82))
     glow = ndimage.gaussian_filter(on.astype(float), cell * 0.45) * 1.6
+    if SPRAY:                              # the glow as overspray: speckled, not smooth
+        glow = glow * (_R.random(glow.shape) < np.clip(glow * 1.2, 0, 0.9))
     cv.over(color, np.clip(glow, 0, 0.75) * pm)
     flat(cv, on, color)
     cv.over(WHITE, (on & erode(on, max(1, rad * 0.45))) * 0.45)
+    if SPRAY:
+        return light_drips(M.grow(cv, bottom=int(PX * 0.1)), (0.08, 0.08, 0.09), r, np.pad(pm, ((0, int(PX * 0.1)), (0, 0))), rate=0.12)
     return cv
 
 
@@ -646,6 +741,13 @@ def neon(text, color, r, height_m=0.3, script=True, tube_m=0.016, lines=None, ba
         paint_mask(cv, board, backing, r, soft=0.9, mist=0.5)
     wide = ndimage.gaussian_filter(tube.astype(float), PX * 0.045) * 2.2
     near = ndimage.gaussian_filter(tube.astype(float), PX * 0.012) * 1.4
+    if SPRAY:                              # the glow sprayed on: a haze of fine dots, the tube a can line
+        haze = np.clip(wide, 0, 0.6)
+        cv.over(color, haze * 0.5 + haze * (_R.random(haze.shape) < haze) * 0.5)
+        paths_px = [np.asarray(p) for p in paths]
+        spray_paths(cv, paths_px, color, r, tube_m * PX * 2.0, drips=0.12, mist=1.5)
+        spray_paths(cv, paths_px, mix(color, WHITE, 0.75), r, tube_m * PX * 0.5, drips=0, mist=0.3)
+        return light_drips(cv, color, r, rate=0.08)
     cv.over(color, np.clip(wide, 0, 0.6))
     cv.over(color, np.clip(near, 0, 0.85))
     flat(cv, tube, mix(color, WHITE, 0.25))
@@ -657,6 +759,8 @@ def neon(text, color, r, height_m=0.3, script=True, tube_m=0.016, lines=None, ba
 def glitch(text, r, base=WHITE, height_m=0.3, kind='black', bands=7, outline=BLACK, lines=None):
     """Type sliced into bands that slip sideways, with a cyan/magenta split and a few dead blocks."""
     cap = height_m * PX
+    if SPRAY:
+        kind = 'black'
     m = type_masks(lines or text.split('\n'), kind, cap, r, tracking=0.02, line_gap=1.2, per_letter=False)[0][0]
     pad = int(cap * 0.5)
     m = crop_masks([m], pad)[0]
@@ -687,6 +791,9 @@ def glitch(text, r, base=WHITE, height_m=0.3, kind='black', bands=7, outline=BLA
         blk = np.zeros((H, W), bool)
         blk[int(y0):int(y0 + bh), int(x0):int(x0 + bw)] = True
         flat(cv, blk, [CYAN, MAGENTA, base, BLACK][r.integers(4)], 0.9)
+    if SPRAY:
+        grown = M.grow(cv, bottom=int(PX * 0.1))
+        return light_drips(grown, base, r, np.pad(main, ((0, grown.h - H), (0, 0))), rate=0.12)
     return cv
 
 
@@ -739,6 +846,9 @@ def halftone(text, fill, r, height_m=0.4, dot=None, outline=BLACK, shadow=BLACK,
         flat(cv, inner & dots, dot)
         hi = inner & ~shift(inner, -max(1, cap * 0.035), -max(1, cap * 0.035)) & (t < 0.55)
         cv.over(WHITE, hi * 0.8)
+    if SPRAY:
+        grown = M.grow(cv, bottom=int(PX * 0.12))
+        return light_drips(grown, outline, r, np.pad(outer, ((0, grown.h - H), (0, 0))), rate=0.15)
     return cv
 
 
@@ -807,7 +917,7 @@ def speech(lines, r, kind='round', fill=WHITE, line=BLACK, ink=BLACK, height_m=0
     paint_mask(cv, dilate(b, width_m * PX * 0.9), line, r, soft=0.85, mist=0.6)
     paint_mask(cv, b, fill, r, soft=0.95, mist=0.4)
     ox, oy = cx - W / 2, cy - H / 2
-    can = G.Can(cv, ink, max(2.2, hp * 0.13), r, marker=True)
+    can = G.Can(cv, ink, max(2.2, hp * (0.15 if SPRAY else 0.13)), r, marker=not SPRAY, drips=0.06 if SPRAY else 1.0)
     for p in paths:
         can.stroke(p + (ox, oy))
     can.spray()
@@ -1031,21 +1141,52 @@ def rng(name, seed):
     return np.random.default_rng(zlib.crc32(name.encode()) + seed * 7919)
 
 
+# after review (/graffiti, 8 Nov): redone in spray mode, "more like spray paint (not too many drips)"
+SPRAYED = {'ps_appraisal', 'rn_appraisal', 'ht_bonk', 'sb_bonk', 'ps_borntomon', 'tk_buyswagcoinnow', 'ne_collectooooor',
+           'ps_crucifyhim', 'gl_gan_long', 'tk_gan_long', 'gl_generativeart', 'mo_generativeart', 'ht_gottamint',
+           'mo_gottamint', 'ps_gucci', 'rn_gucci', 'sl_imcollecting', 'gl_j48baforms', 'sb_keepspittin', 'ht_lowbie',
+           'ht_nfts', 'rn_noididnot', 'mo_oldmodels', 'sb_oldmodels', 'ht_organicevolution', 'ps_organicevolution',
+           'ne_roundnround', 'sl_seedoilfree', 'sl_shoutout', 'sc_shoutout', 'bb_counterterroristswin'}
+
+
+def sprayed_lines(lines, colors, r, height_m=0.13, width_m=0.014, hearts=0):
+    """sprayed handwriting, a colour per line, a heart or two"""
+    parts = [trim(G.scrawl([t], c, r, height_m, width_m, drips=0.04)) for t, c in zip(lines, colors)]
+    out = stack(parts, int(height_m * PX * 0.25), 'left')
+    for k in range(hearts):
+        size = height_m * PX * 2.2
+        h = G.Canvas(size * 1.4, size * 1.4)
+        spray_paths(h, [np.array(M.heart_path(h.w / 2, h.h / 2, size * 0.42))], colors[k % len(colors)], r, width_m * PX,
+                    drips=0.2)
+        h = trim(h)
+        out = M.side_by_side(out, h, int(PX * 0.04), 'center') if k == 0 else stack([out, h], 0, 'right')
+    return out
+
+
 def build_third(seed=11, only=None):
     """name -> Canvas, two takes on each phrase in two of the new families"""
     P = {}
 
+    global SPRAY, _R
+
     def add(name, fn):
+        global SPRAY, _R
         if only and not any(o in name for o in only):
             return
-        P[name] = trim(fn(rng(name, seed)), 6)
+        r = rng(name, seed)
+        SPRAY, _R = name in SPRAYED, np.random.default_rng(zlib.crc32(name.encode()) + 17)
+        G.KERN = 0.0
+        try:
+            P[name] = trim(fn(r), 6)
+        finally:
+            SPRAY = False
 
     # Seed-Oil Free
     add('sg_seedoilfree', lambda r: sign('seal', r, top='SEED-OIL', bottom='FREE', color=FOREST, ink=CREAM))
     add('sl_seedoilfree', lambda r: slap('vinyl', r, lines=['Seed-Oil', 'Free'], color=FOREST, ink=LIME, size_m=0.71))
     # NFTs
     add('gl_nfts', lambda r: glitch('NFTs', r, WHITE, 0.4))
-    add('ht_nfts', lambda r: halftone('NFTs', MAGENTA, r, 0.42, dot=GRAPE))
+    add('ht_nfts', lambda r: halftone('NFTs', MAGENTA, r, 0.42, dot=GRAPE, shadow=GRAPE))
     # we could go pixel for pixel
     add('mo_pixelforpixel', lambda r: mosaic(['WE COULD GO', 'PIXEL FOR PIXEL'], r, 0.04, 7, colors=(HOTPINK, SKY, YELLOW),
                                              shade=NAVY))
@@ -1075,7 +1216,9 @@ def build_third(seed=11, only=None):
     add('bb_art', lambda r: blockbuster('ART', WHITE, BLACK, r, 0.55, fill2=SILVER, shadow=HOTPINK, cut=BLACK))
     add('ne_art', lambda r: neon('art', CYAN, r, 0.36))
     # shoutout all my furries shoutout all my gays
-    add('ch_shoutout', lambda r: chalk(['shoutout all my furries', 'shoutout all my gays'], r, 0.165, hearts=2))
+    add('sc_shoutout', lambda r: sprayed_lines(['shoutout all my furries', 'shoutout all my gays'], [HOTPINK, SKY], r, 0.17,
+                                               width_m=0.02,
+                                               hearts=1))
     add('sl_shoutout', lambda r: slap('label', r, lines=['shoutout all my furries', 'shoutout all my gays'], size_m=1.15))
     # drilady2
     add('ht_drilady2', lambda r: halftone('drilady2', HOTPINK, r, 0.3, dot=BLOOD, kind='black'))
@@ -1094,7 +1237,7 @@ def build_third(seed=11, only=None):
     add('ne_imissbug', lambda r: neon('i miss bug', (1.0, 0.85, 0.3), r, 0.26))
     add('sl_imissbug', lambda r: slap('hello', r, lines=['i miss bug'], color=BLOOD, size_m=0.66))
     # GP85
-    add('bb_gp85', lambda r: blockbuster('GP85', TOXIC, BLACK, r, 0.5, fill2=LIME, shadow=FOREST, cut=BLACK))
+    add('bb_gp85', lambda r: blockbuster('GP85', SILVER, BLACK, r, 0.5, fill2=WHITE, shadow=BLOOD, cut=None, streak=0.35, drips=0.25))
     add('mo_gp85', lambda r: mosaic(['GP85'], r, 0.064, 7, colors=(ORANGE, YELLOW), shade=BROWN))
     # lamb
     add('ne_lamb', lambda r: neon('lamb', WHITE, r, 0.4, backing=None))
@@ -1104,7 +1247,7 @@ def build_third(seed=11, only=None):
     add('ps_gucci', lambda r: poster(['GUCCI GUCCI', 'LOUISE LOUISE', 'FENDI FENDI', 'PRADA'], r, width_m=1.24, sheet=PAPER,
                                      ink=BLACK, font_kind='serif', line_gap=1.2))
     # lowbie
-    add('ht_lowbie', lambda r: halftone('lowbie', SKY, r, 0.34, dot=COBALT, burst=YELLOW))
+    add('ht_lowbie', lambda r: halftone('lowbie', SKY, r, 0.34, dot=COBALT, shadow=NAVY))
     add('sl_lowbie', lambda r: slap('vinyl', r, text='lowbie', color=HOTPINK, ink=WHITE, size_m=0.65))
     # FAIRYBABY
     add('ne_fairybaby', lambda r: neon('FAIRYBABY', (1.0, 0.55, 0.9), r, 0.26, script=False))
@@ -1122,7 +1265,7 @@ def build_third(seed=11, only=None):
     add('bb_dido', lambda r: blockbuster('DIDO', WHITE, BLACK, r, 0.5, fill2=SKY, shadow=COBALT, cut=BLACK))
     add('ht_dido', lambda r: halftone('DIDO', YELLOW, r, 0.42, dot=ORANGE))
     # TOJI CPU CORP
-    add('sg_tojicpucorp', lambda r: sign('plaque', r, words=['TOJI', 'CPU CORP'], color=NAVY, cap_m=0.09))
+    add('sg_tojicpucorp', lambda r: sign('plaque', r, words=['TOJIBA', 'CPU CORP'], color=NAVY, cap_m=0.17))
     add('tk_tojicpucorp', lambda r: ticker(['TOJI CPU CORP'], r, color=RED))
     # TEENAGE MUTANT NINJA ARTISTS
     add('ht_tmna', lambda r: halftone('TEENAGE MUTANT\nNINJA ARTISTS', LIME, r, 0.15, dot=FOREST, burst=ORANGE))
@@ -1162,7 +1305,7 @@ def build_third(seed=11, only=None):
     add('mo_j48baforms', lambda r: mosaic(['J48BAFORMS'], r, 0.042, 7, colors=(LIME, MINT), frame=CHARCOAL, back=BLACK))
     # BONK
     add('sb_bonk', lambda r: speech(['BONK!'], r, 'shout', fill=ORANGE, height_m=0.2))
-    add('ht_bonk', lambda r: halftone('BONK!', RED, r, 0.45, dot=OXBLOOD, burst=YELLOW))
+    add('ht_bonk', lambda r: halftone('BONK!', RED, r, 0.45, dot=OXBLOOD, shadow=YELLOW))      # (no starburst)
     # the appraisal of this piece...
     add('rn_appraisal', lambda r: ransom(['the appraisal of this piece', 'is approximately',
                                          '100 thousand and ten hundred', 'ethereum coins'], r, 0.075))
@@ -1173,6 +1316,9 @@ def build_third(seed=11, only=None):
     add('sg_topspeed', lambda r: sign('speed', r, top=['TOP SPEED', 'RECORD'], number='202', unit='MPH',
                                       scrawl=['surely i can', 'go faster']))
     add('ch_topspeed', lambda r: chalk(['top speed record 202mph', 'surely i can go faster'], r, 0.165, underline=True))
+    # counter-terrorists win! (redone from the earlier batch's throw-up, in a new style)
+    add('bb_counterterroristswin', lambda r: blockbuster('COUNTER-\nTERRORISTS WIN!', SKY, NAVY, r, 0.3, fill2=WHITE,
+                                                         shadow=BLACK, streak=0.35, drips=0.2))
     # PUMP
     add('cx_pump', lambda r: chart(r, big='PUMP', up=True, n=12))
     add('bb_pump', lambda r: blockbuster('PUMP', LIME, BLACK, r, 0.5, fill2=TOXIC, shadow=FOREST, cut=BLACK))

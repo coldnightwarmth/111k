@@ -640,7 +640,7 @@ STRAIGHT, WILD, SEMI, ANGTHROW = G.STRAIGHT, G.WILD, G.SEMI, G.ANGTHROW
 NODRIPS_NEW = {'tu_13less33', 'ol_digitalmonsters', 'tu_friendslop', 'tu_gummydeino', 'tu_hachieproud', 'bf_ihavenomoney',
                'pc_nevermintingout', 'tu_omom', 'pc_parkerito', 'pc_swords2', 'sc_whokilledtheblockchain', 'pc_yechelange',
                'tu_bunnyhop'}
-KERN_NEW = {'mp_aislop', 'dd_allthesesquares', 'rl_fuckcern', 'ex_imdisassociating', 'tu_ijest', 'mk_minimalism',
+KERN_NEW = {'tu_bunnyhop', 'mp_aislop', 'dd_allthesesquares', 'rl_fuckcern', 'ex_imdisassociating', 'tu_ijest', 'mk_minimalism',
             'mk_onehundredeleventhousand', 'mp_youvebeenliquidated'}
 
 
@@ -678,7 +678,7 @@ def build_extra(seed=5, only=None):
     add('ol_solanablockchainsimulator', lambda r: outline3d('SOLANA\nBLOCKCHAIN\nSIMULATOR', BLACK, r, 0.3, fill=MINT, block_fill=None))
     # counterterrorists win!
     add('pl_counterterroristswin', lambda r: placa('COUNTER-TERRORISTS WIN!', BLACK, r, 0.16, shadow=BLOOD))
-    add('tu_counterterroristswin', lambda r: G.piece('COUNTER-\nTERRORISTS WIN!', WHITE, NAVY, r, 0.32, shadow=COBALT, shine=None, **ANGTHROW))
+    # (the throw-up was redone after review: bb_counterterroristswin in tools/graffiti_third.py)
     # '21 never ended
     add('mk_21neverended', lambda r: G.marker('', BLACK, r, 0.09, lines=["'21 NEVER ENDED"]))
     add('wk_21neverended', lambda r: wicket("'21 NEVER ENDED", BLACK, r, 0.42, 0.011))
