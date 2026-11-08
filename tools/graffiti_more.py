@@ -636,6 +636,14 @@ RED, CREAM, BROWN, MAUVE = (0.88, 0.1, 0.08), (0.98, 0.9, 0.62), (0.3, 0.14, 0.0
 STRAIGHT, WILD, SEMI, ANGTHROW = G.STRAIGHT, G.WILD, G.SEMI, G.ANGTHROW
 
 
+# after review (/graffiti): remade just as they were, but without drips, or with their letters spaced out
+NODRIPS_NEW = {'tu_13less33', 'ol_digitalmonsters', 'tu_friendslop', 'tu_gummydeino', 'tu_hachieproud', 'bf_ihavenomoney',
+               'pc_nevermintingout', 'tu_omom', 'pc_parkerito', 'pc_swords2', 'sc_whokilledtheblockchain', 'pc_yechelange',
+               'tu_bunnyhop'}
+KERN_NEW = {'mp_aislop', 'dd_allthesesquares', 'rl_fuckcern', 'ex_imdisassociating', 'tu_ijest', 'mk_minimalism',
+            'mk_onehundredeleventhousand', 'mp_youvebeenliquidated'}
+
+
 def rng(name, seed):
     return np.random.default_rng(zlib.crc32(name.encode()) + seed * 1000003)
 
@@ -648,7 +656,12 @@ def build_extra(seed=5, only=None):
     def add(name, fn):
         if only and not any(o in name for o in only):
             return
-        P[name] = fn(rng(name, seed))
+        G.NODRIPS, G.KERN = name in NODRIPS_NEW, G.KERN_SPACE if name in KERN_NEW else 0.0
+        try:
+            cv = fn(rng(name, seed))
+        finally:
+            G.NODRIPS, G.KERN = False, 0.0
+        P[name] = trim(cv) if name in NODRIPS_NEW else cv     # (no room left at the bottom for drips)
 
     # i can sleep anywhere
     add('sp_icansleepanywhere', lambda r: script('i can sleep\nanywhere', BUBBLEGUM, r, 0.2, 0.026, outline=BLACK))
@@ -664,8 +677,8 @@ def build_extra(seed=5, only=None):
     add('sn_solanablockchainsimulator', lambda r: cutstencil('SOLANA BLOCKCHAIN\nSIMULATOR', GRAPE, r, 0.15, fade=0.05))
     add('ol_solanablockchainsimulator', lambda r: outline3d('SOLANA\nBLOCKCHAIN\nSIMULATOR', BLACK, r, 0.3, fill=MINT, block_fill=None))
     # counterterrorists win!
-    add('pl_counterterroristswin', lambda r: placa('COUNTER-TERRORISTS\nWIN!', BLACK, r, 0.16, shadow=BLOOD, underline=True))
-    add('sn_counterterroristswin', lambda r: cutstencil('COUNTER-TERRORISTS\nWIN!', COBALT, r, 0.15, fade=0.1))
+    add('pl_counterterroristswin', lambda r: placa('COUNTER-TERRORISTS WIN!', BLACK, r, 0.16, shadow=BLOOD))
+    add('tu_counterterroristswin', lambda r: G.piece('COUNTER-\nTERRORISTS WIN!', WHITE, NAVY, r, 0.32, shadow=COBALT, shine=None, **ANGTHROW))
     # '21 never ended
     add('mk_21neverended', lambda r: G.marker('', BLACK, r, 0.09, lines=["'21 NEVER ENDED"]))
     add('wk_21neverended', lambda r: wicket("'21 NEVER ENDED", BLACK, r, 0.42, 0.011))
@@ -673,16 +686,16 @@ def build_extra(seed=5, only=None):
     # t + m in a heart
     add('dd_tm_heart', lambda r: heart('T+M', BLOOD, r, 0.5, 0.022, fill=BUBBLEGUM, text_color=BLOOD))
     add('mk_tm_heart', lambda r: heart('T + M', BLACK, r, 0.3, 0.02, mode='marker'))
-    add('ex_tm_heart', lambda r: heart('T+M', BONE, r, 0.22, mode='scratch', arrow=False))
+    add('ex_ma_heart', lambda r: heart('M+A', BONE, r, 0.22, mode='scratch', arrow=False))
     # you only know my swag, not my lore
     add('sc_youonlyknowmyswag', lambda r: G.scrawl(['you only know my swag,', 'not my lore'], BLACK, r, 0.15, 0.015))
     add('sp_youonlyknowmyswag', lambda r: script('you only know my swag,\nnot my lore', GOLD, r, 0.16, 0.022, outline=BLACK))
     # HACHIE PROUD
     add('tu_hachieproud', lambda r: G.piece('HACHIE\nPROUD', SILVER, BLACK, r, 0.45, fill_style='chrome', block=COBALT, shine=None, **STRAIGHT))
-    add('pl_hachieproud', lambda r: placa('HACHIE PROUD', BLACK, r, 0.3, shadow=GOLD))
+    add('bf_hachieproud', lambda r: busflow('HACHIE PROUD', COBALT, r, 0.32, 0.018, lift=True, outline=BLACK))
     # YOU ARE THE EXPERIMENT
     add('sn_youaretheexperiment', lambda r: cutstencil('YOU ARE THE\nEXPERIMENT', BLACK, r, 0.16, fade=0.05))
-    add('wk_youaretheexperiment', lambda r: wicket('YOU ARE THE EXPERIMENT', TOXIC, r, 0.38, 0.011, outline=BLACK))
+    add('wk_youaretheexperiment', lambda r: wicket('YOU ARE THE EXPERIMENT', TOXIC, r, 0.38, 0.011, outline=BLACK, bars=0, curls=False))
     # WHO KILLED THE BLOCKCHAIN??
     add('mp_whokilledtheblockchain', lambda r: mop('', BLOOD, r, 0.26, 0.022, lines=['WHO KILLED', 'THE BLOCKCHAIN??'], drip_rate=1.8))
     add('sc_whokilledtheblockchain', lambda r: G.scrawl(['WHO KILLED THE', 'BLOCKCHAIN??'], BLACK, r, 0.17, 0.017, drips=1.6))
@@ -693,14 +706,15 @@ def build_extra(seed=5, only=None):
     add('mp_youvebeenliquidated', lambda r: mop('', BLOOD, r, 0.3, 0.026, lines=["YOU'VE BEEN", 'LIQUIDATED'], drip_rate=2.0, drip_len=0.6))
     add('sn_youvebeenliquidated', lambda r: cutstencil("YOU'VE BEEN\nLIQUIDATED", RED, r, 0.16, fade=0.05))
     # NON FUNCTIONING TESTICLES
-    add('pl_nonfunctioningtesticles', lambda r: placa('NON FUNCTIONING\nTESTICLES', BLACK, r, 0.17, shadow=SILVER))
-    add('wk_nonfunctioningtesticles', lambda r: wicket('NON FUNCTIONING TESTICLES', BLACK, r, 0.36, 0.01))
+    add('tu_nonfunctioningtesticles', lambda r: G.piece('NON FUNCTIONING\nTESTICLES', BONE, OXBLOOD, r, 0.34, shadow=BLACK, shine=None,
+                                                       **ANGTHROW))
+    add('sc_nonfunctioningtesticles', lambda r: G.scrawl(['NON FUNCTIONING', 'TESTICLES'], RED, r, 0.17, 0.017))
     # minimalism
     add('mk_minimalism', lambda r: minimalism(r, BLACK))
-    add('sp_minimalism', lambda r: script('minimalism', WHITE, r, 0.1, 0.012, swash=False, mist=0.3, drips=0))
+    add('ex_minimalism', lambda r: scratch2('minimalism', r, 0.09))
     # MALEVICH
     add('dd_malevich_square', lambda r: malevich(r))
-    add('pl_malevich', lambda r: suprematist(r))
+    add('pl_malevich', lambda r: placa('MALEVICH', BLACK, r, 0.3, drips=0.1))
     # all these squares make a circle
     add('dd_allthesesquares', lambda r: ring_with_words(r, BLACK, filled=True, words=['all these', 'squares make', 'a circle'], word_color=BLACK))
     add('sp_allthesesquares', lambda r: ring_with_words(r, BLOOD, filled=False, words=None, script_words='all these\nsquares make\na circle',
@@ -708,10 +722,10 @@ def build_extra(seed=5, only=None):
     # NEVER MINTING OUT
     add('pc_nevermintingout', lambda r: G.piece('NEVER\nMINTING\nOUT', MINT, BLACK, r, 0.4, fill_style='fade', fill2=TEAL, block=BLACK,
                                                keyline=WHITE, shine=None, stars=2, **SEMI))
-    add('ol_nevermintingout', lambda r: outline3d('NEVER MINTING\nOUT', BLACK, r, 0.36, block_fill=LIME, hatch=False))
+    add('ol_nevermintingout', lambda r: outline3d('NEVER MINTING OUT', BLACK, r, 0.36, block_fill=LIME, hatch=False))
     # I HAVE NO MONEY AND ALSO I'M GAY
     add('sc_ihavenomoney', lambda r: G.scrawl(['I HAVE NO MONEY', "AND ALSO I'M GAY"], HOTPINK, r, 0.17, 0.018))
-    add('wk_ihavenomoney', lambda r: wicket("I HAVE NO MONEY\nAND ALSO I'M GAY", BLACK, r, 0.3, 0.01))
+    add('wk_ihavenomoney', lambda r: wicket("I HAVE NO MONEY\nAND ALSO I'M GAY", BLACK, r, 0.3, 0.01, bars=0, curls=False))
     add('bf_ihavenomoney', lambda r: busflow("I HAVE NO MONEY\nAND ALSO I'M GAY", LILAC, r, 0.2, 0.014, outline=BLACK, underline=False))
     # contract with the angel
     add('hs_contractwiththeangel', lambda r: blackletter_lines(['Contract', 'with the', 'Angel'], BLACK, r, 0.28))
@@ -722,18 +736,19 @@ def build_extra(seed=5, only=None):
     # I'M NOT BAD I'M JUST DRAWN THAT WAY
     add('sc_imnotbad', lambda r: G.scrawl(["I'M NOT BAD", "I'M JUST DRAWN", 'THAT WAY'], OXBLOOD, r, 0.15, 0.016))
     add('mk_imnotbad', lambda r: G.marker('', BLACK, r, 0.07, lines=["i'm not bad", "i'm just drawn that way"]))
-    add('sp_imnotbad', lambda r: script("i'm not bad\ni'm just drawn that way", HOTPINK, r, 0.15, 0.02, outline=BLACK))
+    add('sp_imnotbad', lambda r: script("i'm not bad\ni'm just drawn that way", HOTPINK, r, 0.15, 0.02, outline=BLACK, swash=False))
     # friendslop
     add('tu_friendslop', lambda r: G.piece('FRIENDSLOP', BUBBLEGUM, BLACK, r, 0.45, fill_style='scribble', fat=0.19, shine=WHITE, spacing=0.0))
     add('bf_friendslop', lambda r: busflow('FRIENDSLOP', TEAL, r, 0.3, 0.017))
     # he's choosin texas
-    add('sp_heschoosintexas', lambda r: script("he's choosin\ntexas", WHITE, r, 0.2, 0.027, outline=NAVY))
-    add('pl_heschoosintexas', lambda r: placa("HE'S CHOOSIN\nTEXAS", BLACK, r, 0.2, shadow=RED, underline=True))
+    add('sc_heschoosintexas', lambda r: G.scrawl(["he's choosin", 'texas'], BLACK, r, 0.17, 0.017))
+    add('tu_heschoosintexas', lambda r: G.piece("HE'S CHOOSIN\nTEXAS", ORANGE, BLACK, r, 0.36, fill_style='fade', fill2=RED, shadow=BLACK,
+                                               fat=0.16))
     # AI SLOP
     add('rl_aislop', lambda r: G.roller('AI SLOP', BLACK, r, 0.55))
     add('mp_aislop', lambda r: mop('AI SLOP', TOXIC, r, 0.45, 0.03, style='ignorant', drip_rate=2.0))
     # parker ito
-    add('bf_parkerito', lambda r: busflow('PARKER ITO', BLACK, r, 0.3, 0.017))
+    add('bf_parkerito', lambda r: busflow('PARKER ITO', BLACK, r, 0.3, 0.017, lift=True))
     add('pc_parkerito', lambda r: G.piece('PARKER\nITO', YELLOW, BLACK, r, 0.42, fill_style='fade', fill2=ORANGE, block=BLACK,
                                          keyline=SKY, shine=None, stars=1, **SEMI))
     # ENVIRONMENTAL STORYTELLING
@@ -743,20 +758,19 @@ def build_extra(seed=5, only=None):
     add('mp_fuckcern', lambda r: mop('FUCK CERN', BLACK, r, 0.4, 0.028, drip_rate=1.6))
     add('rl_fuckcern', lambda r: G.roller('FUCK CERN', RED, r, 0.5))
     # BUNNYHOP
-    add('pc_bunnyhop', lambda r: G.piece('BUNNYHOP', LIME, BLACK, r, 0.5, fill_style='split', fill2=SKY, block=BLACK, keyline=WHITE,
-                                        shine=None, stars=2, **WILD))
+    add('ol_bunnyhop', lambda r: outline3d('BUNNYHOP', BLACK, r, 0.45, fill=LIME, hatch=True))
     add('tu_bunnyhop', lambda r: G.piece('BUNNYHOP', WHITE, BLACK, r, 0.45, shadow=HOTPINK, fat=0.18, spacing=0.0))
     # Esoteric Meme Breakdown Pokemon The First Movie
     add('sc_esotericmemebreakdown', lambda r: G.scrawl(['Esoteric Meme Breakdown', 'Pokemon The First Movie'], BLACK, r, 0.14, 0.014))
     add('mk_esotericmemebreakdown', lambda r: G.marker('', COBALT, r, 0.07, lines=['ESOTERIC MEME BREAKDOWN', 'POKEMON THE FIRST MOVIE']))
     # I JEST
     add('tu_ijest', lambda r: G.piece('I JEST', YELLOW, BLACK, r, 0.55, shadow=BLACK, fat=0.18))
-    add('wk_ijest', lambda r: wicket('I JEST', BLACK, r, 0.5, 0.013))
+    add('rl_ijest', lambda r: G.roller('I JEST', BLACK, r, 0.55))
     # Wal-Mart
     add('pl_walmart', lambda r: placa('WAL-MART', BLACK, r, 0.32, shadow=COBALT))
     add('tu_walmart', lambda r: G.piece('WAL-MART', WHITE, RED, r, 0.45, shadow=BLACK, shine=None, **ANGTHROW))
     # LIVE, LAUGH, LOVE
-    add('sp_livelaughlove', lambda r: script('live, laugh, love', BLACK, r, 0.22, 0.026))
+    add('sn_livelaughlove', lambda r: cutstencil('LIVE, LAUGH, LOVE', BLACK, r, 0.16, fade=0.05))
     add('mp_livelaughlove', lambda r: mop('', BLOOD, r, 0.24, 0.022, lines=['LIVE,', 'LAUGH,', 'LOVE'], style='ignorant', drip_rate=2.2, drip_len=0.5))
     # YECHE LANGE
     add('pc_yechelange', lambda r: G.piece('YECHE\nLANGE', SILVER, BLACK, r, 0.45, fill_style='chrome', block=GRAPE, keyline=BLACK,
@@ -766,15 +780,16 @@ def build_extra(seed=5, only=None):
     add('sp_imdisassociating', lambda r: script("i'm disassociating", SKY, r, 0.18, 0.022, mist=1.2))
     add('ex_imdisassociating', lambda r: G.scratch("i'm disassociating", r, height_m=0.09))
     # LOOK HOW BEAUTIFUL THE WORLD
-    add('rl_lookhowbeautiful', lambda r: G.roller('LOOK HOW BEAUTIFUL\nTHE WORLD', WHITE, r, 0.28))
-    add('sp_lookhowbeautiful', lambda r: script('look how beautiful\nthe world', TANGERINE, r, 0.19, 0.025, outline=BLACK))
+    add('tu_lookhowbeautiful', lambda r: G.piece('LOOK HOW BEAUTIFUL\nTHE WORLD', SKY, NAVY, r, 0.3, fill_style='fade', fill2=MINT,
+                                                backdrop=(CREAM, BLACK), shadow=NAVY, fat=0.15))
+    add('mk_lookhowbeautiful', lambda r: G.marker('', BLACK, r, 0.08, lines=['look how beautiful', 'the world']))
     # super metal mons
-    add('pc_supermetalmons', lambda r: G.piece('SUPER METAL\nMONS', SILVER, BLACK, r, 0.4, fill_style='chrome', block=BLOOD, keyline=YELLOW,
-                                              shine=None, stars=2, **SEMI))
-    add('pl_supermetalmons', lambda r: placa('SUPER METAL MONS', CHARCOAL, r, 0.24, shadow=SILVER, underline=True))
+    add('rl_supermetalmons', lambda r: G.roller('SUPER METAL\nMONS', WHITE, r, 0.4))
+    add('bf_supermetalmons', lambda r: busflow('SUPER METAL MONS', BLACK, r, 0.3, 0.017, lift=True))
     # drain dratini theology
     add('hs_draindratinitheology', lambda r: blackletter_lines(['Drain', 'Dratini', 'Theology'], OXBLOOD, r, 0.26))
-    add('pl_draindratinitheology', lambda r: placa('DRAIN DRATINI\nTHEOLOGY', COBALT, r, 0.18, shadow=WHITE, underline=True))
+    add('pc_draindratinitheology', lambda r: G.piece('DRAIN DRATINI\nTHEOLOGY', COBALT, BLACK, r, 0.34, fill_style='fade', fill2=SKY,
+                                                    block=NAVY, keyline=WHITE, shine=None, stars=1, **SEMI))
     # REDEEMED
     add('pc_redeemed', lambda r: G.piece('REDEEMED', GOLD, BLACK, r, 0.5, fill_style='fade', fill2=ORANGE, block=OXBLOOD, keyline=WHITE,
                                         shine=None, stars=3, **WILD))
@@ -800,8 +815,9 @@ def build_extra(seed=5, only=None):
     add('tu_13less33', lambda r: G.piece('13<33', HOTPINK, BLACK, r, 0.55, shadow=BLACK, fat=0.18, shine=WHITE))
     add('mk_13less33', lambda r: G.marker('', BLOOD, r, 0.1, lines=['13<33']))
     # BORED GAY LOSER CLUB
-    add('pl_boredgayloserclub', lambda r: placa('BORED GAY\nLOSER CLUB', BLACK, r, 0.22, shadow=HOTPINK, underline=True))
-    add('sn_boredgayloserclub', lambda r: cutstencil('BORED GAY\nLOSER CLUB', HOTPINK, r, 0.16, fade=0.05))
+    add('pl_boredgayloserclub', lambda r: placa('BORED GAY\nLOSER CLUB', BLACK, r, 0.22, shadow=HOTPINK))
+    add('tu_boredgayloserclub', lambda r: G.piece('BORED GAY\nLOSER CLUB', HOTPINK, BLACK, r, 0.38, fill_style='fade', fill2=LILAC,
+                                                 shadow=BLACK, fat=0.16, shine=WHITE))
     return P
 
 

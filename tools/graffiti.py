@@ -1020,7 +1020,7 @@ WALL_KERN = {'tag_111k_big', 'ex_111k', 'tu_fool', 'hs_drifella', 'sc_greed', 'h
              'mk_mmm', 'sc_newgen', 'sc_twosides'}
 KERN_SPACE = 0.13
 # redone in a new style: new name (its style prefix) or None to keep the name
-WALL_REDO = {'tu_loop_classic': 'mp_loop', 'hs_luhfella': 'bf_luhfella', 'tag_mein': 'wk_mein', 'hs_parker': 'bf_parker',
+WALL_REDO = {'tu_loop_classic': 'bf_loop', 'hs_luhfella': 'sn_luhfella', 'tag_mein': 'wk_mein', 'hs_parker': 'ol_parker',
              'tu_turtle': 'ol_turtle', 'tu_nap': None, 'ex_nap': None, 'ex_galaxy': None}
 DISPLAY_NAMES = {k: v for k, v in WALL_REDO.items() if v}
 
@@ -1028,13 +1028,13 @@ DISPLAY_NAMES = {k: v for k, v in WALL_REDO.items() if v}
 def _redo(name, r):
     import graffiti_more as M          # (the newer styles live there)
     if name == 'tu_loop_classic':
-        return M.mop('LOOP', (0.95, 0.35, 0.62), r, 0.6, 0.04, drip_rate=1.2)
+        return M.busflow('LOOP', (0.95, 0.35, 0.62), r, 0.6, 0.032, lift=True, outline=BLACK)
     if name == 'hs_luhfella':
-        return M.busflow('LUH\nFELLA', (0.7, 0.05, 0.04), r, 0.4, 0.022)
+        return M.cutstencil('LUH\nFELLA', (0.7, 0.05, 0.04), r, 0.3)
     if name == 'tag_mein':
         return M.wicket('MEIN', BLACK, r, 0.8, 0.02, bars=0, curls=False)
     if name == 'hs_parker':
-        return M.busflow('PARKER', (0.13, 0.13, 0.15), r, 0.4, 0.022, lift=True)
+        return M.outline3d('PARKER', BLACK, r, 0.6, fill=(0.99, 0.85, 0.12), hatch=True)
     if name == 'tu_turtle':
         return M.outline3d('TURTLE', BLACK, r, 0.6, block_fill=(0.1, 0.3, 0.15), hatch=False, fill=(0.45, 0.8, 0.4))
     if name == 'tu_nap':       # the same, with a fatter bowl on the a so it reads as one
