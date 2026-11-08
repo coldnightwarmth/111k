@@ -1,4 +1,4 @@
-"""Writes the spray-can-only graffiti (tools/graffiti_more.py) to its own atlas next to the level:
+"""Writes the spray-can-only graffiti (tools/graffiti_more.py and tools/graffiti_third.py) to its own atlas next to the level:
 assets/env/world-tags.json (where each piece sits) and assets/env/world-tags-N.webp (the pages).
 The game loads these alongside the world and adds them to the spray cans' list; nothing here is painted
 onto the walls, so the world doesn't need rebuilding or re-lighting.
@@ -12,12 +12,16 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import graffiti as G          # noqa: E402
 import graffiti_more as M     # noqa: E402
+import graffiti_third as T    # noqa: E402
 
 OUT = os.path.join(HERE, '..', 'assets', 'env')
 
 if __name__ == '__main__':
     t = time.time()
     pieces = M.build_extra()
+    third = T.build_third()
+    assert not set(third) & set(pieces), set(third) & set(pieces)
+    pieces.update(third)
     pages = G.pack_pages(pieces, width=2048, max_h=2048)
     meta = {'pages': len(pages), 'graffiti': []}
     total = 0

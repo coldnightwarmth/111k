@@ -9,8 +9,14 @@ const $ = id => document.getElementById(id);
 const LABEL = {good: 'good', remove: 'remove', redo: 'redo', kern: 'kerning', nodrips: 'remove drips'};
 const STYLE = {tag: 'tag', wk: 'philly wickets', bf: 'busflow', mp: 'mop', tu: 'throw-up', pc: 'piece', ol: 'hollow 3D', pl: 'placa',
   hs: 'chisel handstyle', sp: 'brush script', fx: 'extinguisher', rl: 'roller', sc: 'sprayed writing', sn: 'stencil', mk: 'marker',
-  ex: 'scratched', dd: 'doodle'};
-const STYLE_ORDER = ['tag', 'wk', 'bf', 'mp', 'tu', 'pc', 'ol', 'pl', 'hs', 'sp', 'fx', 'rl', 'sc', 'sn', 'mk', 'ex', 'dd'];
+  ex: 'scratched', dd: 'doodle', bb: 'blockbuster', sl: 'sticker', ps: 'wheatpaste poster', rn: 'ransom cut-up', mo: 'tile mosaic',
+  tk: 'LED ticker', ne: 'neon', gl: 'glitch', ht: 'pop-art halftone', ch: 'chalk', sb: 'speech balloon', sg: 'sign', cx: 'chart',
+  rb: 'ribbon letters'};
+// the latest batch's families (tools/graffiti_third.py), for the "latest batch" filter
+const LATEST = new Set(['bb', 'sl', 'ps', 'rn', 'mo', 'tk', 'ne', 'gl', 'ht', 'ch', 'sb', 'sg', 'cx', 'rb']);
+const isLatest = p => LATEST.has(p.name.split('_')[0]);
+const STYLE_ORDER = ['tag', 'wk', 'bf', 'mp', 'tu', 'pc', 'bb', 'ol', 'pl', 'hs', 'sp', 'ne', 'rb', 'ht', 'gl', 'fx', 'rl', 'sc', 'sn',
+  'mo', 'tk', 'cx', 'sb', 'sl', 'ps', 'rn', 'sg', 'ch', 'mk', 'ex', 'dd'];
 const keyOf = name => { const [style, word = '', ...rest] = name.split('_'), k = STYLE_ORDER.indexOf(style);
   return [word, k < 0 ? STYLE_ORDER.length : k, rest.join('_')]; };
 const byWord = (a, b) => { const x = keyOf(a.name), y = keyOf(b.name);
@@ -135,16 +141,17 @@ async function loadReview() {
 // ------------------------------------------------------------------ the list
 const cards = new Map();   // name -> {el, piece}
 const counts = () => {
-  const c = {all: all.length, todo: 0, good: 0, remove: 0, redo: 0, kern: 0, nodrips: 0, notes: 0, cans: 0, walls: 0, done: 0};
+  const c = {all: all.length, todo: 0, good: 0, remove: 0, redo: 0, kern: 0, nodrips: 0, notes: 0, cans: 0, walls: 0, latest: 0, done: 0};
   for (const p of all) {
     const e = entry(p.name);
     if (e.s) { c[e.s]++; c.done++; } else c.todo++;
     if (e.note) c.notes++;
     c[p.walls ? 'walls' : 'cans']++;
+    if (isLatest(p)) c.latest++;
   }
   return c;
 };
-const FILTERS = [['all', 'all'], ['todo', 'to review'], ['good', 'good'], ['remove', 'remove'], ['redo', 'redo'], ['kern', 'kerning'], ['nodrips', 'remove drips'],
+const FILTERS = [['all', 'all'], ['latest', 'latest batch'], ['todo', 'to review'], ['good', 'good'], ['remove', 'remove'], ['redo', 'redo'], ['kern', 'kerning'], ['nodrips', 'remove drips'],
   ['notes', 'with notes'], ['cans', 'new (cans only)'], ['walls', 'on the walls']];
 function refreshFilters() {
   const c = counts(), nav = $('filters');
@@ -165,6 +172,7 @@ function matches(p) {
     case 'notes': return !!e.note;
     case 'cans': return !p.walls;
     case 'walls': return p.walls;
+    case 'latest': return isLatest(p);
     default: return true;
   }
 }

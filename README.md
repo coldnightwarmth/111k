@@ -97,7 +97,11 @@ python3 tools/build_world.py --fast --preview   # quick bake + preview renders i
    can, with paint building up where the hand slows, overspray and drips.
    More pieces just for the spray cans come from `tools/graffiti_more.py`
    (cholo placas, Philly wickets, Bay Area busflow, mop drips, brush script,
-   hollow 3D throws, hand-cut stencils) and are written to their own atlas,
+   hollow 3D throws, hand-cut stencils) and `tools/graffiti_third.py`
+   (blockbusters, stickers, wheatpaste posters, ransom-note cut-ups, tile
+   mosaics, LED tickers, neon, glitch, pop-art halftone, chalk, comic
+   balloons, doctored signs, candlestick charts, ribbon letters), and are
+   written to their own atlas,
    `assets/env/world-tags*`, by `python3 tools/graffiti_tags.py`, so adding
    to them never needs the world rebuilt.
 3. Blender packs lightmap UVs, bakes direct and bounced light with Cycles and
