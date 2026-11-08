@@ -1,4 +1,5 @@
 // In front of the site's files on Cloudflare (wrangler.site.jsonc; it only runs for the paths listed there):
+//  - /anim and /graffiti (tools for working on the space) aren't here at all: they're only on the GitHub copy.
 //  - until the launch (11/11/2026 11:11 am Eastern), the pages show "111k - soon" instead of the game, in the
 //    look of the "going down…" screen; at the launch they open by themselves, nothing to deploy. (The copy on
 //    GitHub Pages isn't behind this, so it stays open for testing.)
@@ -44,6 +45,8 @@ const soon = left => `<!doctype html>
 export default {
   async fetch(request, env) {
     const url = new URL(request.url), path = url.pathname, left = LAUNCH - Date.now();
+    // the emote previewer and the graffiti review are tools for working on the space: only on the GitHub copy
+    if (/^\/(anim|graffiti)(\/|$)/.test(path)) return new Response('Not found', {status: 404, headers: {'Cache-Control': 'no-store'}});
     if (left > 0 && (request.method === 'GET' || request.method === 'HEAD') && !path.startsWith('/assets/'))
       return new Response(request.method === 'HEAD' ? null : soon(left),
         {headers: {'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'X-Robots-Tag': 'noindex'}});

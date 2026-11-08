@@ -1,5 +1,6 @@
 // The site itself on Cloudflare (Workers static assets: the files tools/build_site.sh builds; site/worker.js only
-// sees the pages, for the "soon" page until the launch, and /assets, to compress the .glb models),
+// sees the pages, for the "soon" page until the launch and to keep /anim and /graffiti off this copy, and
+// /assets, to compress the .glb models),
 // deployed by .github/workflows/site.yml. Served with brotli, HTTP/3 and the cache headers in _site/_headers,
 // at https://111k-site.<account>.workers.dev and the custom domain once it's attached.
 {
