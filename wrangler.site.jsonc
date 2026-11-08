@@ -1,0 +1,14 @@
+// The site itself on Cloudflare (Workers static assets: no code, just the files tools/build_site.sh builds),
+// deployed by .github/workflows/site.yml. Served with brotli, HTTP/3 and the cache headers in _site/_headers,
+// at https://111k-site.<account>.workers.dev and the custom domain once it's attached.
+{
+  "$schema": "https://unpkg.com/wrangler/config-schema.json",
+  "name": "111k-site",
+  "compatibility_date": "2026-10-01",
+  "workers_dev": true,
+  "assets": {
+    "directory": "./_site",
+    "html_handling": "auto-trailing-slash",
+    "not_found_handling": "none"
+  }
+}

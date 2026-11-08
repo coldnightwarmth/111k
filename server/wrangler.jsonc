@@ -9,7 +9,7 @@
   "workers_dev": true,
   "vars": {
     // Sites allowed to connect (comma separated). Add the custom domain here when there is one.
-    "ALLOWED_ORIGINS": "https://coldnightwarmth.github.io",
+    "ALLOWED_ORIGINS": "https://coldnightwarmth.github.io,https://111k-site.meinong.workers.dev,https://1-1-1k.online,https://www.1-1-1k.online",
     "ALLOW_LOCALHOST_ORIGINS": "true"
   },
   // a deploy reaches the running room within seconds (the default lets a busy room run old code
