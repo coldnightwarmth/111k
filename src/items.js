@@ -451,7 +451,7 @@ function artTier(near, far, now) {
   if (far < ART_MID || (now && far < ART_MID_OFF)) return 512;
   return 0;
 }
-let woodTex = null, linenTex = null, primedTex = null;
+let woodTex = null, linenTex = null, primedTex = null, paintingMats = null;
 // white primed canvas: gesso over the weave, the weave just showing through
 function primedTexture() {
   const c = document.createElement('canvas'); c.width = c.height = 64;
@@ -515,12 +515,17 @@ function paintingModel(id, state) {
   quad([[-x, -y, 0], [x, -y, 0], [x, -y, d], [-x, -y, d]], [[0, 0], [tw, 0], [tw, td], [0, td]]);   // bottom
   quad([[x, -y, d], [x, -y, 0], [x, y, 0], [x, y, d]], [[td, 0], [0, 0], [0, th], [td, th]]);       // right
   quad([[-x, -y, 0], [-x, -y, d], [-x, y, d], [-x, y, 0]], [[0, 0], [td, 0], [td, th], [0, th]]);   // left
-  part(g, geo(), new THREE.MeshStandardMaterial({map: primedTex, roughness: .9, metalness: 0}));
-  // the back: raw canvas behind the picture, folded over the stretcher's back edge and stapled
+  // (the materials other than the picture's are the same for every painting: made once, shared)
   woodTex ||= grainTexture(); linenTex ||= linenTexture();
-  const linen = new THREE.MeshStandardMaterial({map: linenTex, roughness: .95, metalness: 0, side: THREE.DoubleSide});
-  const wood = new THREE.MeshStandardMaterial({map: woodTex, roughness: .75, metalness: 0});
-  const staple = std(0x9a9ca0, .4, .8);
+  paintingMats ||= {
+    primed: new THREE.MeshStandardMaterial({map: primedTex, roughness: .9, metalness: 0}),
+    linen: new THREE.MeshStandardMaterial({map: linenTex, roughness: .95, metalness: 0, side: THREE.DoubleSide}),
+    wood: new THREE.MeshStandardMaterial({map: woodTex, roughness: .75, metalness: 0}),
+    staple: std(0x9a9ca0, .4, .8),
+  };
+  part(g, geo(), paintingMats.primed);
+  // the back: raw canvas behind the picture, folded over the stretcher's back edge and stapled
+  const {linen, wood, staple} = paintingMats;
   const back = part(g, new THREE.PlaneGeometry(w - .002, h - .002), linen, [0, 0, d - .0025], [0, Math.PI, 0]);
   back.material = linen;
   // (the bars sit a couple of millimetres inside the canvas's wrapped sides, so the two never fight)
@@ -550,10 +555,20 @@ function paintingModel(id, state) {
   // the pick-up glow: one closed box with its corners' normals shared, so the glow wraps it without gaps
   const ob = glowBoxGeometry(new THREE.Vector3(-x, -y, 0), new THREE.Vector3(x, y, d));
   g.userData = {tip: new THREE.Vector3(0, 0, d), ground: .002, painting: true, w, h, d, art, canvas: front, outline: ob,
+    // its back (raw canvas, stretcher, staples): not drawn while it hangs on a wall, where nothing can see it
+    backMats: [paintingMats.linen, paintingMats.wood, paintingMats.staple],
     // which picture it shows, by how far it is from you (src/items.js frame)
     artAt: (near, far = near) => { const px = artTier(near, far, canvasMat.userData.want); setArt(art, canvasMat, preview, px, px > 512 ? near + 12 : far); },
     artReady: () => { const k = canvasMat.userData.pending; return k ? artTextures.get(k)?.ready : null; }};
   return g;
+}
+
+// a painting's back on or off (its parts found once, after they're merged)
+function showBack(model, u, on) {
+  if (u.backOn === on) return;
+  if (!u.backParts) { u.backParts = []; model.traverse(o => { if (o.isMesh && u.backMats.includes(o.material)) u.backParts.push(o); }); }
+  for (const o of u.backParts) o.visible = on;
+  u.backOn = on;
 }
 
 const MODELS = {flashlight: flashlightModel, paintball: paintballModel, spray: sprayModel, bucket: bucketModel, crown: crownModel, painting: paintingModel};
@@ -923,7 +938,7 @@ export function createItems({scene, camera, hits, shadows = null}) {
       let best = null, bestD = Infinity;
       _ray.set(origin, dir);
       for (const it of items.values()) {
-        if (it.state.holder || !it.model.visible || it.busy) continue;
+        if (it.state.holder || it.busy) continue;
         if (Math.hypot(it.state.x - player.x, it.state.z - player.z) > reach) continue;
         _box.setFromObject(it.model).expandByScalar(.07);
         const hit = _ray.intersectBox(_box, tmpV);
@@ -934,7 +949,7 @@ export function createItems({scene, camera, hits, shadows = null}) {
       return best;
     },
     // paintings that aren't in anyone's hands (on walls, leant, lying about)
-    paintings() { return [...items.values()].filter(it => it.model.userData.painting && !it.state.holder && it.model.visible); },
+    paintings() { return [...items.values()].filter(it => it.model.userData.painting && !it.state.holder); },
     // the nearest painting along a ray: {point, normal (facing the ray), distance, painting, local: {point, normal}}
     paintingHit(origin, dir, far) {
       let best = null;
@@ -990,7 +1005,7 @@ export function createItems({scene, camera, hits, shadows = null}) {
     // world position of an item's business end (muzzle, nozzle, lens)
     tip(it) { it.model.updateMatrixWorld(); return it.model.localToWorld(it.model.userData.tip.clone()); },
     // place every item: on the ground, in a hand, or in your view
-    frame({me, myId, thirdPerson, avatarOf, poseOf, dt, vel = null}) {
+    frame({me, myId, thirdPerson, avatarOf, poseOf, dt, vel = null, cull = null}) {
       glowTime.value += dt;
       let n = 0;
       camera.getWorldPosition(_eye);
@@ -1024,13 +1039,17 @@ export function createItems({scene, camera, hits, shadows = null}) {
         if (it.ghost) it.ghost.ghostAll.value = it.ghost.ghostOn.value = 0;     // (worn, it follows its wearer: below)
         if (!s.holder) {
           if (m.parent !== scene) scene.add(m);
-          m.visible = true;
+          // not drawn where it can't be seen from here (src/cull.js); always while it's on the move
+          m.visible = !cull || !!(it.path || it.fall || it.fly) || cull(s.x, s.z, u.painting ? Math.max(u.w, u.h) / 2 + .1 : .4);
           // lying on its side, head toward its yaw
           m.position.set(s.x, s.y + u.ground, s.z);
           m.rotation.set(0, s.yaw, u.groundRoll, 'YXZ');
           if (u.upright) { m.rotation.set(Math.PI / 2, s.yaw, 0, 'YXZ'); m.position.y = s.y + u.ground; }
           if (u.standing) { m.rotation.set(0, s.yaw, 0); m.position.y = s.y; }
-          if (u.painting) { m.rotation.set(s.tilt || 0, s.yaw, s.roll || 0, 'YXZ'); m.position.set(s.x, s.y, s.z); }   // hung, leant or laid as placed
+          if (u.painting) {                   // hung, leant or laid as placed
+            m.rotation.set(s.tilt || 0, s.yaw, s.roll || 0, 'YXZ'); m.position.set(s.x, s.y, s.z);
+            showBack(m, u, !(typeof s.hung === 'boolean' ? s.hung : Math.abs(s.tilt || 0) < .3 && s.y > .5) || !!(it.path || it.fall || it.fly));
+          }
           u.dock?.();
           if (it.path) {                      // tumbling down as it went for whoever let it go
             const f = it.path, at = (f.t += dt) * PATH_HZ, i = Math.floor(at), last = f.frames.length - 1;
@@ -1095,6 +1114,7 @@ export function createItems({scene, camera, hits, shadows = null}) {
             u.sponge.position.set(-.02 + sc, -.03 + bob + Math.abs(sc) * .4, -.06 - (it.scrub > 0 ? .06 : 0));
             u.sponge.rotation.set(-.9, -.25, .15 + sc * 3);
           } else if (s.type === 'painting') {
+            showBack(m, u, true);
             // carried at your side, turned so you can see the picture
             m.scale.setScalar(.5);
             m.position.set(.1, -.2 + bob, -.16);
@@ -1132,6 +1152,7 @@ export function createItems({scene, camera, hits, shadows = null}) {
           if (s.type === 'spray') m.rotation.set(-.35 + pitch * .5, yaw, 0, 'YXZ');
           else if (s.type === 'bucket' || s.type === 'crown') m.rotation.set(0, yaw, 0);
           else m.rotation.set(pitch, yaw, 0, 'YXZ');
+          if (u.painting) showBack(m, u, true);
           if (s.type === 'painting' && avatar?.hand) {
             // carried at their side by the top of the stretcher, the picture facing out
             m.rotation.set(0, yaw + Math.PI / 2, 0);

@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import {serverUrl, isTouch, lowPower} from './config.js';
 import {loadLevel, createAvatarLights, createFlicker, lighting, ghost} from './level.js';
+import {createCuller, MIXED} from './cull.js';
 import {createCollider, STEP_UP} from './physics.js';
 import {createAvatar, preloadLook, AVATAR_SCALE} from './avatar.js';
 import {createVerticalMovement, createPoseBuffer, EYE_HEIGHT, jumpHeight} from './motion.js';
@@ -132,6 +133,28 @@ async function start() {
   hits.addSolid(shelves);
   // the painting crates: they carry the level's own lightmap coordinates, so paint on them is lit like the walls
   const crates = addCrates(await cratesReady, level, scene);
+  // culling (src/cull.js): the level's chunks and the crates' are fixed, so where each is is worked out once
+  const culler = createCuller(level.meta);
+  const cullItem = (x, z, r) => culler.visible(x, z, r);
+  const cullStatic = [];
+  {
+    const sph = new THREE.Sphere(), add = (mesh, rooms) => {
+      if (!mesh.geometry) return;
+      mesh.geometry.boundingSphere || mesh.geometry.computeBoundingSphere();
+      mesh.updateMatrixWorld();
+      sph.copy(mesh.geometry.boundingSphere).applyMatrix4(mesh.matrixWorld);
+      // in a room only if all of it is, in the tunnel only if none of it reaches a room; otherwise by angle alone
+      const k = culler.roomOf(sph.center.x, sph.center.z), out = Math.hypot(sph.center.x, sph.center.z) - level.meta.loop.radius;
+      const room = !rooms ? MIXED : k >= 0 && out - sph.radius >= 3.7 ? k : k < 0 && out + sph.radius < 3.7 ? -1 : MIXED;
+      cullStatic.push({mesh, x: sph.center.x, z: sph.center.z, r: sph.radius, room});
+    };
+    for (const m of level.meshes) add(m, false);       // (the level's chunks run across tunnel and rooms: by angle only)
+    crates?.traverse(o => { if (o.isMesh) add(o, true); });
+  }
+  function cullStaticNow() {
+    culler.update(camera);
+    for (const c of cullStatic) c.mesh.visible = culler.visible(c.x, c.z, c.r, c.room);
+  }
   if (crates) hits.addPaintable(crates);
   // what blocks flashlight beams: the level (doors included), the lap timer and the shelving
   for (const m of level.meshes) if (!m.material.transparent) castsBeamShadow(m);
@@ -1436,7 +1459,7 @@ async function start() {
     const dx = pos.x - camera.position.x, dz = pos.z - camera.position.z, d = Math.hypot(dx, dz);
     return d < .3 || collider.raycast(camera.position.x, camera.position.z, dx, dz, d, Math.min(camera.position.y, 1.7), 0) >= d - .25;
   }
-  const frameArgs = dt => ({me, myId: network.id, thirdPerson: boom, avatarOf: id => peers.get(id)?.avatar, poseOf: id => peers.get(id)?.last, dt, vel: [player.vx + player.kx, player.vz + player.kz]});
+  const frameArgs = dt => ({me, myId: network.id, thirdPerson: boom, avatarOf: id => peers.get(id)?.avatar, poseOf: id => peers.get(id)?.last, dt, vel: [player.vx + player.kx, player.vz + player.kz], cull: cullItem});
   function saveTab() {
     tabMe.set({look: mine.look, name: mine.name, x: r3(player.x), z: r3(player.z), yaw: r3(controls.state.yaw), pitch: r3(controls.state.pitch), g: r3(player.ground),
       view: thirdPerson ? '3p' : '1p'});
@@ -1692,6 +1715,8 @@ async function start() {
     me.setCrowned(!!network.id && !!items.wornBy(network.id));
     for (const p of peers.values()) p.avatar?.setCrowned(!!items.wornBy(p.id));
     updateKoth(now);
+    // what can't be seen from here isn't drawn (src/cull.js): the level, the crates, the items lying about
+    cullStaticNow();
     // held items and what you can do right now
     items.frame(frameArgs(dt));
     // with the bucket: the paint or graffiti under the crosshair, glowing
@@ -1785,7 +1810,7 @@ async function start() {
     (window.requestIdleCallback || (f => setTimeout(f, 1500)))(() => warmPhysics(), {timeout: 4000});
   }
   window.__111k = {scene, camera, player, peers, network, renderer, items, controls, hits, doors, me, meView, vertical,
-    voice, cleaning, mimic, planPlace, settlePaintings, get cleanTarget() { return cleanTarget; }, splatMarks, sprayMarks, addSplat, doorBatches, setView: v => { thirdPerson = v; }, primary, secondary, shoot, spray, choosePiece, choosePaint, toggleGallery, get pieces() { return pieces; }};
+    voice, cleaning, mimic, planPlace, settlePaintings, culler, cullNow: () => { cullStaticNow(); items.frame(frameArgs(0)); }, get cleanTarget() { return cleanTarget; }, splatMarks, sprayMarks, addSplat, doorBatches, setView: v => { thirdPerson = v; }, primary, secondary, shoot, spray, choosePiece, choosePaint, toggleGallery, get pieces() { return pieces; }};
 }
 
 start().catch(err => {
