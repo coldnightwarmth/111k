@@ -10,7 +10,7 @@
 set -euo pipefail
 V="${1:?usage: build_site.sh <version>}"
 rm -rf _site && mkdir _site
-cp -r index.html styles.css favicon.svg src vendor assets anim graffiti _site/
+cp -r index.html 404.html styles.css favicon.svg src vendor assets anim graffiti _site/
 [ -f CNAME ] && cp CNAME _site/
 touch _site/.nojekyll
 

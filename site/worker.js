@@ -42,11 +42,17 @@ const soon = left => `<!doctype html>
 </body>
 </html>`;
 
+// "lost in the tunnels" (404.html), as for any other address that isn't on the site
+async function lost(request, env) {
+  const page = await env.ASSETS.fetch(new Request(new URL('/404.html', request.url)));
+  return new Response(request.method === 'HEAD' ? null : page.body, {status: 404, headers: {'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store'}});
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url), path = url.pathname, left = LAUNCH - Date.now();
     // the emote previewer and the graffiti review are tools for working on the space: only on the GitHub copy
-    if (/^\/(anim|graffiti)(\/|$)/.test(path)) return new Response('Not found', {status: 404, headers: {'Cache-Control': 'no-store'}});
+    if (/^\/(anim|graffiti)(\/|$)/.test(path)) return lost(request, env);
     if (left > 0 && (request.method === 'GET' || request.method === 'HEAD') && !path.startsWith('/assets/'))
       return new Response(request.method === 'HEAD' ? null : soon(left),
         {headers: {'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'X-Robots-Tag': 'noindex'}});
