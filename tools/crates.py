@@ -544,6 +544,38 @@ def base_remains(r):
     return m
 
 
+PW, PD, PH = 1.1, 0.8, 0.135      # an empty pallet: length, width, height
+
+
+def pallet(r, worn=True):
+    """An empty shipping pallet, lying flat on y = 0: three bottom boards, nine blocks, three stringer boards and
+    the top deck across them, a slat or two missing or snapped off on an old one."""
+    m = Mesh()
+    hw, hd = PW / 2, PD / 2
+    rows = (-hd + 0.05, 0.0, hd - 0.05)
+    cols = (-hw + 0.05, 0.0, hw - 0.05)
+    for z in rows:                                            # bottom boards, along the length
+        box(m, (-hw, 0, z - 0.05), (hw, 0.02, z + 0.05), r, {'-y': False})
+    for x in cols:
+        for z in rows:                                        # blocks (end grain showing)
+            box(m, (x - 0.05, 0.02, z - 0.045), (x + 0.05, 0.095, z + 0.045), r, {'+x': 'grain', '-x': 'grain', '+y': False, '-y': False})
+    for x in cols:                                            # stringer boards, across
+        box(m, (x - 0.05, 0.095, -hd), (x + 0.05, 0.115, hd), r)
+    n = 7
+    gap = (PD - n * 0.095) / (n - 1)
+    for k in range(n):                                        # the top deck, along the length
+        z0 = -hd + k * (0.095 + gap)
+        if worn and 0 < k < n - 1 and r.random() < 0.14:
+            continue                                          # gone
+        if worn and 0 < k < n - 1 and r.random() < 0.12:     # snapped short
+            cut = r.uniform(0.25, 0.6) * PW
+            x0, x1 = (-hw, -hw + cut) if r.random() < 0.5 else (hw - cut, hw)
+            box(m, (x0, 0.115, z0), (x1, PH, z0 + 0.095), r, {'+x' if x0 == -hw else '-x': 'raw'})
+            continue
+        box(m, (-hw, 0.115, z0), (hw, PH, z0 + 0.095), r)
+    return m
+
+
 def post(r):
     """A corner post snapped off, lying down."""
     m = Mesh()
@@ -801,21 +833,100 @@ def yaw_x_to(d):
     return math.atan2(-d[1], d[0])
 
 
-def build_scene(meta, mesh, seed=2026, n_rooms=10):
+def build_scene(meta, mesh, seed=2026, scenes=20, pallets=10, tunnel_pallets=3):
+    """Crate scenes through the rooms (most rooms get one, a few two), stacks and leaning empty pallets in
+    others, and bits of broken crate (and the odd pallet) along the tunnel."""
     r = np.random.default_rng(seed)
     S = Scene(mesh, meta, r)
     rooms = [i for i in range(len(meta['loop']['doors'])) if i not in SKIP_ROOMS]
     r.shuffle(rooms)
     kinds = ['stack', 'opened', 'smashed', 'stack', 'opened', 'smashed', 'single', 'stack', 'opened', 'smashed']
     done = []
-    for i in rooms:
-        if len(done) >= n_rooms:
-            break
-        kind = kinds[len(done) % len(kinds)]
-        if room_scene(S, i, kind, r):
-            done.append((i, kind))
-    tunnel_bits(S, r, clusters=9)
+    for _ in range(3):                          # round the rooms, and round again for a second scene in some
+        for i in rooms:
+            if len(done) >= scenes:
+                break
+            if sum(1 for j, _ in done if j == i) >= 2:
+                continue
+            kind = kinds[len(done) % len(kinds)]
+            if room_scene(S, i, kind, r):
+                done.append((i, kind))
+    order = rooms[:]
+    r.shuffle(order)
+    stacked = 0
+    for _ in range(2):
+        for i in order:
+            if stacked >= pallets:
+                break
+            if pallet_scene(S, i, 'stack' if r.random() < 0.6 else 'lean', r):
+                done.append((i, 'pallets'))
+                stacked += 1
+    tunnel_bits(S, r, clusters=26)
+    tunnel_pallets_(S, r, tunnel_pallets)
     return S, done
+
+
+def pallet_stack(S, c, yaw, n, r):
+    """n empty pallets stacked flat at c, each knocked a little out of line."""
+    for k in range(n):
+        yk = yaw + r.normal(0, 0.06)
+        off = np.array([r.uniform(-0.04, 0.04), 0, r.uniform(-0.04, 0.04)]) if k else np.zeros(3)
+        q = c + off
+        S.add(pallet(r), place_M(q[0], k * PH, q[2], yk), 'crate')
+    S.collider(c, yaw, PW / 2 + 0.03, PD / 2 + 0.03, 0.0, n * PH)
+    S.shadow(c, yaw, PW / 2 + 0.14, PD / 2 + 0.14, 0.9)
+    S.spots.append((c[0], c[2], 0.75))
+
+
+def pallet_scene(S, i, kind, r):
+    if kind == 'stack':
+        n = int(r.choice([1, 2, 2, 3, 3, 4, 5]))
+        if r.random() < 0.55:
+            got = against_wall(S, i, r, PW / 2, PD / 2, n * PH + 0.1)
+            if not got:
+                return False
+            c, yaw = got[0], got[1]
+        else:
+            c = open_floor(S, i, r, 0.7, height=n * PH + 0.1)
+            if c is None:
+                return False
+            yaw = r.uniform(0, 2 * math.pi)
+            if not S.floor_clear(c, yaw, PW / 2, PD / 2, n * PH + 0.1):
+                return False
+        pallet_stack(S, c, yaw, n, r)
+        return True
+    # one or two stood on end against the wall, leant back
+    got = against_wall(S, i, r, PW / 2, 0.2, 0.9)
+    if not got:
+        return False
+    c, yaw, d, wp = got
+    dd = np.array([d[0], 0, d[1]])
+    n = 2 if r.random() < 0.45 else 1
+    for k in range(n):
+        lean = r.uniform(0.16, 0.26) + 0.05 * k
+        p = lean_on_wall(S, pallet(r), np.array(wp) - dd * (0.15 * k), d, lean)
+    depth = PH + math.sin(0.31) * PD + 0.15 * (n - 1)
+    mid = np.array([wp[0], 0, wp[2]]) - dd * (depth / 2 + 0.01)
+    S.collider(mid, yaw_facing(d), PW / 2 + 0.02, depth / 2, 0.0, PD * math.cos(0.16) + 0.02)
+    S.shadow(np.array([wp[0], 0, wp[2]]) - dd * (depth * 0.6), yaw_facing(d), PW / 2 + 0.1, depth / 2 + 0.1, 0.8)
+    S.spots.append((mid[0], mid[2], 0.75))
+    return True
+
+
+def tunnel_pallets_(S, r, n):
+    """The odd empty pallet (or two stacked) down the tunnel's edge, along the wall."""
+    placed = 0
+    for _ in range(n * 40):
+        if placed >= n:
+            break
+        a = r.uniform(0, 2 * math.pi)
+        x = r.choice([-1, 1]) * r.uniform(1.6, 2.2)
+        c = SC._P(a, x, 0)
+        yaw = math.atan2(-SC._T(a)[2], SC._T(a)[0]) + r.normal(0, 0.15)    # lengthways along the tunnel
+        if not S.free(c, 0.8) or not S.floor_clear(c, yaw, PW / 2, PD / 2, 0.4):
+            continue
+        pallet_stack(S, c, yaw, int(r.choice([1, 1, 2])), r)
+        placed += 1
 
 
 def room_point(S, i, r):
@@ -1131,7 +1242,7 @@ if __name__ == '__main__' and '--pieces' in sys.argv:
     atlas = paint_atlas()
     pieces = [('closed', crate_body(r)), ('open', crate_body(r, open_=True)), ('lid', lid(r)), ('plank', plank(r)),
               ('plank both', plank(r, 0.5, ends=(True, True))), ('front chunk', panel_chunk(r)), ('side chunk', panel_chunk(r, 'side')),
-              ('base', base_remains(r)), ('post', post(r)), ('splinter', splinter(r))]
+              ('base', base_remains(r)), ('post', post(r)), ('splinter', splinter(r)), ('pallet', pallet(r)), ('pallet new', pallet(r, worn=False))]
     os.makedirs(os.path.join(HERE, 'previews'), exist_ok=True)
     out = os.path.join(HERE, 'previews', 'crates_pieces.png')
     sheet(atlas, pieces, out)

@@ -110,7 +110,8 @@ WebP copies the game loads (1024 and 512 px, plus a preview atlas of all of
 them) in `assets/paintings/`: re-run it after adding art.
 
 Crates the paintings came in (closed, opened, smashed to planks) stand about
-half the rooms, with a few bits out in the tunnel: `python3 tools/crates.py`
+most of the rooms (two lots in some), with empty pallets stacked or leant on
+walls and broken bits along the tunnel: `python3 tools/crates.py`
 models them, paints their atlas, places them against the built level and
 writes `assets/env/world-crates.glb` and `src/crates-placed.js` (their
 colliders). They're added at runtime but carry the level's lightmap
