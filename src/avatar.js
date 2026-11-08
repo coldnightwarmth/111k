@@ -21,15 +21,17 @@ const once = (key, make) => {
   return cache.get(key);
 };
 const character = name => once(name, async () => {
-  const [index, base, extra, emotes] = await Promise.all([
+  const [index, base, extra] = await Promise.all([
     fetch(`${ROOT}${name}/index.json`).then(r => { if (!r.ok) throw Error(`avatar index ${r.status}`); return r.json(); }),
     loader.loadAsync(`${ROOT}${name}/base.glb`),
     loader.loadAsync(`${ROOT}moves.glb`).catch(() => null),   // clips made for 111k (the punch)
-    loader.loadAsync(`${ROOT}emotes.glb`).catch(() => null),  // the emotes made for 111k (tools/blender/emotes.py)
   ]);
-  const clips = [...base.animations, ...(extra?.animations || []), ...(emotes?.animations || [])];
+  const clips = [...base.animations, ...(extra?.animations || [])];
   return {index, scene: base.scene, clips};
 });
+// the emotes made for 111k (tools/blender/emotes.py), the same for every character: nobody waits for these to
+// appear, they're added to each avatar as they come in (an emote asked for before then plays once they're in)
+export const emoteClips = () => once('emotes', () => loader.loadAsync(`${ROOT}emotes.glb`).then(g => g.animations).catch(() => []));
 const part = (name, file) => once(`${name}/${file}`, () => loader.loadAsync(`${ROOT}${name}/${file}`));
 
 // Download everything a look needs (used to warm up the picker and peers).
@@ -218,7 +220,7 @@ function createLookPose(model) {
   };
 }
 
-export async function createAvatar(look) {
+export async function createAvatar(look, {waitForEmotes = false} = {}) {
   look = normalizeAppearance(look);
   const name = characterId(look), c = await character(name);
   // the hatless look's parts too: a crown takes the place of any hat (and shows the hair under it)
@@ -260,10 +262,17 @@ export async function createAvatar(look) {
   const HOLD = {Neutral: 'Hold_Right', Walk: 'Walk_Hold_Right', Crouch: 'Crouch_Hold_Right', Crouch_Walk: 'Crouch_Walk_Hold_Right',
     Jump: 'Jump_Hold_Right'};
   const holdNames = new Set(Object.values(HOLD));
-  for (const [clip, action] of actions) {
+  const start = (clip, action) => {
     action.play().setEffectiveWeight(0);
     if (clip.startsWith('Jump') || clip.startsWith('Pose_') || clip.startsWith('Emote_') || clip.startsWith('Punch')) action.paused = true;
-  }
+  };
+  for (const [clip, action] of actions) start(clip, action);
+  let gone = false;
+  const addEmotes = list => {
+    if (gone) return;
+    for (const clip of list) if (!actions.has(clip.name)) { const a = mixer.clipAction(clip); actions.set(clip.name, a); start(clip.name, a); }
+  };
+  if (waitForEmotes) addEmotes(await emoteClips()); else emoteClips().then(addEmotes);
   const look_ = createLookPose(model);
   const socket = model.getObjectByName('CardSocketR') || model.getObjectByName('CardSocket.R');  // the loader strips the dot
   const punch = actions.get('Punch'), fallbackPunch = actions.get('Pose_powerpunch');
@@ -384,6 +393,7 @@ export async function createAvatar(look) {
       if (g.value < .002) g.value = 0;
     },
     dispose() {
+      gone = true;
       mixer.stopAllAction(); mixer.uncacheRoot(model); wardrobe.dispose();
       const skeletons = new Set(); model.traverse(o => { if (o.isSkinnedMesh) skeletons.add(o.skeleton); });
       for (const s of skeletons) s.dispose();

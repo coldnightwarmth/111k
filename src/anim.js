@@ -59,7 +59,7 @@ function rebuild() {
   const gen = ++generation, wanted = shownVariants();
   building = building.then(async () => {
     if (gen !== generation) return;
-    const made = await Promise.all(wanted.map(() => createAvatar(look)));
+    const made = await Promise.all(wanted.map(() => createAvatar(look, {waitForEmotes: true})));
     if (gen !== generation) { for (const a of made) a.dispose(); return; }
     for (const s of slots) s.avatar.dispose();
     slots.length = 0;

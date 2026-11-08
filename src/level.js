@@ -180,26 +180,21 @@ export async function loadLevel(name, renderer) {
   const v = LEVEL_VERSION ? `?v=${LEVEL_VERSION}` : '';
   const loader = new THREE.TextureLoader();
   const blank = () => new THREE.DataTexture(new Uint8Array(4), 1, 1);
-  // everything downloads at once: the light and flicker maps only wait for the small json (which
-  // says whether there are flicker maps), not for the big model
+  // What the space needs to be seen downloads at once: the model, its lightmap and the small json. The flicker
+  // maps and the spray cans' extra tag pages come after the fade-in (loadLater, below): until then the lamps
+  // just burn steady and those tags are blank, which nobody's had time to notice.
   const metaReady = fetch(`${base}.json${v}`).then(r => { if (!r.ok) throw Error(`Level data unavailable (${r.status})`); return r.json(); });
-  // groups 0-2 in one map's rgb; newer bakes keep group 3 in a second map instead of alpha
-  const flickers = metaReady.then(m => Promise.all([
-    m.flickerMap ? loader.loadAsync(`${base}-flicker.webp${v}`) : blank(),
-    m.flickerMap === 'share2' ? loader.loadAsync(`${base}-flicker2.webp${v}`) : blank(),
-  ]));
-  // more graffiti for the spray cans, on its own atlas (tools/graffiti_tags.py): not on the walls, so
-  // the level doesn't need rebuilding for it. If it can't be had, the cans just offer the level's own.
-  const tagsReady = fetch(`${base}-tags.json${v}`).then(r => (r.ok ? r.json() : null))
-    .then(t => t && Promise.all(Array.from({length: t.pages}, (_, i) => loader.loadAsync(`${base}-tags-${i}.webp${v}`)))
-      .then(maps => ({...t, maps})))
-    .catch(() => null);
-  const [gltf, lightmap, meta, [flicker, flicker2], tags] = await Promise.all([
+  // more graffiti for the spray cans, on its own atlas (tools/graffiti_tags.py): not on the walls, so the level
+  // doesn't need rebuilding for it. Its list now, its pictures later. If it can't be had, the cans just offer
+  // the level's own.
+  const tagsReady = fetch(`${base}-tags.json${v}`).then(r => (r.ok ? r.json() : null)).catch(() => null);
+  const [gltf, lightmap, meta, tags] = await Promise.all([
     new GLTFLoader().loadAsync(`${base}.glb${v}`),
     loader.loadAsync(`${base}-lightmap.webp${v}`),
-    metaReady, flickers, tagsReady,
+    metaReady, tagsReady,
   ]);
-  lighting.flickerSplit.value = meta.flickerMap === 'share2' ? 1 : 0;
+  const flicker = blank(), flicker2 = blank();
+  lighting.flickerSplit.value = 0;
   for (const t of [lightmap, flicker, flicker2]) {
     t.flipY = false; t.channel = 1;
     // Atlas charts are only padded by a few texels, so skip mipmaps to avoid bleeding.
@@ -226,18 +221,42 @@ export async function loadLevel(name, renderer) {
     if (m.userData.emissive) m.toneMapped = false;
     if (m.transparent) { m.depthWrite = false; m.polygonOffset = true; m.polygonOffsetFactor = -2; m.polygonOffsetUnits = -4; }
   });
+  const tagMaps = [];
   if (tags) {
-    tags.maps.forEach((map, i) => {   // the same setup as the level's own graffiti pages (glTF textures aren't flipped)
-      map.flipY = false; map.colorSpace = THREE.SRGBColorSpace; map.anisotropy = anisotropy; map.needsUpdate = true;
+    for (let i = 0; i < tags.pages; i++) {   // the same setup as the level's own graffiti pages (glTF textures aren't flipped)
+      const map = new THREE.Texture(clearPixel());     // (its picture goes in once it's loaded: loadLater)
+      map.flipY = false; map.colorSpace = THREE.SRGBColorSpace; map.anisotropy = anisotropy;
+      tagMaps.push(map);
       materials.set(`graffiti_t${i}`, new THREE.MeshBasicMaterial({name: `graffiti_t${i}`, map, transparent: true}));
-    });
+    }
     const known = new Set((meta.graffiti || []).map(p => p.name));
     meta.graffiti = [...(meta.graffiti || []), ...tags.graffiti.filter(p => !known.has(p.name))];
   }
   // Decals never write depth, so overlapping ones are drawn in a fixed order (by name)
   // rather than re-sorted by distance every frame, which made them flicker.
   meshes.filter(o => o.material.transparent).sort((a, b) => (a.name < b.name ? -1 : 1)).forEach((o, i) => { o.renderOrder = 1 + i * .001; });
-  return {scene: gltf.scene, meta, materials, meshes, lightmap, baseIntensity: Math.PI * meta.lightmapScale};
+  // the rest, once the space is in: the flicker maps (the lamps start flickering) and the tag pages (their
+  // pictures go into the textures already on the cans' tags, so everything showing them just fills in).
+  // Resolves when it's all in (or has failed: the lamps stay steady, those tags blank).
+  let later = null;
+  const loadLater = () => later ||= Promise.all([
+    meta.flickerMap ? Promise.all([
+      loader.loadAsync(`${base}-flicker.webp${v}`),
+      meta.flickerMap === 'share2' ? loader.loadAsync(`${base}-flicker2.webp${v}`) : blank(),
+    ]).then(([f, f2]) => {
+      for (const t of [f, f2]) { t.flipY = false; t.channel = 1; t.generateMipmaps = false; t.minFilter = THREE.LinearFilter; t.needsUpdate = true; }
+      lighting.flickerMap.value = f; lighting.flickerMap2.value = f2;
+      lighting.flickerSplit.value = meta.flickerMap === 'share2' ? 1 : 0;
+    }).catch(e => console.warn('flicker maps:', e)) : null,
+    ...tagMaps.map((map, i) => new THREE.ImageLoader().loadAsync(`${base}-tags-${i}.webp${v}`)
+      .then(img => { map.image = img; map.needsUpdate = true; }).catch(e => console.warn('tag page:', e))),
+  ]);
+  return {scene: gltf.scene, meta, materials, meshes, lightmap, baseIntensity: Math.PI * meta.lightmapScale, loadLater};
+}
+// a 1x1 see-through picture: a texture's stand-in until its own is in
+function clearPixel() {
+  const c = document.createElement('canvas'); c.width = c.height = 1;
+  return c;
 }
 
 // Lights that only exist to shade avatars so they sit in the baked lighting.

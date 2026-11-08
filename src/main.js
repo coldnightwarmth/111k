@@ -1775,6 +1775,11 @@ async function start() {
     await wait(1500 - (performance.now() - goingAt));   // "going down…" stays long enough to read, even when it all loaded while you picked
     loading.classList.add('done');
     document.body.classList.add('ready');
+    // what the space could wait for: the lamps' flicker, the cans' extra tag pages (their thumbnails redone once in)
+    level.loadLater().then(() => {
+      if (galleryList.childElementCount) { galleryList.replaceChildren(); if (!gallery.hidden) buildGallery(); }
+      if (chosenPiece) choosePiece(chosenPiece);
+    });
     // the paintings' physics engine, started up in its worker once there's a quiet moment: ready long before
     // anyone puts a painting down (it never touches the page's own thread)
     (window.requestIdleCallback || (f => setTimeout(f, 1500)))(() => warmPhysics(), {timeout: 4000});
