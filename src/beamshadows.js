@@ -8,6 +8,9 @@ import {lighting, MAX_FLASHLIGHTS, FAN_TAN, FAN_RANGE, beamFrame, SHADOW_COLS, S
 
 export const SHADOW_LAYER = 2;            // what casts beam shadows: the level, doors, machine, shelves
 const STILL_REFRESH = .1, STILL_AGE = .5;   // every so often redraw the stalest still beam
+// beams further than this from you that have moved are redrawn one a frame (oldest first), not all at once:
+// a shadow a few metres off lagging a frame or two doesn't show, and a crowd of torches can't pile up the cost
+const NEAR_BEAM = 10, FAR_PER_FRAME = 1;
 
 export function createBeamShadows(renderer, scene) {
   const W = SHADOW_TILE * SHADOW_COLS, H = SHADOW_TILE * SHADOW_ROWS;
@@ -26,6 +29,7 @@ export function createBeamShadows(renderer, scene) {
     cam: new THREE.PerspectiveCamera(fov, 1, .06, FAN_RANGE), key: null,
     pos: new THREE.Vector3(), dir: new THREE.Vector3(),      // where the beam is now
     dirty: false, age: 1e9,                                 // its tile needs drawing this frame
+    far: 0,                                                 // how far it is from you
   }));
   for (const s of slots) s.cam.layers.set(SHADOW_LAYER);
   const right = new THREE.Vector3(), up = new THREE.Vector3(), aim = new THREE.Vector3();
@@ -46,8 +50,9 @@ export function createBeamShadows(renderer, scene) {
   }
   return {
     // slot i shows beam `key` from pos along dir this frame
-    assign(i, key, pos, dir) {
+    assign(i, key, pos, dir, far = 0) {
       const s = slots[i];
+      s.far = far;
       const fresh = s.key !== key;
       const moved = fresh || s.pos.distanceToSquared(pos) > 1e-6 || s.dir.dot(dir) < .99999;
       if (!moved) return;
@@ -56,12 +61,14 @@ export function createBeamShadows(renderer, scene) {
     },
     // draw the tiles that need it (before the frame is drawn)
     render(dt) {
-      const todo = [];
+      const todo = [], farOnes = [];
       for (let i = 0; i < slots.length; i++) {
         const s = slots[i];
         s.age += dt;
-        if (s.key !== null && s.dirty) todo.push(i);
+        if (s.key !== null && s.dirty) (s.far < NEAR_BEAM ? todo : farOnes).push(i);
       }
+      farOnes.sort((a, b) => slots[b].age - slots[a].age);
+      todo.push(...farOnes.slice(0, FAR_PER_FRAME));
       // now and then redraw a still beam too, so doors swinging through it show up
       refreshAt -= dt;
       if (refreshAt <= 0) {

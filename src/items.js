@@ -1209,7 +1209,7 @@ export function createItems({scene, camera, hits, shadows = null}) {
         lighting.flPos.value[i].copy(l.origin);
         lighting.flDir.value[i].copy(l.dir).normalize();
         lighting.flOn.value[i] = l.fade;
-        shadows?.assign(i, id, l.eye || l.origin, lighting.flDir.value[i]);
+        shadows?.assign(i, id, l.eye || l.origin, lighting.flDir.value[i], l.it.state.holder === myId ? 0 : l.origin.distanceTo(_eye));
         top = Math.max(top, i + 1);
       }
       for (let i = 0; i < MAX_FLASHLIGHTS; i++) if (!used[i]) { lighting.flOn.value[i] = 0; shadows?.clear(i); }

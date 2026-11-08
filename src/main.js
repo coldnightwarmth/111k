@@ -72,6 +72,30 @@ function resize() {
   camera.updateProjectionMatrix();
 }
 addEventListener('resize', resize); resize();
+// The resolution follows how the frames are coming: a step down (15%) when they've been slow for a moment, a
+// step back up once there's been room to spare for a while, never below half the screen's own. A step down
+// from a level stops it being tried again for a minute, so it doesn't see-saw. (?fixedres keeps it put.)
+const adaptRes = (() => {
+  const base = +renderer.getPixelRatio().toFixed(3), floor = Math.max(.6, base * .5), fixed = params.has('fixedres');
+  let ratio = base, avg = 16.7, slow = 0, quick = 0, changedAt = 0;
+  const tooSlow = new Map();               // ratio -> when it was too slow
+  return (ms, now) => {
+    if (fixed || ms > 1000 || document.hidden) return;      // (coming back to the tab: not a slow frame)
+    ms = Math.min(ms, 250);
+    avg += (ms - avg) * .05;
+    if (now - changedAt < 2500) return;
+    if (avg > 26) { slow += ms; quick = 0; } else if (avg < 18.5) { quick += ms; slow = 0; } else slow = quick = 0;
+    let next = ratio;
+    if (slow > 1500 && ratio > floor) { tooSlow.set(ratio, now); next = +Math.max(floor, ratio * .85).toFixed(3); }
+    else if (quick > 6000 && ratio < base) {
+      const up = +Math.min(base, ratio / .85).toFixed(3);
+      if (now - (tooSlow.get(up) ?? -Infinity) > 60000) next = up;
+    }
+    if (next === ratio) return;
+    ratio = next; changedAt = now; slow = quick = 0;
+    renderer.setPixelRatio(ratio); resize();
+  };
+})();
 
 // player colours: a stable hue per id, used on bubbles and chat lines
 const hueOf = id => { let h = 0; for (const c of id || '') h = (h * 31 + c.charCodeAt(0)) >>> 0; return h % 360; };
@@ -1468,7 +1492,8 @@ async function start() {
 
   // one frame of the game (run below, guarded)
   const frame = () => {
-    const now = performance.now(), dt = Math.min(.1, (now - last) / 1000); last = now;
+    const now = performance.now(), dt = Math.min(.1, (now - last) / 1000);
+    adaptRes(now - last, now); last = now;
     const input = controls.update();
     const frozen = chat.open || !emoteMenu.hidden;
     // movement in the camera's yaw frame, plus any knock-back still fading out
