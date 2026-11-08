@@ -326,13 +326,16 @@ async function start() {
     });
     return {gather: (center, radius) => [...hits.gather(center, radius), ...extra.filter(e => e.c.distanceTo(center) <= radius + e.r).flatMap(e => e.tris)]};
   }
-  // marks hung on a painting: lit like the painting (not by the level's baked light, which stays behind)
+  // marks hung on a painting: lit like the painting (not by the level's baked light, which stays behind).
+  // Flat shaded: the marks' geometry carries no normals (the level's marks don't need any), and a mark lies
+  // flat on a face of the painting's box, so the face's own normal is the right one; without it they'd
+  // catch next to no light and come out near black.
   const paintingBatches = new Map(), paintingMats = new Map();
   function paintingBatch(pi, key, map) {
     const k = `${pi}|${key}`;
     if (!paintingBatches.has(k)) {
       if (!paintingMats.has(key)) paintingMats.set(key, new THREE.MeshStandardMaterial({map, transparent: true, depthWrite: false, vertexColors: true,
-        roughness: .8, metalness: 0, polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -4}));
+        roughness: .82, metalness: 0, flatShading: true, polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -4}));
       const b = createBatch(paintingMats.get(key), 2000);
       b.mesh.renderOrder = 3; items.items.get(pi).model.add(b.mesh);
       paintingBatches.set(k, b);
