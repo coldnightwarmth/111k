@@ -1,8 +1,8 @@
 // The graffiti review made at /graffiti: what each piece needs. Shared by the page, the game and the
 // server, which keeps one copy and tells everyone which pieces are removed (those leave the spray cans
 // and the walls; everything else stays).
-//   {pieces: {name: {s: 'good' | 'remove' | 'redo' | 'kern', note: '...'}}, updated: ms}
-export const REVIEW_STATUSES = ['good', 'remove', 'redo', 'kern'];
+//   {pieces: {name: {s: 'good' | 'remove' | 'redo' | 'kern' | 'nodrips', note: '...'}}, updated: ms}
+export const REVIEW_STATUSES = ['good', 'remove', 'redo', 'kern', 'nodrips'];
 export const REVIEW_NOTE_MAX = 2000;
 const MAX_PIECES = 2000;
 

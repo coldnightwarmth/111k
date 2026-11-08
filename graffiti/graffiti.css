@@ -1,7 +1,7 @@
 :root {
   color-scheme: dark;
   --bg: #08080a; --panel: #0f0e12; --line: rgba(233, 230, 220, .12); --ink: #e9e6dc; --dim: #8d8a83;
-  --accent: #ff4fa0; --good: #6dff92; --remove: #ff6b6b; --redo: #ffcf5a; --kern: #7cc4ff;
+  --accent: #ff4fa0; --good: #6dff92; --remove: #ff6b6b; --redo: #ffcf5a; --kern: #7cc4ff; --nodrips: #c99bff;
   --wall: #807e76;
   font: 13px/1.45 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
 }
@@ -37,6 +37,7 @@ h1 { margin: 0 6px 0 0; font-size: 13px; font-weight: 600; letter-spacing: .16em
 #filters button b { font-weight: 600; color: var(--ink); margin-left: 4px; }
 #filters button.good b { color: var(--good); } #filters button.remove b { color: var(--remove); }
 #filters button.redo b { color: var(--redo); } #filters button.kern b { color: var(--kern); }
+#filters button.nodrips b { color: var(--nodrips); }
 .help { margin: 8px 0 0; color: var(--dim); font-size: 11px; }
 .help b { color: var(--ink); font-weight: 600; }
 
@@ -53,19 +54,21 @@ h1 { margin: 0 6px 0 0; font-size: 13px; font-weight: 600; letter-spacing: .16em
 .card.s-remove .art canvas { opacity: .35; }
 .card.s-redo { border-left: 3px solid var(--redo); }
 .card.s-kern { border-left: 3px solid var(--kern); }
+.card.s-nodrips { border-left: 3px solid var(--nodrips); }
 .art { height: 170px; display: grid; place-items: center; background: var(--wall); border-radius: 6px; overflow: hidden; cursor: zoom-in; }
 .art canvas { max-width: 100%; max-height: 100%; }
 .meta { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
 .meta .name { font-weight: 600; word-break: break-all; }
 .chip { font-size: 10px; letter-spacing: .06em; padding: 1px 7px; border-radius: 99px; border: 1px solid var(--line); color: var(--dim); }
 .chip.walls { border-color: rgba(255, 207, 90, .35); }
-.states { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; }
-.states button { padding: 6px 4px; border-radius: 6px; border: 1px solid var(--line); background: transparent; color: var(--dim); }
+.states { display: flex; flex-wrap: wrap; gap: 4px; }
+.states button { flex: 1 1 auto; padding: 6px 8px; border-radius: 6px; border: 1px solid var(--line); background: transparent; color: var(--dim); }
 .states button:hover { color: var(--ink); }
 .states button[aria-pressed="true"][data-s="good"] { background: var(--good); border-color: var(--good); color: #07150b; font-weight: 600; }
 .states button[aria-pressed="true"][data-s="remove"] { background: var(--remove); border-color: var(--remove); color: #1a0606; font-weight: 600; }
 .states button[aria-pressed="true"][data-s="redo"] { background: var(--redo); border-color: var(--redo); color: #1a1405; font-weight: 600; }
 .states button[aria-pressed="true"][data-s="kern"] { background: var(--kern); border-color: var(--kern); color: #06111a; font-weight: 600; }
+.states button[aria-pressed="true"][data-s="nodrips"] { background: var(--nodrips); border-color: var(--nodrips); color: #12061a; font-weight: 600; }
 .card textarea { width: 100%; min-height: 34px; resize: vertical; padding: 6px 8px; border-radius: 6px; border: 1px solid var(--line);
   background: #0a0a0c; outline: none; field-sizing: content; max-height: 200px; }
 .card textarea:focus { border-color: rgba(255, 79, 160, .6); }

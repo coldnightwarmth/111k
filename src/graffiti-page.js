@@ -6,7 +6,7 @@ import {reviewUrl} from './config.js';
 import {cleanReview, REVIEW_STATUSES, REVIEW_NOTE_MAX} from './review.js';
 
 const $ = id => document.getElementById(id);
-const LABEL = {good: 'good', remove: 'remove', redo: 'redo', kern: 'kerning'};
+const LABEL = {good: 'good', remove: 'remove', redo: 'redo', kern: 'kerning', nodrips: 'remove drips'};
 const STYLE = {tag: 'tag', wk: 'philly wickets', bf: 'busflow', mp: 'mop', tu: 'throw-up', pc: 'piece', ol: 'hollow 3D', pl: 'placa',
   hs: 'chisel handstyle', sp: 'brush script', fx: 'extinguisher', rl: 'roller', sc: 'sprayed writing', sn: 'stencil', mk: 'marker',
   ex: 'scratched', dd: 'doodle'};
@@ -135,7 +135,7 @@ async function loadReview() {
 // ------------------------------------------------------------------ the list
 const cards = new Map();   // name -> {el, piece}
 const counts = () => {
-  const c = {all: all.length, todo: 0, good: 0, remove: 0, redo: 0, kern: 0, notes: 0, cans: 0, walls: 0, done: 0};
+  const c = {all: all.length, todo: 0, good: 0, remove: 0, redo: 0, kern: 0, nodrips: 0, notes: 0, cans: 0, walls: 0, done: 0};
   for (const p of all) {
     const e = entry(p.name);
     if (e.s) { c[e.s]++; c.done++; } else c.todo++;
@@ -144,7 +144,7 @@ const counts = () => {
   }
   return c;
 };
-const FILTERS = [['all', 'all'], ['todo', 'to review'], ['good', 'good'], ['remove', 'remove'], ['redo', 'redo'], ['kern', 'kerning'],
+const FILTERS = [['all', 'all'], ['todo', 'to review'], ['good', 'good'], ['remove', 'remove'], ['redo', 'redo'], ['kern', 'kerning'], ['nodrips', 'remove drips'],
   ['notes', 'with notes'], ['cans', 'new (cans only)'], ['walls', 'on the walls']];
 function refreshFilters() {
   const c = counts(), nav = $('filters');
@@ -161,7 +161,7 @@ function matches(p) {
   if (query && !p.name.toLowerCase().includes(query) && !(e.note || '').toLowerCase().includes(query)) return false;
   switch (filter) {
     case 'todo': return !e.s;
-    case 'good': case 'remove': case 'redo': case 'kern': return e.s === filter;
+    case 'good': case 'remove': case 'redo': case 'kern': case 'nodrips': return e.s === filter;
     case 'notes': return !!e.note;
     case 'cans': return !p.walls;
     case 'walls': return p.walls;
@@ -268,7 +268,7 @@ addEventListener('keydown', e => {
   }
   if (!el) return;
   const name = el.dataset.name;
-  const pick = {1: 'good', 2: 'remove', 3: 'redo', 4: 'kern'}[e.key];
+  const pick = {1: 'good', 2: 'remove', 3: 'redo', 4: 'kern', 5: 'nodrips'}[e.key];
   if (pick) { e.preventDefault(); setEntry(name, {s: entry(name).s === pick ? undefined : pick}); }
   else if (e.key === '0') { e.preventDefault(); setEntry(name, {s: undefined}); }
   else if (e.key === 'n') { e.preventDefault(); el.querySelector('textarea').focus(); }
@@ -290,7 +290,7 @@ function exportDoc() {
   const c = counts();
   return {
     kind: '111k graffiti review', exported: new Date().toISOString(),
-    counts: {pieces: c.all, reviewed: c.done, good: c.good, remove: c.remove, redo: c.redo, kerning: c.kern, notes: c.notes, unreviewed: c.todo},
+    counts: {pieces: c.all, reviewed: c.done, good: c.good, remove: c.remove, redo: c.redo, kerning: c.kern, removeDrips: c.nodrips, notes: c.notes, unreviewed: c.todo},
     pieces: all.map(p => {
       const e = entry(p.name);
       return {name: p.name, style: STYLE[p.name.split('_')[0]] || p.name.split('_')[0], where: p.walls ? 'walls' : 'cans',
