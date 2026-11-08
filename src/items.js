@@ -7,7 +7,7 @@ import {lighting, MAX_FLASHLIGHTS, MAX_SPOTLIGHTS, FAN_RANGE, packBeams, ghostMa
 const BEAM_FAR = 42, BEAM_FADE = 10;   // torches on the floor: full strength to 32 m, gone by 42 m
 import {EYE_HEIGHT} from './motion.js';
 import {PAINT_COLORS, RANDOM_PAINT} from './decals.js';
-import {ART, paintingSize, paintingMatrix} from './paintings.js';
+import {ART, ART_IDS, PREVIEW, artFile, paintingSize, paintingMatrix} from './paintings.js';
 import {mergeVertices, mergeGeometries} from '../vendor/three/BufferGeometryUtils.js';
 
 const BEAM_COLOR = new THREE.Color(1, .93, .8);
@@ -302,12 +302,59 @@ function crownModel() {
 // wrapped, so the sides streak with the picture's own colours), and an open back: the canvas's raw
 // back, folded and stapled over a pine stretcher with a cross brace. Origin: the middle of the back;
 // the picture faces +z, its top is +y.
-// The pictures are big (up to ~2000 px and several MB each, a hundred of them), so a picture is only
-// fetched once its painting comes near (or is picked up), drawn down to ART_PX on its long side (less on
-// a phone) before it goes to the GPU, and let go again once nobody near shows it (it comes back from the
-// browser's cache). Meanwhile the front is plain primed canvas.
+// A painting is never a blank canvas: every picture comes small in one atlas, loaded before the space fades
+// in, and that's on each painting from the start. The full picture (ART_PX on its long side: less on a phone)
+// goes on once its painting is near, from the file already fetched (all of them are, nearest first, once the
+// room's in: tools/paintings_webp.py made them small enough), and comes off again once it's far, back to the
+// small one, so only the ones round about are on the GPU.
 const ART_PX = globalThis.matchMedia?.('(pointer: coarse)').matches ? 512 : 1024;
-const ART_NEAR = 24, ART_FAR = 34;   // metres from the eye: put the picture on, take it off (the tunnel curves away well within that)
+const ART_NEAR = 24, ART_FAR = 34;   // metres from the eye: full picture on, back to the small one
+let previewTex = null, previewsReady = Promise.resolve();
+const previewViews = [];             // each painting's window onto it (they share the one image: uploaded once)
+function previews() {
+  if (!previewTex) {
+    previewTex = new THREE.Texture();
+    previewTex.colorSpace = THREE.SRGBColorSpace; previewTex.anisotropy = 4;
+    previewsReady = new Promise(done => {
+      const img = new Image();
+      img.onload = () => { previewTex.image = img; previewTex.needsUpdate = true; for (const t of previewViews) t.needsUpdate = true; done(); };
+      img.onerror = () => done();
+      img.src = PREVIEW.url;
+    });
+  }
+  return previewTex;
+}
+// a painting's own window onto the atlas (they all share the one image, uploaded once)
+function previewOf(art) {
+  const k = ART_IDS.indexOf(art), atlas = previews();
+  if (k < 0) return primedTex;
+  const t = atlas.clone(), cell = PREVIEW.tile + 2 * PREVIEW.pad, rows = Math.ceil(ART_IDS.length / PREVIEW.cols);
+  const W = PREVIEW.cols * cell, H = rows * cell, r = Math.floor(k / PREVIEW.cols), c = k % PREVIEW.cols;
+  t.repeat.set(PREVIEW.tile / W, PREVIEW.tile / H);
+  t.offset.set((c * cell + PREVIEW.pad) / W, 1 - (r * cell + PREVIEW.pad + PREVIEW.tile) / H);
+  previewViews.push(t);
+  if (atlas.image) t.needsUpdate = true;
+  return t;
+}
+// the full pictures' files, fetched once and kept (compressed: about 13 MB for all of them, 4 on a phone)
+const artFiles = new Map();          // art -> Promise<Blob>
+function artFile_(art) {
+  if (!artFiles.has(art)) {
+    const get = url => fetch(url).then(r => { if (!r.ok) throw new Error(`${r.status} ${url}`); return r.blob(); });
+    artFiles.set(art, get(artFile(art, ART_PX)).catch(() => get((ART[art] || ART[1]).url))    // (not made small yet: the original)
+      .catch(e => { artFiles.delete(art); throw e; }));
+  }
+  return artFiles.get(art);
+}
+async function artImage(art) {
+  const blob = await artFile_(art), url = URL.createObjectURL(blob), img = new Image();
+  try { img.src = url; await img.decode(); } finally { URL.revokeObjectURL(url); }
+  if (Math.max(img.width, img.height) <= ART_PX * 1.05) return img;
+  const k = ART_PX / Math.max(img.width, img.height), c = document.createElement('canvas');      // an original: drawn down
+  c.width = Math.round(img.width * k); c.height = Math.round(img.height * k);
+  const g = c.getContext('2d'); g.imageSmoothingQuality = 'high'; g.drawImage(img, 0, 0, c.width, c.height);
+  return c;
+}
 const artTextures = new Map();       // art -> {texture (once it's in), users: materials showing it, failed: when}
 function showArt(art, material) {
   if (material.userData.art) return;
@@ -317,29 +364,21 @@ function showArt(art, material) {
   if (!a || a.failed) {
     const b = a = {texture: null, users: new Set(), failed: 0};
     artTextures.set(art, b);
-    const img = new Image();
-    img.crossOrigin = 'anonymous'; img.decoding = 'async';
-    img.onload = () => {
+    b.ready = artImage(art).then(img => {
       if (!b.users.size) { if (artTextures.get(art) === b) artTextures.delete(art); return; }   // gone out of sight meanwhile
-      const k = Math.min(1, ART_PX / Math.max(img.width, img.height));
-      const c = document.createElement('canvas');
-      c.width = Math.max(1, Math.round(img.width * k)); c.height = Math.max(1, Math.round(img.height * k));
-      const g = c.getContext('2d'); g.imageSmoothingQuality = 'high'; g.drawImage(img, 0, 0, c.width, c.height);
-      const t = new THREE.CanvasTexture(c);
-      t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 8;
+      const t = new THREE.Texture(img);
+      t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 8; t.needsUpdate = true;
       b.texture = t;
       for (const m of b.users) m.map = t;
-    };
-    img.onerror = () => { b.failed = performance.now(); for (const m of b.users) m.userData.art = false; b.users.clear(); };   // try again later
-    img.src = (ART[art] || ART[1]).url;
+    }, () => { b.failed = performance.now(); for (const m of b.users) m.userData.art = false; b.users.clear(); });   // try again later
   }
   a.users.add(material);
   if (a.texture) material.map = a.texture;
 }
-function hideArt(art, material) {
+function hideArt(art, material, preview) {
   if (!material.userData.art) return;
   material.userData.art = false;
-  material.map = primedTex;
+  material.map = preview;
   const a = artTextures.get(art);
   if (!a) return;
   a.users.delete(material);
@@ -400,7 +439,8 @@ function paintingModel(id, state) {
   const geo = () => { const b = new THREE.BufferGeometry(); b.setAttribute('position', new THREE.Float32BufferAttribute(pos.splice(0), 3));
     b.setAttribute('uv', new THREE.Float32BufferAttribute(uv.splice(0), 2)); b.setIndex(idx.splice(0)); b.computeVertexNormals(); return b; };
   primedTex ||= primedTexture();
-  const canvasMat = new THREE.MeshStandardMaterial({map: primedTex, roughness: .82, metalness: 0});   // the picture goes on when it comes near
+  const preview = previewOf(art);
+  const canvasMat = new THREE.MeshStandardMaterial({map: preview, roughness: .82, metalness: 0});   // the full picture goes on when it comes near
   const front = new THREE.Mesh(geo(), canvasMat); front.name = 'canvas'; g.add(front);
   // sides: the weave running along each edge
   const tw = w * 4, th = h * 4, td = d * 4;
@@ -443,7 +483,7 @@ function paintingModel(id, state) {
   // the pick-up glow: one closed box with its corners' normals shared, so the glow wraps it without gaps
   const ob = glowBoxGeometry(new THREE.Vector3(-x, -y, 0), new THREE.Vector3(x, y, d));
   g.userData = {tip: new THREE.Vector3(0, 0, d), ground: .002, painting: true, w, h, d, art, canvas: front, outline: ob,
-    showArt: () => showArt(art, canvasMat), hideArt: () => hideArt(art, canvasMat)};
+    showArt: () => showArt(art, canvasMat), hideArt: () => hideArt(art, canvasMat, preview)};
   return g;
 }
 
@@ -707,9 +747,42 @@ export function createItems({scene, camera, hits, shadows = null}) {
     return it;
   }
 
+  previews();                          // the pictures' atlas: on its way from the start
   return {
     items,
     set(list) { for (const s of list) ensure(s); },
+    // the small pictures, all of them (the space waits for these before it fades in)
+    get previewsReady() { return previewsReady; },
+    // every full picture's file on its way, a few at a time, always the nearest one still to come (to wherever
+    // you are by then, so running ahead pulls the ones ahead of you forward)
+    prefetchArt(center) {
+      _eye.copy(center);
+      const left = new Set([...items.values()].filter(it => it.model.userData.painting).map(it => it.state.art));
+      const next = () => {
+        let best = null, bestD = Infinity;
+        for (const it of items.values()) {
+          const s = it.state;
+          if (!left.has(s.art)) continue;
+          const d = Math.hypot(s.x - _eye.x, s.z - _eye.z);
+          if (d < bestD) { best = s.art; bestD = d; }
+        }
+        if (best === null) return;
+        left.delete(best);
+        artFile_(best).catch(() => {}).then(next);
+      };
+      for (let i = 0; i < 4; i++) next();
+    },
+    // the full pictures on the paintings near a point, put on now; settles once they're in
+    artNear(center) {
+      const waits = [];
+      for (const it of items.values()) {
+        const s = it.state, u = it.model.userData;
+        if (!u.showArt || s.holder || Math.hypot(s.x - center.x, s.y - center.y, s.z - center.z) > ART_NEAR) continue;
+        u.showArt();
+        waits.push(artTextures.get(s.art)?.ready);
+      }
+      return Promise.allSettled(waits);
+    },
     // a new state from the server; with a fall, it drops from where it was let go to where it settled; with a
     // path (a painting's tumble, worked out by whoever let it go), it plays that: [x, y, z, qx, qy, qz, qw] at PATH_HZ
     update(state, fall, path) {

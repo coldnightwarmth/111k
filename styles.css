@@ -300,6 +300,14 @@ body.touch #chat .log { max-height: min(30vh, calc(100vh - 260px)); }
 #speedo.on.blink { animation: speedo-blink .32s steps(1, end) infinite; }
 @keyframes speedo-blink { 0% { opacity: .95; } 50% { opacity: .08; } }
 
+/* the painting you're looking at: its number (the art's), where the speedometer goes when that's not up */
+#artno { position: fixed; left: 50%; bottom: max(96px, calc(env(safe-area-inset-bottom) + 88px)); transform: translateX(-50%);
+  margin: 0; pointer-events: none; white-space: nowrap; opacity: 0; transition: opacity .25s;
+  color: var(--ink, #e9e6dc); text-shadow: 0 1px 3px #000; font-variant-numeric: tabular-nums; }
+#artno b { font-size: 30px; font-weight: 600; letter-spacing: .02em; }
+#artno span { font-size: 11px; margin-right: 5px; color: var(--dim); letter-spacing: .12em; }
+#artno.on { opacity: .92; transition: opacity .15s; }
+
 /* king of the hill: who has the crown and how long they've had it, top middle while a game is on */
 #koth { position: fixed; left: 50%; top: max(12px, env(safe-area-inset-top)); transform: translateX(-50%); margin: 0;
   display: flex; align-items: baseline; gap: 8px; padding: 5px 12px; border-radius: 999px; background: rgba(10, 10, 12, .55);

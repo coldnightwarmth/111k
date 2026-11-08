@@ -170,6 +170,8 @@ async function start() {
   let thirdPerson = params.get('view') === '3p' || (resumed && mine.view === '3p');
   let fireLatch = false, doorAim = null, doorCheckAt = 0, cleanTarget = null, cleanCheckAt = 0;   // set by the click that picks something up, until the button is let go
   const speedoEl = $('speedo'), speedoNum = speedoEl.querySelector('b');
+  const artNoEl = $('artno'), artNoNum = artNoEl.querySelector('b');
+  let artNoShown = null;
   let speedNow = 0, speedoPeak = 0, speedoHold = 0, speedoLive = false, speedoShown = false, speedoBlink = false;
   // things you've done at least once (remembered in this browser): their hints stop showing
   let learned = new Set();
@@ -1677,6 +1679,9 @@ async function start() {
     machine.update(dt);
     const t = !h && !frozen && !pushable ? lookTarget() : null;
     items.highlight(t ? t.state.id : null);
+    // a painting in your sights: its number (unless the speedometer's up there)
+    const artNo = t?.state.type === 'painting' && !speedoShown ? t.state.art : null;
+    if (artNo !== artNoShown) { artNoShown = artNo; if (artNo) artNoNum.textContent = artNo; artNoEl.classList.toggle('on', !!artNo); }
     // an open door in reach to pull shut (checked a few times a second)
     if (h || t || frozen || pushable) doorAim = null;
     else if (now - doorCheckAt > 120) { doorCheckAt = now; doorAim = doorTarget(); }
@@ -1725,6 +1730,10 @@ async function start() {
   // (or a few seconds, if the server is slow), every shader compiled, and a few frames drawn behind the black.
   async function reveal() {
     await Promise.race([roomIn, wait(6000)]);
+    // the paintings: every small picture in, and the full ones round about (a little while at most)
+    const here = new THREE.Vector3(player.x, player.y, player.z);
+    items.prefetchArt(here);
+    await Promise.race([Promise.all([items.previewsReady, items.artNear(here)]), wait(2500)]);
     await renderer.compileAsync?.(scene, camera).catch(() => {});
     for (let i = 0; i < 4; i++) await new Promise(r => requestAnimationFrame(r));
     await wait(1500 - (performance.now() - goingAt));   // "going down…" stays long enough to read, even when it all loaded while you picked

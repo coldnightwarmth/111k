@@ -105,7 +105,14 @@ laid down by a Python port of the game's own placing (`planPlace` in
 `src/main.js`), run against the built `world.glb`, so they sit exactly as a
 player would put them. `python3 tools/scatter.py` redoes the scatter against an
 already built level without a rebuild. The art itself is listed in
-`src/paintings.js`.
+`src/paintings.js`; `python3 tools/paintings_webp.py <originals>` makes the
+WebP copies the game loads (1024 and 512 px, plus a preview atlas of all of
+them) in `assets/paintings/`: re-run it after adding art.
+
+Paintings stack, tip and fall: whoever puts one down, drops it or picks one
+up runs a few seconds of rigid-body physics (Rapier, `vendor/rapier`,
+`src/settle.js`) over the paintings and level round about, and everyone
+plays back the tumble.
 
 ## Avatars
 

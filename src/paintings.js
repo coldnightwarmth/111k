@@ -121,6 +121,13 @@ export function paintingSize(art) {
 // A painting's pose: its origin is the middle of its back, local +z out of the front, +y up the canvas.
 // tilt 0 hangs it upright; a little negative leans its top back against a wall; -pi/2 lies it face up;
 // roll turns it in its own plane (lying on a slope, it keeps its top pointing where it was put down).
+// The pictures as served with the site (tools/paintings_webp.py): each as WebP at 1024 px on its long side
+// (512 for phones), and all of them small in one preview atlas, ART's order (ascending id), PREVIEW.cols across,
+// each squeezed into a tile-pixel square with its edges repeated pad pixels round it.
+export const artFile = (art, px) => `assets/paintings/${px}/${art}.webp`;
+export const PREVIEW = {url: 'assets/paintings/previews.webp', tile: 128, pad: 8, cols: 10};
+export const ART_IDS = Object.keys(ART).map(Number).sort((a, b) => a - b);
+
 export function paintingMatrix(x, y, z, yaw, tilt, roll = 0, out = new THREE.Matrix4()) {
   return out.compose(new THREE.Vector3(x, y, z), new THREE.Quaternion().setFromEuler(new THREE.Euler(tilt, yaw, roll, 'YXZ')), new THREE.Vector3(1, 1, 1));
 }
