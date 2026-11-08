@@ -61,8 +61,8 @@ def scatter_buckets(colliders, items, count=3, seed=211):
 # A painting goes where a player could have put it: the game's own placing (planPlace in src/main.js,
 # with fitOn and leanOn) is run here against the built level's mesh, aimed from a standing eye, so a
 # spawned painting sits exactly as one put there by hand. On top of that: it has to be clear of every
-# solid bit of the level and of the colliders, flush on what it's on, away from doorways, the lap
-# timer and the supply room (both built at runtime, so not in the mesh), and apart from other items.
+# solid bit of the level and of the colliders, flush on what it's on, off the graffiti, away from doorways,
+# the lap timer and the supply room (both built at runtime, so not in the mesh), and apart from other items.
 
 XF = math.sqrt(3.3 ** 2 - 2.0 ** 2)   # the tunnel floor's half-width
 VD = XF + 1.15                       # radial offset of the rooms' door walls
@@ -111,7 +111,8 @@ class Hit:
 class LevelMesh:
     """The built level's triangles (assets/env/world.glb) with a ray test like the game's (src/decals.js
     createWorldHits): what the game hits is the opaque meshes with lightmap uvs, door leaves left out.
-    `solid=True` tests every opaque triangle (light tubes and lenses too), for clearance."""
+    `solid=True` tests every opaque triangle (light tubes and lenses too), for clearance; `graffiti=True`
+    only the graffiti (the see-through decal quads on the walls), so paintings can keep off it."""
     CELL = 1.0
 
     def __init__(self, path):
@@ -135,7 +136,7 @@ class LevelMesh:
             assert v.get('byteStride') in (None, comps * np.dtype(dt).itemsize)
             arr = np.frombuffer(binc, dt, a['count'] * comps, v.get('byteOffset', 0) + a.get('byteOffset', 0))
             return arr.reshape(-1, comps) if comps > 1 else arr
-        tris, hit, mats, names = [], [], [], []
+        tris, hit, mats, names, decal = [], [], [], [], []
         for node in g['nodes']:
             if 'mesh' not in node:
                 continue
@@ -144,18 +145,21 @@ class LevelMesh:
                 continue                     # door leaves: modelled round their hinges, and they swing
             for p in g['meshes'][node['mesh']]['primitives']:
                 m = g['materials'][p['material']]
-                if m.get('alphaMode') == 'BLEND' or 'indices' not in p:
-                    continue                 # decals
+                if 'indices' not in p:
+                    continue
                 pos = read(p['attributes']['POSITION']).astype(np.float64)
                 idx = read(p['indices']).reshape(-1, 3)
                 if m['name'] not in names:
                     names.append(m['name'])
                 tris.append(pos[idx])
-                hit.append(np.full(len(idx), 'TEXCOORD_1' in p['attributes']))
+                see_through = m.get('alphaMode') == 'BLEND'
+                hit.append(np.full(len(idx), 'TEXCOORD_1' in p['attributes'] and not see_through))
+                decal.append(np.full(len(idx), see_through))
                 mats.append(np.full(len(idx), names.index(m['name'])))
         T = np.concatenate(tris)
         self.names = names
         self.hit = np.concatenate(hit)
+        self.decal = np.concatenate(decal)
         self.mat = np.concatenate(mats)
         self.V0, self.E1, self.E2 = T[:, 0], T[:, 1] - T[:, 0], T[:, 2] - T[:, 0]
         N = np.cross(T[:, 2] - T[:, 1], T[:, 0] - T[:, 1])     # (three's Triangle.getNormal)
@@ -180,12 +184,11 @@ class LevelMesh:
             self._cache[key] = np.unique(np.concatenate(parts)) if parts else np.zeros(0, int)
         return self._cache[key]
 
-    def raycast(self, o, d, far, solid=False):
+    def raycast(self, o, d, far, solid=False, graffiti=False):
         """Nearest hit along a segment, its normal turned to face the ray (both sides count), or None."""
         import numpy as np
         idx = self._near(o, o + d * far)
-        if not solid:
-            idx = idx[self.hit[idx]]
+        idx = idx[self.decal[idx]] if graffiti else idx[~self.decal[idx]] if solid else idx[self.hit[idx]]
         if not len(idx):
             return None
         E1, E2, V0 = self.E1[idx], self.E2[idx], self.V0[idx]
@@ -421,6 +424,19 @@ def painting_clear(mesh, it, w, ht, inset, back):
     return True
 
 
+def painting_covers_graffiti(mesh, it, w, ht):
+    """Would it hide any graffiti: rays back from all over its face (and a bit past its edges)."""
+    import numpy as np
+    R, o = painting_basis(it['yaw'], it['tilt'], it['roll']), np.array([it['x'], it['y'], it['z']])
+    back = -R[:, 2]
+    for sx in np.linspace(-1, 1, 7):
+        for sy in np.linspace(-1, 1, 7):
+            p = o + R @ np.array([sx * (w / 2 + .03), sy * (ht / 2 + .03), PAINTING_DEPTH])
+            if mesh.raycast(p, back, .6, graffiti=True) is not None:
+                return True
+    return False
+
+
 def find_doorways(mesh, loop_doors):
     """Where each room's passage opens out of the tunnel (felt for: the rooms' door offsets are random):
     [(angle, offset along the tunnel)], one per room."""
@@ -441,10 +457,12 @@ def _seg_dist(p, a, b):
     return float(np.linalg.norm(p - (a + ab * t)))
 
 
-def scatter_paintings(meta, mesh, items, art, count=29, seed=1111, log=None):
-    """Paintings round the level: about half in the tunnel (spread round the loop), the rest one to a room;
-    some hung on the walls, some leant against walls or furniture, some lying on the floor. `art` is
-    {art id: (w, h) pixels}; each painting gets a different picture that isn't already up."""
+def scatter_paintings(meta, mesh, items, art, count=29, seed=1111, log=None, pool=None, per_room=1, spacing=3.0, avoid=()):
+    """Paintings round the level: about half in the tunnel (spread round the loop), the rest in the rooms
+    (`per_room` to a room on the first pass); some hung on the walls, some leant against walls or
+    furniture, some lying on the floor. `art` is {art id: (w, h) pixels}, `pool` the ids to draw from
+    (all of them by default); each painting gets a different picture that isn't already up. They keep
+    `spacing` apart, from each other and from the paintings in `avoid`."""
     import numpy as np
     rng = random.Random(seed)
     placer = Placer(mesh)
@@ -457,7 +475,7 @@ def scatter_paintings(meta, mesh, items, art, count=29, seed=1111, log=None):
     machine = _P(MACHINE[0], MACHINE[1], 0)
     spawns = [np.array([s['x'], 0, s['z']]) for s in meta['spawns']]
     used = {it.get('art') for it in items if it['type'] == 'painting'}
-    arts = sorted(a for a in art if a not in used)
+    arts = sorted(a for a in (art if pool is None else pool) if a not in used)
     rng.shuffle(arts)
     n_tunnel = (count + 1) // 2
     modes_t = ['hang'] * round(n_tunnel * .45) + ['lean'] * round(n_tunnel * .3)
@@ -499,7 +517,7 @@ def scatter_paintings(meta, mesh, items, art, count=29, seed=1111, log=None):
             if len(touch) < 25 or plan['aim'][1] > .05 or max(t[2] for t in touch) - min(t[2] for t in touch) > .01:
                 return None
             inset, back = .004, .0015
-        if not painting_clear(mesh, it, w, ht, inset, back):
+        if not painting_clear(mesh, it, w, ht, inset, back) or painting_covers_graffiti(mesh, it, w, ht):
             return None
         pts = painting_points(it, w, ht, inset + .01, back)
         # what it's leant on is touching it on purpose (the mesh check above keeps it out of it)
@@ -517,7 +535,7 @@ def scatter_paintings(meta, mesh, items, art, count=29, seed=1111, log=None):
             return None
         if any(math.hypot(it['x'] - o['x'], it['z'] - o['z']) < 1.0 for o in items):
             return None
-        if any(math.hypot(it['x'] - o['x'], it['z'] - o['z']) < 3.0 for o in out):
+        if any(math.hypot(it['x'] - o['x'], it['z'] - o['z']) < spacing for o in (*out, *avoid)):
             return None
         return it
 
@@ -610,6 +628,7 @@ def scatter_paintings(meta, mesh, items, art, count=29, seed=1111, log=None):
 
     report = []
     k_art = 0
+    missed = []                              # modes that found no spot first time round
     for k, mode in enumerate(modes_t):
         w, ht = painting_size(art[arts[k_art]])
         lo, hi = 2 * math.pi * (k + .15) / n_tunnel, 2 * math.pi * (k + .85) / n_tunnel
@@ -619,7 +638,9 @@ def scatter_paintings(meta, mesh, items, art, count=29, seed=1111, log=None):
             out.append({**it, 'art': arts[k_art]})
             report.append((mode, 'tunnel', plan.get('against') or plan.get('on')))
             k_art += 1
-    rooms = [i for i in range(20) if i != SUPPLY_ROOM]
+        else:
+            missed.append(mode)
+    rooms = [i for i in range(20) if i != SUPPLY_ROOM] * per_room
     rng.shuffle(rooms)
     for mode in modes_r:
         w, ht = painting_size(art[arts[k_art]])
@@ -630,6 +651,26 @@ def scatter_paintings(meta, mesh, items, art, count=29, seed=1111, log=None):
                 it, plan = got
                 out.append({**it, 'art': arts[k_art]})
                 report.append((mode, f'room {i}', plan.get('against') or plan.get('on')))
+                k_art += 1
+                break
+        else:
+            missed.append(mode)
+    # whatever missed: anywhere round the loop, or any room
+    for mode in missed:
+        w, ht = painting_size(art[arts[k_art]])
+        for _ in range(40):
+            if rng.random() < .5:
+                a = rng.uniform(0, 2 * math.pi)
+                got = place(mode, w, ht, lambda: try_tunnel(mode, a, w, ht, a - .1, a + .1))
+                where = 'tunnel'
+            else:
+                i = rng.choice([i for i in range(20) if i != SUPPLY_ROOM])
+                got = place(mode, w, ht, lambda: try_room(mode, i, w, ht))
+                where = f'room {i}'
+            if got:
+                it, plan = got
+                out.append({**it, 'art': arts[k_art]})
+                report.append((mode, where, plan.get('against') or plan.get('on')))
                 k_art += 1
                 break
     items_out = [{'type': 'painting', 'x': round(it['x'], 3), 'y': round(it['y'], 3), 'z': round(it['z'], 3),
@@ -654,11 +695,25 @@ def write_spawns(path, items):
     return out
 
 
-def add_paintings(here, items, meta):
+# The scattered paintings come in batches, each with its own pictures (the next ones in ART's order,
+# after art 1 which hangs in the party room) and seed, so adding a batch leaves the earlier ones where
+# they are: (count, seed, paintings to a room on the first pass, spacing).
+PAINTING_BATCHES = [(29, 1111, 1, 3.0), (70, 2222, 2, 2.0)]
+
+
+def add_paintings(here, items, meta, log=None):
     """The scattered paintings, placed against the built level (assets/env/world.glb must be there)."""
     mesh = LevelMesh(os.path.join(here, '..', 'assets', 'env', 'world.glb'))
     art = read_art(os.path.join(here, '..', 'src', 'paintings.js'))
-    return scatter_paintings(meta, mesh, items, art)
+    order = list(art)[1:]
+    paintings, report = [], []
+    for count, seed, per_room, spacing in PAINTING_BATCHES:
+        pool, order = order[:count], order[count:]
+        got, rep = scatter_paintings(meta, mesh, items + paintings, art, count=count, seed=seed, log=log, pool=pool,
+                                     per_room=per_room, spacing=spacing, avoid=paintings)
+        paintings += got
+        report += rep
+    return paintings, report
 
 
 def is_scattered(it):

@@ -496,7 +496,7 @@ test('paintings: hung, leant and laid with a tilt, fall flat when let go, and pa
   // a tag across the painting and the wall: the wall part remembers the painting's shape, the painting keeps its part
   items.sp1.holder = 'aaa';
   const tag = {p: [pt.x, 1.2, pt.z + .1], n: [0, 0, 1], up: [0, 1, 0], piece: 'tag_ruse', size: 1, occ: [[pt.x, pt.y, pt.z, 1, -.2, 1]]};
-  const r = send({type: 'spray', ...tag, parts: [{...tag, occ: undefined, p: [.1, .2, .04], pi: 'pt1'}, {...tag, p: [0, 0, 0], pi: 'pt99'}]});
+  const r = send({type: 'spray', ...tag, parts: [{...tag, occ: undefined, p: [.1, .2, .04], pi: 'pt1'}, {...tag, p: [0, 0, 0], pi: 'pt999'}]});
   const msg = r.out.find(o => o.msg.type === 'spray').msg;
   assert.equal(msg.parts.length, 1, 'only parts on paintings that exist');
   assert.deepEqual(msg.mark.occ, [[pt.x, pt.y, pt.z, 1, -.2, 1]]);

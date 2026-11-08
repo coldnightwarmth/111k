@@ -302,37 +302,48 @@ function crownModel() {
 // wrapped, so the sides streak with the picture's own colours), and an open back: the canvas's raw
 // back, folded and stapled over a pine stretcher with a cross brace. Origin: the middle of the back;
 // the picture faces +z, its top is +y.
-// The pictures are big (up to ~2000 px and several MB each, thirty of them), so a picture is only fetched
-// once its painting comes near (or is picked up), and drawn down to ART_PX on its long side (less on a
-// phone) before it goes to the GPU. Until then the front is plain primed canvas.
+// The pictures are big (up to ~2000 px and several MB each, a hundred of them), so a picture is only
+// fetched once its painting comes near (or is picked up), drawn down to ART_PX on its long side (less on
+// a phone) before it goes to the GPU, and let go again once nobody near shows it (it comes back from the
+// browser's cache). Meanwhile the front is plain primed canvas.
 const ART_PX = globalThis.matchMedia?.('(pointer: coarse)').matches ? 512 : 1024;
-const ART_NEAR = 30;                 // metres from the eye
-const artTextures = new Map();       // art -> {texture (once it's in), waiting: [materials], failed: when}
-function loadArt(art, material) {
+const ART_NEAR = 24, ART_FAR = 34;   // metres from the eye: put the picture on, take it off (the tunnel curves away well within that)
+const artTextures = new Map();       // art -> {texture (once it's in), users: materials showing it, failed: when}
+function showArt(art, material) {
   if (material.userData.art) return;
   let a = artTextures.get(art);
   if (a?.failed && performance.now() - a.failed < 30000) return;     // (tried a moment ago: wait a bit)
   material.userData.art = true;
   if (!a || a.failed) {
-    a = {texture: null, waiting: [], failed: 0};
-    artTextures.set(art, a);
+    const b = a = {texture: null, users: new Set(), failed: 0};
+    artTextures.set(art, b);
     const img = new Image();
     img.crossOrigin = 'anonymous'; img.decoding = 'async';
     img.onload = () => {
+      if (!b.users.size) { if (artTextures.get(art) === b) artTextures.delete(art); return; }   // gone out of sight meanwhile
       const k = Math.min(1, ART_PX / Math.max(img.width, img.height));
       const c = document.createElement('canvas');
       c.width = Math.max(1, Math.round(img.width * k)); c.height = Math.max(1, Math.round(img.height * k));
       const g = c.getContext('2d'); g.imageSmoothingQuality = 'high'; g.drawImage(img, 0, 0, c.width, c.height);
       const t = new THREE.CanvasTexture(c);
       t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 8;
-      a.texture = t;
-      for (const m of a.waiting.splice(0)) m.map = t;
+      b.texture = t;
+      for (const m of b.users) m.map = t;
     };
-    img.onerror = () => { a.failed = performance.now(); for (const m of a.waiting.splice(0)) m.userData.art = false; };   // try again later
+    img.onerror = () => { b.failed = performance.now(); for (const m of b.users) m.userData.art = false; b.users.clear(); };   // try again later
     img.src = (ART[art] || ART[1]).url;
   }
+  a.users.add(material);
   if (a.texture) material.map = a.texture;
-  else a.waiting.push(material);
+}
+function hideArt(art, material) {
+  if (!material.userData.art) return;
+  material.userData.art = false;
+  material.map = primedTex;
+  const a = artTextures.get(art);
+  if (!a) return;
+  a.users.delete(material);
+  if (!a.users.size && a.texture) { a.texture.dispose(); artTextures.delete(art); }
 }
 let woodTex = null, linenTex = null, primedTex = null;
 // white primed canvas: gesso over the weave, the weave just showing through
@@ -431,8 +442,8 @@ function paintingModel(id, state) {
   for (const [kx, ky] of [[1, 1], [1, -1], [-1, 1], [-1, -1]]) part(g, key, wood, [kx * (x - bar - .012), ky * (y - bar - .012), .004], [0, 0, Math.PI / 4]);
   // the pick-up glow: one closed box with its corners' normals shared, so the glow wraps it without gaps
   const ob = glowBoxGeometry(new THREE.Vector3(-x, -y, 0), new THREE.Vector3(x, y, d));
-  const showArt = () => loadArt(art, canvasMat);
-  g.userData = {tip: new THREE.Vector3(0, 0, d), ground: .002, painting: true, w, h, d, art, canvas: front, outline: ob, showArt};
+  g.userData = {tip: new THREE.Vector3(0, 0, d), ground: .002, painting: true, w, h, d, art, canvas: front, outline: ob,
+    showArt: () => showArt(art, canvasMat), hideArt: () => hideArt(art, canvasMat)};
   return g;
 }
 
@@ -772,7 +783,10 @@ export function createItems({scene, camera, hits, shadows = null}) {
       camera.getWorldPosition(_eye);
       for (const it of items.values()) {
         const s = it.state, m = it.model, u = m.userData;
-        if (u.showArt && (s.holder || Math.hypot(s.x - _eye.x, s.y - _eye.y, s.z - _eye.z) < ART_NEAR)) u.showArt();
+        if (u.showArt) {
+          const far = s.holder ? 0 : Math.hypot(s.x - _eye.x, s.y - _eye.y, s.z - _eye.z);
+          if (far < ART_NEAR) u.showArt(); else if (far > ART_FAR) u.hideArt();
+        }
         // the hopper shows what's loaded: yours, the holder's choice, or a mix lying on the floor
         if (u.setPaint) u.setPaint(s.holder === myId ? myPaint : s.holder ? (poseOf(s.holder)?.pc ?? RANDOM_PAINT) : RANDOM_PAINT, PAINT_COLORS);
         it.kick *= Math.exp(-dt * 14); it.shake = Math.max(0, it.shake - dt);
