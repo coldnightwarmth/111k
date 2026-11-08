@@ -11,3 +11,10 @@ export function serverUrl() {
 
 export const isTouch = matchMedia('(pointer: coarse)').matches || navigator.maxTouchPoints > 1 && !matchMedia('(pointer: fine)').matches;
 export const lowPower = isTouch || (navigator.hardwareConcurrency || 8) <= 4;
+
+// the emote settings (GET to read, POST from /anim): the same server, over http
+export function emotesUrl() {
+  const u = new URL(serverUrl().replace(/^ws/, 'http'));
+  u.pathname = '/emotes'; u.search = '';
+  return u.href;
+}

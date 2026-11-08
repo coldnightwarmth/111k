@@ -8,6 +8,7 @@ import {createAvatarAppearance} from './cards/drifmaker-avatar.mjs';
 import {normalizeAppearance, characterId} from './cards/drifmaker-config.mjs';
 import {partsFor} from './looks.js';
 import {normalizeEmote, normalizeEmoteTime, PUNCH_DURATION} from './protocol.js';
+import {variantOf, clipName, emoteClipTime} from './emotes.js';
 import {jumpHeight} from './motion.js';
 import {ghostMaterial} from './level.js';
 
@@ -20,12 +21,13 @@ const once = (key, make) => {
   return cache.get(key);
 };
 const character = name => once(name, async () => {
-  const [index, base, extra] = await Promise.all([
+  const [index, base, extra, emotes] = await Promise.all([
     fetch(`${ROOT}${name}/index.json`).then(r => { if (!r.ok) throw Error(`avatar index ${r.status}`); return r.json(); }),
     loader.loadAsync(`${ROOT}${name}/base.glb`),
     loader.loadAsync(`${ROOT}moves.glb`).catch(() => null),   // clips made for 111k (the punch)
+    loader.loadAsync(`${ROOT}emotes.glb`).catch(() => null),  // the emotes made for 111k (tools/blender/emotes.py)
   ]);
-  const clips = [...base.animations, ...(extra?.animations || [])];
+  const clips = [...base.animations, ...(extra?.animations || []), ...(emotes?.animations || [])];
   return {index, scene: base.scene, clips};
 });
 const part = (name, file) => once(`${name}/${file}`, () => loader.loadAsync(`${ROOT}${name}/${file}`));
@@ -317,10 +319,12 @@ export async function createAvatar(look) {
       const emote = normalizeEmote(motion.emote);
       const pt = motion.punchTime ?? -1, punching = pt >= 0 && pt <= PUNCH_DURATION;
       if (emote && !punching) {
-        const clip = `Pose_${emote}`, chosen = actions.get(clip);
+        // which version plays: the settings' (motion.emoteConfig), or one asked for (motion.emoteVariant, /anim)
+        const variant = motion.emoteVariant || variantOf(emote, motion.emoteConfig);
+        const clip = clipName(emote, variant), chosen = actions.get(clip);
         if (chosen) {
           for (const [key, action] of actions) action.setEffectiveWeight(key === clip ? 1 : 0);
-          chosen.time = Math.min(normalizeEmoteTime(motion.emoteTime), chosen.getClip().duration);
+          chosen.time = emoteClipTime(emote, variant, normalizeEmoteTime(motion.emoteTime), chosen.getClip().duration);
           mixer.update(0); wardrobe.applyHeadScale(); this.fold();
           return;
         }

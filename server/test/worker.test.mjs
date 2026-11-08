@@ -516,3 +516,23 @@ test('paintings: hung, leant and laid with a tilt, fall flat when let go, and pa
   releaseItems(items, a);
   assert.equal(pt.tilt, -Math.PI / 2);
 });
+
+test('emote settings: saved from /anim, cleaned, sent to everyone here and to newcomers', async () => {
+  const {room, sockets, ctx} = makeRoom();
+  const store = new Map();
+  ctx.storage.get = async k => store.get(k);
+  ctx.storage.put = async (k, v) => { store.set(k, structuredClone(v)); };
+  await join(room, S1);
+  const first = sockets[0].messages().find(m => m.type === 'emotes');
+  assert.ok(first && Array.isArray(first.config.off), 'a newcomer gets the settings');
+  const body = JSON.stringify({variant: {wave: 'redo', groove: 'redo', nope: 'redo', dab: 'sideways'}, off: ['tpose', 'tpose', 'bogus']});
+  const res = await room.fetch(new Request('https://room/emotes', {method: 'POST', body}));
+  const saved = await res.json();
+  assert.deepEqual(saved, {variant: {wave: 'redo'}, off: ['tpose']});   // only originals have versions; unknown ids go
+  assert.deepEqual(store.get('emotes'), saved);
+  const pushed = sockets[0].messages().filter(m => m.type === 'emotes').at(-1);
+  assert.deepEqual(pushed.config, saved);
+  assert.deepEqual(await (await room.fetch(new Request('https://room/emotes'))).json(), saved);
+  await join(room, S2);
+  assert.deepEqual(sockets[1].messages().find(m => m.type === 'emotes').config, saved);
+});

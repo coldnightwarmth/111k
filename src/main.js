@@ -21,6 +21,7 @@ import {createDoors} from './doors.js';
 import {pickAvatar} from './picker.js';
 import {createVoice, voicePanel} from './voice.js';
 import {randomLook, cleanLook} from './looks.js';
+import {cleanEmoteConfig, offeredEmotes} from './emotes.js';
 import {EMOTES, EMOTE_DURATION, PUNCH_COOLDOWN_MS, PUNCH_DURATION, PUNCH_COMBO_MS, SHOT_INTERVAL_MS, SPRAY_INTERVAL_MS, SPRAY_RANGE,
   MAX_SPLATS, MAX_SPRAYS, SPLAT_LIFE_MS, sanitizePose, sanitizeName, cleanSplat, cleanSpray, splatId, sprayId} from './protocol.js';
 import {paintingSize, paintingMatrix, paintingTris} from './paintings.js';
@@ -219,11 +220,16 @@ async function start() {
 
   // ------------------------------------------------------------ emotes
   const emoteMenu = $('emotes'), emoteLabel = $('emoteLabel');
-  for (const e of EMOTES) {
-    const b = document.createElement('button'); b.type = 'button'; b.textContent = e.label;
-    b.addEventListener('click', () => { player.emote = e.id; player.emoteTime = 0; toggleEmotes(false); backToPlay(); });
-    emoteMenu.append(b);
+  // the menu offers what the site's settings switch on (changed from /anim, sent by the server, live)
+  let emoteConfig = cleanEmoteConfig(null);
+  function emoteButtons() {
+    emoteMenu.replaceChildren(...offeredEmotes(emoteConfig).map(e => {
+      const b = document.createElement('button'); b.type = 'button'; b.textContent = e.label;
+      b.addEventListener('click', () => { player.emote = e.id; player.emoteTime = 0; toggleEmotes(false); backToPlay(); });
+      return b;
+    }));
   }
+  emoteButtons();
   function toggleEmotes(force) {
     const open = force ?? emoteMenu.hidden;
     emoteMenu.hidden = !open;
@@ -1169,6 +1175,7 @@ async function start() {
       target.bubble?.dispose(); target.bubble = bubble; target.bubbleExpires = m.expiresAt;
     },
     onMessage: m => {
+      if (m.type === 'emotes') { emoteConfig = cleanEmoteConfig(m.config); emoteButtons(); return; }
       if (m.type === 'rtc') { voice.signal(m.from, m.d); return; }
       if (m.type === 'door') { doors.close(m.i); return; }
       if (m.type === 'erase') {
@@ -1393,7 +1400,7 @@ async function start() {
     if (h?.state.type === 'paintball' && input.firing && !fireLatch && !frozen) shoot();
     document.body.classList.toggle('holding-spray', h?.state.type === 'spray');
     document.body.classList.toggle('holding-paint', h?.state.type === 'paintball');
-    const motion = {...vertical.pose, emote: player.emote, emoteTime: player.emoteTime, pitch: facePitch,
+    const motion = {...vertical.pose, emote: player.emote, emoteTime: player.emoteTime, emoteConfig, pitch: facePitch,
       punchTime: player.punchTime, punchHand: player.punchHand, holding};
 
     // local avatar
@@ -1482,7 +1489,7 @@ async function start() {
       const v = p.previous && pdt > 0 ? Math.hypot(s.x - p.previous.x, s.z - p.previous.z) / pdt : 0;
       p.previous = s;
       p.avatar.root.position.set(s.x, s.g || 0, s.z); p.avatar.root.rotation.y = s.yaw;
-      p.avatar.update(pdt, v, {...s, holding: !!items.heldBy(p.id)});
+      p.avatar.update(pdt, v, {...s, holding: !!items.heldBy(p.id), emoteConfig});
       p.avatar.ghostNear(true);            // walking into someone dissolves them, first person too
       p.avatar.ghostFor(camWorld, pdt);
       doors.push(s.x, s.z, v * pdt * Math.sin(-s.yaw), 0, p.id);

@@ -10,6 +10,7 @@ import {fileURLToPath} from 'node:url';
 import {INACTIVE_MS, IDLE_RESET_MS, MAX_PLAYERS} from '../src/protocol.js';
 import {freshRace, publicRace} from '../src/race.js';
 import {handleMessage, newPlayer, snapshot, freshItems, releaseItems, letGo, freshMarks, marksMessage, itemsAtSpawn, kothTick, freshKoth, publicKoth} from './room.js';
+import {cleanEmoteConfig} from '../src/emotes.js';
 
 const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const PORT = Number(process.env.PORT || 8000);
@@ -17,7 +18,17 @@ const TYPES = {'.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/jav
   '.json': 'application/json', '.glb': 'model/gltf-binary', '.png': 'image/png', '.webp': 'image/webp',
   '.jpg': 'image/jpeg', '.svg': 'image/svg+xml', '.ico': 'image/x-icon', '.woff2': 'font/woff2'};
 
+let emotes = cleanEmoteConfig(null);
 const server = createServer(async (req, res) => {
+  // the emote settings, as the worker serves them (GET, and POST from /anim)
+  if (new URL(req.url, 'http://x').pathname === '/emotes') {
+    if (req.method === 'POST') {
+      let body = ''; for await (const chunk of req) body += chunk;
+      try { emotes = cleanEmoteConfig(JSON.parse(body)); } catch { res.writeHead(400); res.end('Bad JSON'); return; }
+      broadcast({type: 'emotes', config: emotes});
+    }
+    res.writeHead(200, {'Content-Type': 'application/json', 'Cache-Control': 'no-store'}); res.end(JSON.stringify(emotes)); return;
+  }
   try {
     let path = decodeURIComponent(new URL(req.url, 'http://x').pathname);
     if (path.endsWith('/')) path += 'index.html';
@@ -68,6 +79,7 @@ server.on('upgrade', (req, socket) => {
   const c = {socket, player: newPlayer(id, now), buffer: Buffer.alloc(0), fragments: [], closed: false};
   clients.add(c);
   send(c, {type: 'welcome', id, now});
+  send(c, {type: 'emotes', config: emotes});
   send(c, snapshot(players(), now, items));
   send(c, marksMessage(marks));
   send(c, {type: 'race', race: publicRace(race, now)});

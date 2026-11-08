@@ -1,5 +1,6 @@
 // Shared by the browser, the Cloudflare Worker and the local dev server.
 // Only these small, validated values ever cross the network.
+import {EMOTE_LIST, EMOTE_IDS} from './emotes.js';
 
 export const MAX_PLAYERS = 32;
 export const CHAT_MAX = 180;
@@ -22,21 +23,14 @@ export const MAX_SPLATS = 400;         // paint marks the room remembers (oldest
 export const MAX_SPRAYS = 150;
 export const ITEM_TYPES = ['flashlight', 'paintball', 'spray', 'bucket', 'crown', 'painting'];
 
-// Emotes map to Pose_<id> clips in the avatar model.
-export const EMOTES = Object.freeze([
-  ['wave', 'Wave'], ['dab', 'Dab'], ['heart', 'Heart hands'], ['airguitar', 'Air guitar'], ['victory', 'Victory'],
-  ['shrug', 'Shrug'], ['think', 'Thinking'], ['point', 'Point'], ['flex', 'Flex'], ['bow', 'Bow'],
-  ['salute', 'Salute'], ['crossarms', 'Arms crossed'], ['highfive', 'High five'], ['fistbump', 'Fist bump'],
-  ['micdrop', 'Mic drop'], ['boxer', 'Boxing guard'], ['kneel', 'Kneel'], ['leanback', 'Lean back'],
-  ['lookout', 'Lookout'], ['conductor', 'Conductor'], ['curtsey', 'Curtsey'], ['lunge', 'Hero lunge'],
-  ['crane', 'Crane balance'], ['summon', 'Spellcast'], ['welcome', 'Welcome'], ['tpose', 'T-pose'],
-  ['mnshy', 'Shy'], ['mnreverie', 'Daydream'], ['mncheekrest', 'Cheek rest'], ['mnlistening', 'Listening'],
-].map(([id, label]) => Object.freeze({id, label, clip: `Pose_${id}`})));
-const EMOTE_IDS = new Set(EMOTES.map(e => e.id));
-export const EMOTE_DURATION = 2;
+// Emotes: every id the game knows (src/emotes.js); which clip plays is the settings' choice.
+export const EMOTES = Object.freeze(EMOTE_LIST.map(e => Object.freeze({id: e.id, label: e.label})));
+// how far into an emote its clock runs: looping emotes keep going until you move (it then just stays at the end)
+export const EMOTE_MAX_TIME = 900;
+export const EMOTE_DURATION = EMOTE_MAX_TIME;   // (the old name)
 
 export const normalizeEmote = id => (typeof id === 'string' && EMOTE_IDS.has(id) ? id : '');
-export const normalizeEmoteTime = t => (Number.isFinite(t) ? Math.max(0, Math.min(EMOTE_DURATION, t)) : 0);
+export const normalizeEmoteTime = t => (Number.isFinite(t) ? Math.max(0, Math.min(EMOTE_MAX_TIME, t)) : 0);
 
 const num = (v, lo, hi) => (Number.isFinite(v) && v >= lo && v <= hi ? v : null);
 const round = (v, d = 3) => Math.round(v * 10 ** d) / 10 ** d;

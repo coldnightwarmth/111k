@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#050506">
+  <title>111k emotes</title>
+  <meta name="description" content="preview every 111k emote, and choose which ones the site uses">
+  <link rel="icon" href="../favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="anim.css">
+  <script type="importmap">{"imports": {"three": "../vendor/three/three.module.min.js"}}</script>
+</head>
+<body>
+  <aside id="list" aria-label="emotes">
+    <header class="side-head">
+      <a class="home" href="../">111k</a>
+      <h1>emotes</h1>
+    </header>
+    <input id="search" type="search" placeholder="find an emote" autocomplete="off" spellcheck="false">
+    <div id="groups"></div>
+  </aside>
+
+  <main id="stage">
+    <canvas id="view" aria-label="emote preview"></canvas>
+    <div id="labels"></div>
+    <div id="toolbar">
+      <div class="who" role="tablist" aria-label="who">
+        <button type="button" role="tab" data-kind="drifella" aria-selected="true">drifella</button>
+        <button type="button" role="tab" data-kind="drilady" aria-selected="false">drilady</button>
+      </div>
+      <button type="button" id="reroll" title="new look" aria-label="new look"><svg viewBox="0 0 20 20" aria-hidden="true"><rect x="2.5" y="2.5" width="15" height="15" rx="3.5"/><circle cx="6.8" cy="6.8" r="1.25"/><circle cx="13.2" cy="6.8" r="1.25"/><circle cx="10" cy="10" r="1.25"/><circle cx="6.8" cy="13.2" r="1.25"/><circle cx="13.2" cy="13.2" r="1.25"/></svg></button>
+      <label class="check"><input type="checkbox" id="compare" checked> compare original &amp; redo</label>
+    </div>
+    <div id="transport">
+      <button type="button" id="play" aria-label="pause">
+        <svg class="i-pause" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2h3v12H4zM9 2h3v12H9z"/></svg>
+        <svg class="i-play" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2l10 6-10 6z"/></svg>
+      </button>
+      <button type="button" id="restart" aria-label="from the start" title="from the start"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 2h2v12H3zM14 2v12L6 8z"/></svg></button>
+      <div class="track">
+        <input id="scrub" type="range" min="0" max="1000" value="0" aria-label="time">
+        <div id="loopMark" title="the loop starts here"></div>
+      </div>
+      <output id="clock">0.00s</output>
+      <select id="speed" aria-label="speed">
+        <option value="0.25">¼×</option><option value="0.5">½×</option><option value="1" selected>1×</option><option value="1.5">1½×</option>
+      </select>
+    </div>
+  </main>
+
+  <aside id="detail" aria-label="settings for this emote">
+    <h2 id="name">—</h2>
+    <p id="about"></p>
+    <div id="choice"></div>
+    <label class="check big"><input type="checkbox" id="onSite"> in the emote menu</label>
+    <div class="save">
+      <p id="status">loading the site's settings…</p>
+      <button type="button" id="save" disabled>save to the live site</button>
+      <button type="button" id="revert" class="quiet" disabled>undo changes</button>
+    </div>
+  </aside>
+  <script type="module" src="../src/anim.js"></script>
+</body>
+</html>

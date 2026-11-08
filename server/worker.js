@@ -2,6 +2,7 @@
 // One Durable Object instance ("public-v1") holds every socket. Hibernating
 // WebSockets plus automatic ping/pong mean an idle room costs nothing.
 import {INACTIVE_MS, IDLE_RESET_MS, MAX_PLAYERS} from '../src/protocol.js';
+import {cleanEmoteConfig} from '../src/emotes.js';
 import {freshRace, publicRace} from '../src/race.js';
 import {handleMessage, newPlayer, snapshot, freshItems, validItems, releaseItems, letGo, validMarks, marksMessage, itemsAtSpawn,
   kothTick, kothNext, freshKoth, publicKoth} from './room.js';
@@ -18,6 +19,16 @@ export default {
     if (url.pathname === '/health') return Response.json({ok: true});
     const origin = request.headers.get('Origin');
     if (!allowedOrigins(env).includes(origin)) return new Response('Forbidden', {status: 403});
+    // the emote settings (read by anyone on the site, changed from /anim): handled by the room itself
+    if (url.pathname === '/emotes') {
+      const cors = {'Access-Control-Allow-Origin': origin, 'Vary': 'Origin', 'Access-Control-Allow-Methods': 'GET, POST',
+        'Access-Control-Allow-Headers': 'Content-Type, X-Emotes-Key'};
+      if (request.method === 'OPTIONS') return new Response(null, {status: 204, headers: cors});
+      if (request.method === 'POST' && env.EMOTES_KEY && request.headers.get('X-Emotes-Key') !== env.EMOTES_KEY)
+        return new Response('Wrong key', {status: 401, headers: cors});
+      const res = await env.ROOM.get(env.ROOM.idFromName('public-v1')).fetch(request);
+      return new Response(res.body, {status: res.status, headers: {...Object.fromEntries(res.headers), ...cors}});
+    }
     if (url.pathname !== '/connect' || request.headers.get('Upgrade')?.toLowerCase() !== 'websocket')
       return new Response('WebSocket required', {status: 400});
     if (!/^[a-f0-9-]{36}$/.test(url.searchParams.get('session') || '')) return new Response('Invalid session', {status: 400});
@@ -88,7 +99,23 @@ export class Room {
     await this.ctx.storage.setAlarm(at);
   }
 
+  async loadEmotes() {
+    if (!this.emotes) this.emotes = cleanEmoteConfig(await this.ctx.storage.get?.('emotes'));
+    return this.emotes;
+  }
+  // GET /emotes: the settings; POST /emotes: new ones, saved and sent to everyone here
+  async emotesRequest(request) {
+    if (request.method === 'POST') {
+      let body; try { body = await request.json(); } catch { return new Response('Bad JSON', {status: 400}); }
+      this.emotes = cleanEmoteConfig(body);
+      await this.ctx.storage.put?.('emotes', this.emotes);
+      this.broadcast({type: 'emotes', config: this.emotes});
+    }
+    return Response.json(await this.loadEmotes(), {headers: {'Cache-Control': 'no-store'}});
+  }
+
   async fetch(request) {
+    if (new URL(request.url).pathname === '/emotes') return this.emotesRequest(request);
     // Public player IDs must not expose the session token that can resume a socket.
     const session = new URL(request.url).searchParams.get('session');
     const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(session));
@@ -105,6 +132,7 @@ export class Room {
     this.send(server, marksMessage(await this.loadMarks()));
     this.send(server, {type: 'race', race: publicRace(await this.loadRace(), now)});
     this.send(server, {type: 'koth', koth: publicKoth(await this.loadKoth(), now)});
+    this.send(server, {type: 'emotes', config: await this.loadEmotes()});
     await this.scheduleAlarm();
     return new Response(null, {status: 101, webSocket: client});
   }
