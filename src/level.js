@@ -187,10 +187,16 @@ export async function loadLevel(name, renderer) {
     m.flickerMap ? loader.loadAsync(`${base}-flicker.webp${v}`) : blank(),
     m.flickerMap === 'share2' ? loader.loadAsync(`${base}-flicker2.webp${v}`) : blank(),
   ]));
-  const [gltf, lightmap, meta, [flicker, flicker2]] = await Promise.all([
+  // more graffiti for the spray cans, on its own atlas (tools/graffiti_tags.py): not on the walls, so
+  // the level doesn't need rebuilding for it. If it can't be had, the cans just offer the level's own.
+  const tagsReady = fetch(`${base}-tags.json${v}`).then(r => (r.ok ? r.json() : null))
+    .then(t => t && Promise.all(Array.from({length: t.pages}, (_, i) => loader.loadAsync(`${base}-tags-${i}.webp${v}`)))
+      .then(maps => ({...t, maps})))
+    .catch(() => null);
+  const [gltf, lightmap, meta, [flicker, flicker2], tags] = await Promise.all([
     new GLTFLoader().loadAsync(`${base}.glb${v}`),
     loader.loadAsync(`${base}-lightmap.webp${v}`),
-    metaReady, flickers,
+    metaReady, flickers, tagsReady,
   ]);
   lighting.flickerSplit.value = meta.flickerMap === 'share2' ? 1 : 0;
   for (const t of [lightmap, flicker, flicker2]) {
@@ -219,6 +225,14 @@ export async function loadLevel(name, renderer) {
     if (m.userData.emissive) m.toneMapped = false;
     if (m.transparent) { m.depthWrite = false; m.polygonOffset = true; m.polygonOffsetFactor = -2; m.polygonOffsetUnits = -4; }
   });
+  if (tags) {
+    tags.maps.forEach((map, i) => {   // the same setup as the level's own graffiti pages (glTF textures aren't flipped)
+      map.flipY = false; map.colorSpace = THREE.SRGBColorSpace; map.anisotropy = anisotropy; map.needsUpdate = true;
+      materials.set(`graffiti_t${i}`, new THREE.MeshBasicMaterial({name: `graffiti_t${i}`, map, transparent: true}));
+    });
+    const known = new Set((meta.graffiti || []).map(p => p.name));
+    meta.graffiti = [...(meta.graffiti || []), ...tags.graffiti.filter(p => !known.has(p.name))];
+  }
   // Decals never write depth, so overlapping ones are drawn in a fixed order (by name)
   // rather than re-sorted by distance every frame, which made them flicker.
   meshes.filter(o => o.material.transparent).sort((a, b) => (a.name < b.name ? -1 : 1)).forEach((o, i) => { o.renderOrder = 1 + i * .001; });

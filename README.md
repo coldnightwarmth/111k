@@ -80,6 +80,11 @@ python3 tools/build_world.py --fast --preview   # quick bake + preview renders i
    bubbles, runic and stretched handstyles, blackletter chisel, rollers,
    extinguisher drips, scratchiti, stencils), and every stroke is sprayed like a
    can, with paint building up where the hand slows, overspray and drips.
+   More pieces just for the spray cans come from `tools/graffiti_more.py`
+   (cholo placas, Philly wickets, Bay Area busflow, mop drips, brush script,
+   hollow 3D throws, hand-cut stencils) and are written to their own atlas,
+   `assets/env/world-tags*`, by `python3 tools/graffiti_tags.py`, so adding
+   to them never needs the world rebuilt.
 3. Blender packs lightmap UVs, bakes direct and bounced light with Cycles and
    denoises the result (`tools/blender/kit.py`). Lamps that flicker are baked
    again on their own; `world-flicker.webp` stores each lamp group's share of
