@@ -1436,7 +1436,7 @@ async function start() {
     const dx = pos.x - camera.position.x, dz = pos.z - camera.position.z, d = Math.hypot(dx, dz);
     return d < .3 || collider.raycast(camera.position.x, camera.position.z, dx, dz, d, Math.min(camera.position.y, 1.7), 0) >= d - .25;
   }
-  const frameArgs = dt => ({me, myId: network.id, thirdPerson: boom, avatarOf: id => peers.get(id)?.avatar, poseOf: id => peers.get(id)?.last, dt});
+  const frameArgs = dt => ({me, myId: network.id, thirdPerson: boom, avatarOf: id => peers.get(id)?.avatar, poseOf: id => peers.get(id)?.last, dt, vel: [player.vx + player.kx, player.vz + player.kz]});
   function saveTab() {
     tabMe.set({look: mine.look, name: mine.name, x: r3(player.x), z: r3(player.z), yaw: r3(controls.state.yaw), pitch: r3(controls.state.pitch), g: r3(player.ground),
       view: thirdPerson ? '3p' : '1p'});
@@ -1769,7 +1769,6 @@ async function start() {
     await Promise.race([roomIn, wait(6000)]);
     // the paintings: every small picture in, and the full ones round about (a little while at most)
     const here = new THREE.Vector3(player.x, player.y, player.z);
-    items.prefetchArt(here);
     await Promise.race([Promise.all([items.previewsReady, items.artNear(here)]), wait(2500)]);
     await renderer.compileAsync?.(scene, camera).catch(() => {});
     for (let i = 0; i < 4; i++) await new Promise(r => requestAnimationFrame(r));

@@ -303,12 +303,14 @@ function crownModel() {
 // back, folded and stapled over a pine stretcher with a cross brace. Origin: the middle of the back;
 // the picture faces +z, its top is +y.
 // A painting is never a blank canvas: every picture comes small in one atlas, loaded before the space fades
-// in, and that's on each painting from the start. The full picture (ART_PX on its long side: less on a phone)
-// goes on once its painting is near, from the file already fetched (all of them are, nearest first, once the
-// room's in: tools/paintings_webp.py made them small enough), and comes off again once it's far, back to the
-// small one, so only the ones round about are on the GPU.
+// in, and that's on each painting from the start. Bigger versions go on as you get near: the 512 px one within
+// ART_MID, the full one (ART_PX on its long side: 512 on a phone) within ART_NEAR, and come off again a good
+// way further out (each painting's own hysteresis, so nothing flickers between the two at the edge). "Near" is
+// measured from you and from where you'll be in a moment at the speed you're going (a bunnyhop run looks well
+// ahead), and files are fetched a few at a time, nearest first, only when they're wanted: never the lot.
 const ART_PX = globalThis.matchMedia?.('(pointer: coarse)').matches ? 512 : 1024;
-const ART_NEAR = 24, ART_FAR = 34;   // metres from the eye: full picture on, back to the small one
+const ART_NEAR = 10, ART_NEAR_OFF = 16, ART_MID = 24, ART_MID_OFF = 34;   // metres
+const ART_AHEAD = [.5, 1.2, 2.2], ART_AHEAD_MAX = 80;   // seconds looked ahead at your speed (and no further than that)
 let previewTex = null, previewsReady = Promise.resolve();
 const previewViews = [];             // each painting's window onto it (they share the one image: uploaded once)
 function previews() {
@@ -336,53 +338,118 @@ function previewOf(art) {
   if (atlas.image) t.needsUpdate = true;
   return t;
 }
-// the full pictures' files, fetched once and kept (compressed: about 13 MB for all of them, 4 on a phone)
-const artFiles = new Map();          // art -> Promise<Blob>
-function artFile_(art) {
-  if (!artFiles.has(art)) {
+// the pictures' files, fetched once and kept (compressed: about 130 KB each at 1024 px, 40 at 512), a few at a
+// time and the most wanted first (prio: how far off it's wanted, less is sooner); ones nobody wants any more by
+// the time their turn comes are skipped
+const artFiles = new Map();          // `${art}/${px}` -> Promise<Blob>
+const fetchQueue = [];               // {key, art, px, prio, wanted(), resolve, reject}
+let fetching = 0;
+const MAX_FETCHES = 4;
+function pumpFetches() {
+  while (fetching < MAX_FETCHES && fetchQueue.length) {
+    let k = 0;
+    for (let i = 1; i < fetchQueue.length; i++) if (fetchQueue[i].prio < fetchQueue[k].prio) k = i;
+    const job = fetchQueue.splice(k, 1)[0];
+    if (!job.wanted()) { artFiles.delete(job.key); job.reject(new Error('not wanted')); continue; }
+    fetching++;
     const get = url => fetch(url).then(r => { if (!r.ok) throw new Error(`${r.status} ${url}`); return r.blob(); });
-    artFiles.set(art, get(artFile(art, ART_PX)).catch(() => get((ART[art] || ART[1]).url))    // (not made small yet: the original)
-      .catch(e => { artFiles.delete(art); throw e; }));
+    get(artFile(job.art, job.px)).catch(() => get((ART[job.art] || ART[1]).url))      // (not made small yet: the original)
+      .then(job.resolve, e => { artFiles.delete(job.key); job.reject(e); })
+      .finally(() => { fetching--; pumpFetches(); });
   }
-  return artFiles.get(art);
 }
-async function artImage(art) {
-  const blob = await artFile_(art), url = URL.createObjectURL(blob), img = new Image();
+function artFile_(art, px, prio = 0, wanted = () => true) {
+  const key = `${art}/${px}`;
+  if (!artFiles.has(key)) {
+    let job;
+    const p = new Promise((resolve, reject) => { job = {key, art, px, prio, wanted, resolve, reject}; });
+    p.catch(() => {});
+    artFiles.set(key, p); fetchQueue.push(job);
+    queueMicrotask(pumpFetches);                // (once this frame's wants are all in: nearest first)
+  } else {
+    const queued = fetchQueue.find(j => j.key === key);          // wanted sooner now: moved up
+    if (queued) { queued.prio = Math.min(queued.prio, prio); queued.wanted = wanted; }
+  }
+  return artFiles.get(key);
+}
+async function artImage(art, px, prio, wanted) {
+  const blob = await artFile_(art, px, prio, wanted), url = URL.createObjectURL(blob), img = new Image();
   try { img.src = url; await img.decode(); } finally { URL.revokeObjectURL(url); }
-  if (Math.max(img.width, img.height) <= ART_PX * 1.05) return img;
-  const k = ART_PX / Math.max(img.width, img.height), c = document.createElement('canvas');      // an original: drawn down
+  if (Math.max(img.width, img.height) <= px * 1.05) return img;
+  const k = px / Math.max(img.width, img.height), c = document.createElement('canvas');      // an original: drawn down
   c.width = Math.round(img.width * k); c.height = Math.round(img.height * k);
   const g = c.getContext('2d'); g.imageSmoothingQuality = 'high'; g.drawImage(img, 0, 0, c.width, c.height);
   return c;
 }
-const artTextures = new Map();       // art -> {texture (once it's in), users: materials showing it, failed: when}
-function showArt(art, material) {
-  if (material.userData.art) return;
-  let a = artTextures.get(art);
-  if (a?.failed && performance.now() - a.failed < 30000) return;     // (tried a moment ago: wait a bit)
-  material.userData.art = true;
+// the textures on the GPU: `${art}/${px}` -> {texture (once it's in), users: materials showing (or waiting for) it,
+// ready, failed: when}. Shared by every painting of the same picture; dropped as soon as nothing shows it.
+const artTextures = new Map();
+function acquireArt(art, px, material, prio) {
+  const key = `${art}/${px}`;
+  let a = artTextures.get(key);
+  if (!a && spare.has(key)) { a = spare.get(key); spare.delete(key); artTextures.set(key, a); }
+  if (a?.failed && performance.now() - a.failed < 30000) return null;     // (tried a moment ago: wait a bit)
   if (!a || a.failed) {
-    const b = a = {texture: null, users: new Set(), failed: 0};
-    artTextures.set(art, b);
-    b.ready = artImage(art).then(img => {
-      if (!b.users.size) { if (artTextures.get(art) === b) artTextures.delete(art); return; }   // gone out of sight meanwhile
+    const b = a = {texture: null, users: new Set([material]), failed: 0};
+    artTextures.set(key, b);
+    b.ready = artImage(art, px, prio, () => b.users.size > 0).then(img => {
+      if (!b.users.size) { if (artTextures.get(key) === b) artTextures.delete(key); return; }   // gone out of sight meanwhile
       const t = new THREE.Texture(img);
       t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 8; t.needsUpdate = true;
       b.texture = t;
-      for (const m of b.users) m.map = t;
-    }, () => { b.failed = performance.now(); for (const m of b.users) m.userData.art = false; b.users.clear(); });   // try again later
-  }
+    }, () => {
+      if (artTextures.get(key) === b) { if (b.users.size) b.failed = performance.now(); else artTextures.delete(key); }
+      for (const m of b.users) if (m.userData.pending === key) { m.userData.pending = null; m.userData.want = null; }
+      b.users.clear();
+    });
+  } else artFile_(art, px, prio, () => a.users.size > 0);          // (still queued: moved up if it's wanted sooner now)
   a.users.add(material);
-  if (a.texture) material.map = a.texture;
+  return a;
 }
-function hideArt(art, material, preview) {
-  if (!material.userData.art) return;
-  material.userData.art = false;
-  material.map = preview;
-  const a = artTextures.get(art);
+// Pictures nobody shows any more stay on the GPU a while (the last few of each size) in case you come back
+// round: on a fast lap they're there again at once instead of decoded over.
+const SPARE = {512: 28, 1024: 8};
+const spare = new Map();             // key -> entry, oldest first
+function releaseArt(key, material) {
+  const a = key && artTextures.get(key);
   if (!a) return;
   a.users.delete(material);
-  if (!a.users.size && a.texture) { a.texture.dispose(); artTextures.delete(art); }
+  if (a.users.size || !a.texture) return;
+  artTextures.delete(key);
+  spare.delete(key); spare.set(key, a);
+  const px = key.split('/')[1], keep = SPARE[px] ?? 4;
+  const mine = [...spare.keys()].filter(k => k.endsWith(`/${px}`));
+  for (let i = 0; i < mine.length - keep; i++) { spare.get(mine[i]).texture.dispose(); spare.delete(mine[i]); }
+}
+// Which picture a painting's canvas shows: 0 the small one (from the atlas), or px. The one it has stays on
+// until the new one's in, so it never goes back to small in between.
+function setArt(art, material, preview, px, prio = 0) {
+  const u = material.userData;
+  if (u.want === px) return;
+  u.want = px;
+  if (u.pending && u.pending !== u.held) releaseArt(u.pending, material);
+  u.pending = null;
+  if (!px) { material.map = preview; releaseArt(u.held, material); u.held = null; return; }
+  const key = `${art}/${px}`;
+  if (u.held === key) { material.map = artTextures.get(key)?.texture || material.map; return; }
+  const a = acquireArt(art, px, material, prio);
+  if (!a) { u.want = null; return; }
+  u.pending = key;
+  const apply = () => {
+    if (u.pending !== key || !a.texture) return;
+    material.map = a.texture;
+    if (u.held && u.held !== key) releaseArt(u.held, material);
+    u.held = key; u.pending = null;
+  };
+  if (a.texture) apply(); else a.ready.then(apply);
+}
+// the picture a painting should show `far` metres from you (hysteresis from what it wants now)
+// near: from you or just ahead; far: from you or anywhere you're about to be. The full picture goes by near, the
+// middle one by far, so on a fast run the middle ones for what's coming go first and the full ones fill in.
+function artTier(near, far, now) {
+  if (ART_PX > 512 && (near < ART_NEAR || (now === ART_PX && near < ART_NEAR_OFF))) return ART_PX;
+  if (far < ART_MID || (now && far < ART_MID_OFF)) return 512;
+  return 0;
 }
 let woodTex = null, linenTex = null, primedTex = null;
 // white primed canvas: gesso over the weave, the weave just showing through
@@ -483,7 +550,9 @@ function paintingModel(id, state) {
   // the pick-up glow: one closed box with its corners' normals shared, so the glow wraps it without gaps
   const ob = glowBoxGeometry(new THREE.Vector3(-x, -y, 0), new THREE.Vector3(x, y, d));
   g.userData = {tip: new THREE.Vector3(0, 0, d), ground: .002, painting: true, w, h, d, art, canvas: front, outline: ob,
-    showArt: () => showArt(art, canvasMat), hideArt: () => hideArt(art, canvasMat, preview)};
+    // which picture it shows, by how far it is from you (src/items.js frame)
+    artAt: (near, far = near) => { const px = artTier(near, far, canvasMat.userData.want); setArt(art, canvasMat, preview, px, px > 512 ? near + 12 : far); },
+    artReady: () => { const k = canvasMat.userData.pending; return k ? artTextures.get(k)?.ready : null; }};
   return g;
 }
 
@@ -722,6 +791,7 @@ export function createItems({scene, camera, hits, shadows = null}) {
   camera.add(view);
   const tmpQ = new THREE.Quaternion(), tmpV = new THREE.Vector3(), fwd = new THREE.Vector3();
   const _ray = new THREE.Ray(), _box = new THREE.Box3();
+  const ahead = ART_AHEAD.map(() => new THREE.Vector3());
 
   // start the way a state arrives: a fall eased onto where it settled, or a painting's tumble
   function play(it, fall, path) {
@@ -772,33 +842,15 @@ export function createItems({scene, camera, hits, shadows = null}) {
     set(list) { for (const s of list) this.update(s, null, null, false, false); },
     // the small pictures, all of them (the space waits for these before it fades in)
     get previewsReady() { return previewsReady; },
-    // every full picture's file on its way, a few at a time, always the nearest one still to come (to wherever
-    // you are by then, so running ahead pulls the ones ahead of you forward)
-    prefetchArt(center) {
-      _eye.copy(center);
-      const left = new Set([...items.values()].filter(it => it.model.userData.painting).map(it => it.state.art));
-      const next = () => {
-        let best = null, bestD = Infinity;
-        for (const it of items.values()) {
-          const s = it.state;
-          if (!left.has(s.art)) continue;
-          const d = Math.hypot(s.x - _eye.x, s.z - _eye.z);
-          if (d < bestD) { best = s.art; bestD = d; }
-        }
-        if (best === null) return;
-        left.delete(best);
-        artFile_(best).catch(() => {}).then(next);
-      };
-      for (let i = 0; i < 4; i++) next();
-    },
-    // the full pictures on the paintings near a point, put on now; settles once they're in
+    // the bigger pictures on the paintings round a point, put on now; settles once they're in (or have failed)
     artNear(center) {
       const waits = [];
       for (const it of items.values()) {
         const s = it.state, u = it.model.userData;
-        if (!u.showArt || s.holder || Math.hypot(s.x - center.x, s.y - center.y, s.z - center.z) > ART_NEAR) continue;
-        u.showArt();
-        waits.push(artTextures.get(s.art)?.ready);
+        if (!u.artAt || s.holder) continue;
+        u.artAt(Math.hypot(s.x - center.x, s.y - center.y, s.z - center.z));
+        const r = u.artReady();
+        if (r) waits.push(r);
       }
       return Promise.allSettled(waits);
     },
@@ -938,18 +990,30 @@ export function createItems({scene, camera, hits, shadows = null}) {
     // world position of an item's business end (muzzle, nozzle, lens)
     tip(it) { it.model.updateMatrixWorld(); return it.model.localToWorld(it.model.userData.tip.clone()); },
     // place every item: on the ground, in a hand, or in your view
-    frame({me, myId, thirdPerson, avatarOf, poseOf, dt}) {
+    frame({me, myId, thirdPerson, avatarOf, poseOf, dt, vel = null}) {
       glowTime.value += dt;
       let n = 0;
       camera.getWorldPosition(_eye);
       const clock = performance.now();
+      // where you'll be a moment from now, if you're moving (for the paintings' pictures)
+      let aheadN = 0;
+      const sp = vel ? Math.hypot(vel[0], vel[1]) : 0;
+      if (sp > 1) for (const t of ART_AHEAD) {
+        const k = Math.min(t, ART_AHEAD_MAX / sp);
+        ahead[aheadN++].set(_eye.x + vel[0] * k, _eye.y, _eye.z + vel[1] * k);
+      }
       for (const it of items.values()) {
         // shown picked up or put down, and the server never said so (or it got lost): back as the server has it
         if (it.pending && clock > it.pending.until && !it.busy) { it.state = it.server || it.state; it.pending = it.server = null; it.path = it.fall = it.fly = null; it.busy = false; }
         const s = it.state, m = it.model, u = m.userData;
-        if (u.showArt) {
-          const far = s.holder ? 0 : Math.hypot(s.x - _eye.x, s.y - _eye.y, s.z - _eye.z);
-          if (far < ART_NEAR) u.showArt(); else if (far > ART_FAR) u.hideArt();
+        if (u.artAt) {
+          // how far it is from you, or from where you'll be in a moment at this speed, whichever's nearer
+          let near = s.holder ? 0 : Math.hypot(s.x - _eye.x, s.y - _eye.y, s.z - _eye.z), far = near;
+          for (let k = 0; k < aheadN && far > 0; k++) {
+            const d = Math.hypot(s.x - ahead[k].x, s.y - ahead[k].y, s.z - ahead[k].z);
+            far = Math.min(far, d); if (k === 0) near = Math.min(near, d);
+          }
+          u.artAt(near, far);
         }
         // the hopper shows what's loaded: yours, the holder's choice, or a mix lying on the floor
         if (u.setPaint) u.setPaint(s.holder === myId ? myPaint : s.holder ? (poseOf(s.holder)?.pc ?? RANDOM_PAINT) : RANDOM_PAINT, PAINT_COLORS);
