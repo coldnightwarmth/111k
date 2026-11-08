@@ -7,7 +7,7 @@ import {lighting, MAX_FLASHLIGHTS, MAX_SPOTLIGHTS, FAN_RANGE, packBeams, ghostMa
 const BEAM_FAR = 42, BEAM_FADE = 10;   // torches on the floor: full strength to 32 m, gone by 42 m
 import {EYE_HEIGHT} from './motion.js';
 import {PAINT_COLORS, RANDOM_PAINT} from './decals.js';
-import {ART, paintingSize} from './paintings.js';
+import {ART, paintingSize, paintingMatrix} from './paintings.js';
 import {mergeVertices, mergeGeometries} from '../vendor/three/BufferGeometryUtils.js';
 
 const BEAM_COLOR = new THREE.Color(1, .93, .8);
@@ -454,6 +454,7 @@ export const ITEM_MODELS = MODELS;   // for previews
 // A dropped item's fall through the level: gravity, a couple of soft bounces, a skid to a stop.
 // Pure and fixed-step, so every client works out the same path from the same start.
 const FALL_DT = 1 / 60;
+export const PATH_HZ = 30;     // a painting's recorded tumble (src/settle.js)
 export function simulateFall(hits, start, velocity) {
   const p = new THREE.Vector3(...start), v = new THREE.Vector3(...velocity), path = [p.clone()];
   const step = new THREE.Vector3(), dir = new THREE.Vector3();
@@ -709,10 +710,13 @@ export function createItems({scene, camera, hits, shadows = null}) {
   return {
     items,
     set(list) { for (const s of list) ensure(s); },
-    // a new state from the server; with a fall, it drops from where it was let go to where it settled
-    update(state, fall) {
+    // a new state from the server; with a fall, it drops from where it was let go to where it settled; with a
+    // path (a painting's tumble, worked out by whoever let it go), it plays that: [x, y, z, qx, qy, qz, qw] at PATH_HZ
+    update(state, fall, path) {
       const it = ensure(state);
-      if (fall && hits && !state.holder) {
+      it.path = Array.isArray(path) && path.length > 1 && !state.holder ? {frames: path, t: 0} : null;
+      if (it.path) it.fall = null;
+      else if (fall && hits && !state.holder) {
         const f = simulateFall(hits, fall.p, fall.v);
         // the server's resting spot is the word: ease the difference in over the whole fall, not a jump at the end
         const last = f.path.length - 1, err = new THREE.Vector3(state.x, state.y, state.z).sub(f.path[last]);
@@ -774,6 +778,35 @@ export function createItems({scene, camera, hits, shadows = null}) {
       }
       return best;
     },
+    // A ray test against the paintings lying about near a point (each as its closed box, where the server has
+    // it, not mid-fall), shaped like the level's: (origin, dir, far) -> {point, normal (facing the ray),
+    // distance, painting} or null. For putting things on paintings.
+    paintingRay(center, radius) {
+      const list = [];
+      for (const it of this.paintings()) {
+        const s = it.state, u = it.model.userData;
+        if (Math.hypot(s.x - center.x, s.y - center.y, s.z - center.z) > radius) continue;
+        const m = paintingMatrix(s.x, s.y, s.z, s.yaw, s.tilt || 0, s.roll || 0);
+        list.push({it, m, inv: m.clone().invert(), box: new THREE.Box3(new THREE.Vector3(-u.w / 2, -u.h / 2, 0), new THREE.Vector3(u.w / 2, u.h / 2, u.d))});
+      }
+      const ray = new THREE.Ray(), lp = new THREE.Vector3();
+      return (origin, dir, far) => {
+        let best = null;
+        for (const p of list) {
+          ray.set(origin, dir).applyMatrix4(p.inv);
+          if (!ray.intersectBox(p.box, lp)) continue;
+          const point = lp.clone().applyMatrix4(p.m), distance = point.distanceTo(origin);
+          if (distance > far || (best && distance >= best.distance)) continue;
+          const b = p.box, gaps = [[b.max.x - lp.x, 'x', 1], [lp.x - b.min.x, 'x', -1], [b.max.y - lp.y, 'y', 1], [lp.y - b.min.y, 'y', -1], [b.max.z - lp.z, 'z', 1], [lp.z - b.min.z, 'z', -1]];
+          const [, axis, sgn] = gaps.reduce((a, c) => (c[0] < a[0] ? c : a));
+          const normal = new THREE.Vector3(); normal[axis] = sgn;
+          normal.transformDirection(p.m);
+          if (normal.dot(dir) > 0) normal.negate();
+          best = {point, normal, distance, painting: p.it};
+        }
+        return best;
+      };
+    },
     // world position of an item's business end (muzzle, nozzle, lens)
     tip(it) { it.model.updateMatrixWorld(); return it.model.localToWorld(it.model.userData.tip.clone()); },
     // place every item: on the ground, in a hand, or in your view
@@ -792,7 +825,7 @@ export function createItems({scene, camera, hits, shadows = null}) {
         it.kick *= Math.exp(-dt * 14); it.shake = Math.max(0, it.shake - dt);
         let origin = null, dir = null, eye = null;
         if (!(s.holder === myId && !thirdPerson) || s.type === 'flashlight') m.scale.setScalar(1);
-        it.outline.visible = !s.holder && s.id === highlighted && !it.fall;
+        it.outline.visible = !s.holder && s.id === highlighted && !it.fall && !it.path;
         if (it.ghost) it.ghost.ghostAll.value = it.ghost.ghostOn.value = 0;     // (worn, it follows its wearer: below)
         if (!s.holder) {
           if (m.parent !== scene) scene.add(m);
@@ -804,6 +837,15 @@ export function createItems({scene, camera, hits, shadows = null}) {
           if (u.standing) { m.rotation.set(0, s.yaw, 0); m.position.y = s.y; }
           if (u.painting) { m.rotation.set(s.tilt || 0, s.yaw, s.roll || 0, 'YXZ'); m.position.set(s.x, s.y, s.z); }   // hung, leant or laid as placed
           u.dock?.();
+          if (it.path) {                      // tumbling down as it went for whoever let it go
+            const f = it.path, at = (f.t += dt) * PATH_HZ, i = Math.floor(at), last = f.frames.length - 1;
+            if (i >= last) it.path = null;
+            else {
+              const a = f.frames[i], b = f.frames[i + 1], k = at - i;
+              m.position.set(a[0] + (b[0] - a[0]) * k, a[1] + (b[1] - a[1]) * k, a[2] + (b[2] - a[2]) * k);
+              m.quaternion.set(a[3], a[4], a[5], a[6]).slerp(tmpQ.set(b[3], b[4], b[5], b[6]), k);
+            }
+          }
           if (it.fall) {                      // still on its way down: follow the path, already in its rest pose (no tumbling)
             const f = it.fall; f.t += dt;
             const at = f.t / FALL_DT, i = Math.floor(at), last = f.path.length - 1;

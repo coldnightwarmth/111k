@@ -517,6 +517,56 @@ test('paintings: hung, leant and laid with a tilt, fall flat when let go, and pa
   assert.equal(pt.tilt, -Math.PI / 2);
 });
 
+test('paintings: hung on a nail or settled by physics, with the tumble passed on; others knocked about near you', async () => {
+  const {handleMessage, newPlayer, freshMarks} = await import('../room.js');
+  const {ITEM_SPAWNS} = await import('../../src/world-items.js');
+  const items = Object.fromEntries(ITEM_SPAWNS.map(s => [s.id, {...s, holder: null, on: false}]));
+  const pt = items.pt1, other = items.pt2;
+  const a = newPlayer('aaa', 0); a.pose = {x: pt.x, y: 1.45, z: pt.z + 1, yaw: 0, pitch: 0, g: 0};
+  const room = {items, marks: freshMarks(), race: null, players: () => [a]};
+  let now = 10_000;
+  const send = m => { now += 400; return handleMessage(a, JSON.stringify(m), now, room); };
+  send({type: 'pickup', id: 'pt1'});
+  // hung: on its nail
+  let r = send({type: 'drop', id: 'pt1', x: pt.x, y: 1.5, z: pt.z, yaw: 0, tilt: 0, roll: 0, hung: true});
+  assert.equal(pt.hung, true);
+  assert.equal(r.out[0].msg.item.hung, true);
+  // settled: the path goes out with it, ending where it rests
+  send({type: 'pickup', id: 'pt1'});
+  const path = [[pt.x, 1.2, pt.z, 0, 0, 0, 1], [pt.x, .6, pt.z, -.5, 0, 0, .866], [pt.x + .1, .03, pt.z, -.7071, 0, 0, .7071]];
+  r = send({type: 'drop', id: 'pt1', x: pt.x + .1, y: .03, z: pt.z, yaw: 0, tilt: -1.571, roll: 0, path});
+  assert.equal(pt.hung, false);
+  assert.deepEqual(r.out[0].msg.path, path);
+  assert.equal(r.out[0].msg.fall, undefined);
+  // a path that doesn't end where it rests, or jumps about, isn't passed on
+  send({type: 'pickup', id: 'pt1'});
+  r = send({type: 'drop', id: 'pt1', x: pt.x + 1, y: .03, z: pt.z, yaw: 0, tilt: -1.571, roll: 0, path});
+  assert.equal(r.out[0].msg.path, undefined);
+  send({type: 'pickup', id: 'pt1'});
+  r = send({type: 'drop', id: 'pt1', x: pt.x + .1, y: .03, z: pt.z, yaw: 0, tilt: -1.571, roll: 0, path: [path[0], [pt.x + 5, 0, pt.z, 0, 0, 0, 1], path[2]]});
+  assert.equal(r.out[0].msg.path, undefined);
+  // knocked: another painting near you moves, and stops being on a nail
+  Object.assign(other, {x: pt.x + .5, y: .03, z: pt.z, hung: true});
+  r = send({type: 'settle', items: [{id: other.id, x: pt.x + .9, y: .01, z: pt.z, yaw: .5, tilt: -1.571, roll: 0,
+    path: [[pt.x + .5, .03, pt.z, 0, 0, 0, 1], [pt.x + .9, .01, pt.z, 0, 0, 0, 1]]}]});
+  assert.deepEqual([other.x, other.y, other.yaw, other.hung], [pt.x + .9, .01, .5, false].map((v, i) => (i < 3 ? Math.round(v * 1000) / 1000 : v)));
+  assert.equal(r.out.length, 1);
+  assert.ok(r.out[0].msg.path);
+  // but not one far away, one in someone's hands, or one sent miles from where it was
+  const far = items.pt3, before = {...far};
+  r = send({type: 'settle', items: [{id: far.id, x: far.x, y: far.y, z: far.z, yaw: 1, tilt: 0, roll: 0}]});
+  assert.equal(far.yaw, before.yaw);
+  other.holder = 'bbb';
+  r = send({type: 'settle', items: [{id: other.id, x: pt.x, y: .01, z: pt.z, yaw: 0, tilt: 0, roll: 0}]});
+  assert.equal(other.x, Math.round((pt.x + .9) * 1000) / 1000);
+  other.holder = null;
+  r = send({type: 'settle', items: [{id: other.id, x: pt.x + 4, y: .01, z: pt.z, yaw: 0, tilt: 0, roll: 0}]});
+  assert.equal(r.out.length, 0);
+  // not a flashlight either
+  r = send({type: 'settle', items: [{id: 'fl1', x: items.fl1.x, y: 1, z: items.fl1.z, yaw: 0, tilt: 0, roll: 0}]});
+  assert.equal(r.out.length, 0);
+});
+
 test('emote settings: saved from /anim, cleaned, sent to everyone here and to newcomers', async () => {
   const {room, sockets, ctx} = makeRoom();
   const store = new Map();

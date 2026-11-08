@@ -102,6 +102,13 @@ export function createWorldHits(level, doors = []) {
     },
     // every level triangle within `radius` of a point: world positions + lightmap uvs
     gather(center, radius) { return gatherFrom(parts.filter(p => !p.solidOnly), center, radius, true); },
+    // every solid triangle within `radius` of a point (runtime-built things too), as a triangle soup for physics
+    solidNear(center, radius) {
+      const tris = gatherFrom(parts, center, radius, true);
+      const vertices = new Float32Array(tris.length * 9), indices = new Uint32Array(tris.length * 3);
+      tris.forEach((t, k) => { t.p.forEach((q, j) => { vertices.set([q.x, q.y, q.z], k * 9 + j * 3); indices[k * 3 + j] = k * 3 + j; }); });
+      return {vertices, indices};
+    },
     // something built at runtime (the lap timer) that stops balls, beams and drops but takes no paint
     addSolid(object) {
       object.updateMatrixWorld(true);

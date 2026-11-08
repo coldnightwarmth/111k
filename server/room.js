@@ -5,10 +5,13 @@
 // items, which the caller keeps (Durable Object storage in production).
 import {CHAT_INTERVAL_MS, CHAT_TTL_MS, POSE_INTERVAL_MS, PICKUP_RANGE, PUNCH_RANGE, PUNCH_COOLDOWN_MS,
   SHOT_INTERVAL_MS, SPRAY_INTERVAL_MS, SPRAY_RANGE, MAX_SPLATS, MAX_SPRAYS, SPLAT_LIFE_MS,
-  sanitizeChat, sanitizePose, samePose, cleanItem, sanitizeLook, sanitizeName, cleanSplat, cleanSpray, splatId, sprayId} from '../src/protocol.js';
+  sanitizeChat, sanitizePose, samePose, cleanItem, cleanPath, sanitizeLook, sanitizeName, cleanSplat, cleanSpray, splatId, sprayId} from '../src/protocol.js';
 import {ITEM_SPAWNS} from '../src/world-items.js';
 import {RACE_LAPS, RACE_TIMEOUT_MS, BUTTON, BUTTON_RANGE, MACHINE, LAP_ZONE, LAP_SLACK, loopAngle, freshRace, publicRace} from '../src/race.js';
 import {KOTH_GRACE_MS, KOTH_WIN_MS, KOTH_UNCLAIMED_MS, freshKoth, publicKoth, kothActive, kothTime} from '../src/koth.js';
+
+// paintings settling on their own (a 'settle' message): how many at once, and how far from the player who sends it
+const SETTLE_MAX = 16, SETTLE_RANGE = 6;
 
 export function newPlayer(id, now) {
   return {id, pose: null, lastPose: 0, lastChat: 0, lastActive: now, lastPunch: 0, lastShot: 0, lastSpray: 0,
@@ -65,7 +68,7 @@ function dropAt(item, pose, dx = 0, dz = 0, y = null) {
   item.x = pose.x + dx; item.z = pose.z + dz; item.y = y ?? (pose.g || 0) + (item.type === 'painting' ? .002 : .03);   // on whatever they stood on
   item.yaw = pose.yaw || 0;
   if (item.type === 'crown') item.on = false;   // a crown on the ground isn't on anyone's head
-  if (item.type === 'painting') { item.tilt = -Math.PI / 2; item.roll = 0; }   // a painting let go of falls flat, face up
+  if (item.type === 'painting') { item.tilt = -Math.PI / 2; item.roll = 0; item.hung = false; }   // a painting let go of falls flat, face up
 }
 // a worn crown sits on its wearer's head, leaving their hands free
 const worn = it => it.type === 'crown' && it.on;
@@ -289,13 +292,40 @@ function handle(player, data, now, room) {
     // a painting hung on a wall, leant against one or laid down
     if (item.type === 'painting' && Number.isFinite(m.tilt)) item.tilt = Math.round(Math.max(-Math.PI / 2, Math.min(Math.PI / 2, m.tilt)) * 1000) / 1000;
     if (item.type === 'painting') item.roll = Number.isFinite(m.roll) ? Math.round(Math.max(-Math.PI, Math.min(Math.PI, m.roll)) * 1000) / 1000 : 0;
+    if (item.type === 'painting') item.hung = m.hung === true;   // on its nail, or wherever it settled
+    // a painting's tumble to where it settled (it has to end there, and start near whoever let it go)
+    let path = item.type === 'painting' ? cleanPath(m.path) : undefined;
+    if (path) {
+      const a = path[0], b = path[path.length - 1];
+      if (Math.hypot(a[0] - player.pose.x, a[2] - player.pose.z) > 4 || Math.hypot(b[0] - item.x, b[1] - item.y, b[2] - item.z) > .05) path = undefined;
+    }
     // how it fell (start and velocity): everyone replays the same fall to where it came to rest
     const fp = m.fall && Array.isArray(m.fall.p) && m.fall.p.length === 3 && m.fall.p.every(Number.isFinite) ? m.fall.p : null;
     const fv = m.fall && Array.isArray(m.fall.v) && m.fall.v.length === 3 && m.fall.v.every(Number.isFinite) ? m.fall.v : null;
     const fall = fp && fv && Math.hypot(fp[0] - player.pose.x, fp[2] - player.pose.z) < 4 && Math.hypot(...fv) < 15
       ? {p: fp.map(v => Math.round(v * 1000) / 1000), v: fv.map(v => Math.round(v * 1000) / 1000)} : undefined;
-    out.push({to: 'all', msg: {type: 'item', item: cleanItem(item), fall}});
+    out.push({to: 'all', msg: {type: 'item', item: cleanItem(item), ...(path ? {path} : {fall})}});
     return {out, changed: true, itemsChanged: true};
+  }
+  // Paintings that moved without anyone holding them: knocked by one being put down, or left with nothing
+  // under them when one was picked up. Worked out by the player who did it; only paintings near them, only
+  // so far from where they were.
+  if (m.type === 'settle') {
+    if (!player.pose || player.inactive || !Array.isArray(m.items) || m.items.length > SETTLE_MAX) return {out, changed: false};
+    let moved = false;
+    for (const s of m.items) {
+      const it = s && typeof s.id === 'string' ? items[s.id] : null;
+      if (!it || it.type !== 'painting' || it.holder) continue;
+      const [x, y, z, yaw, tilt, roll] = ['x', 'y', 'z', 'yaw', 'tilt', 'roll'].map(k => Number(s[k]));
+      if (![x, y, z, yaw, tilt, roll].every(Number.isFinite) || y < -.5 || y > 4) continue;
+      if (flat(player.pose, it) > SETTLE_RANGE || Math.hypot(x - player.pose.x, z - player.pose.z) > SETTLE_RANGE || Math.hypot(x - it.x, y - it.y, z - it.z) > 3) continue;
+      Object.assign(it, {x: r3(x), y: r3(y), z: r3(z), yaw: r3(yaw), tilt: r3(Math.max(-Math.PI / 2, Math.min(Math.PI / 2, tilt))), roll: r3(Math.max(-Math.PI, Math.min(Math.PI, roll))), hung: false});
+      let path = cleanPath(s.path);
+      if (path && Math.hypot(path[path.length - 1][0] - it.x, path[path.length - 1][1] - it.y, path[path.length - 1][2] - it.z) > .05) path = undefined;
+      out.push({to: 'all', msg: {type: 'item', item: cleanItem(it), ...(path ? {path} : {})}});
+      moved = true;
+    }
+    return {out, changed: moved, itemsChanged: moved};
   }
   if (m.type === 'toggle') {
     if (!item || item.holder !== player.id || item.type === 'crown') return {out, changed: false};

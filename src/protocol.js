@@ -70,6 +70,20 @@ export function sanitizeChat(text) {
   return text.replace(/[\u0000-\u001f\u007f\u2028\u2029]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, CHAT_MAX);
 }
 
+// A painting's tumble as worked out by whoever let it go (src/settle.js): [x, y, z, qx, qy, qz, qw] frames,
+// 30 a second, a few seconds at most, each near the one before. Anything else: none.
+export const PATH_MAX = 181;
+export function cleanPath(path) {
+  if (!Array.isArray(path) || path.length < 2 || path.length > PATH_MAX) return undefined;
+  const out = [];
+  for (const f of path) {
+    if (!Array.isArray(f) || f.length !== 7 || !f.every(Number.isFinite)) return undefined;
+    const prev = out[out.length - 1];
+    if (prev && Math.hypot(f[0] - prev[0], f[1] - prev[1], f[2] - prev[2]) > 1) return undefined;   // 30 m/s is plenty
+    out.push(f.map((v, i) => (i < 3 ? round(v) : Math.round(Math.max(-1, Math.min(1, v)) * 1e4) / 1e4)));
+  }
+  return out;
+}
 // the highest painting art id (the art is numbered 1 to 30000 on the CDN)
 export const ART_MAX = 30000;
 // Held items (flashlights): shared room state. Positions are where they lie when nobody holds them.
@@ -81,6 +95,7 @@ export function cleanItem(it) {
     out.tilt = Number.isFinite(it.tilt) ? round(Math.max(-1.571, Math.min(1.571, it.tilt))) : 0;
     out.roll = Number.isFinite(it.roll) ? round(Math.max(-3.142, Math.min(3.142, it.roll))) : 0;
     out.art = Number.isInteger(it.art) && it.art > 0 && it.art <= ART_MAX ? it.art : 1;
+    if (typeof it.hung === 'boolean') out.hung = it.hung;     // on its nail (held still), or free to fall
   }
   return out;
 }

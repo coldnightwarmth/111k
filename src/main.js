@@ -25,6 +25,7 @@ import {cleanEmoteConfig, offeredEmotes} from './emotes.js';
 import {EMOTES, EMOTE_DURATION, PUNCH_COOLDOWN_MS, PUNCH_DURATION, PUNCH_COMBO_MS, SHOT_INTERVAL_MS, SPRAY_INTERVAL_MS, SPRAY_RANGE,
   MAX_SPLATS, MAX_SPRAYS, SPLAT_LIFE_MS, sanitizePose, sanitizeName, cleanSplat, cleanSpray, splatId, sprayId} from './protocol.js';
 import {paintingSize, paintingMatrix, paintingTris} from './paintings.js';
+import {settle as settlePaintings, loadPhysics, reversed} from './settle.js';
 
 const params = new URLSearchParams(location.search);
 const $ = id => document.getElementById(id);
@@ -625,18 +626,26 @@ async function start() {
   // Either way it's fitted to the whole surface under it, not just the spot you aim at.
   // {x, y, z, yaw, tilt, roll, how} or null (nothing in reach to put it on).
   const PLACE_REACH = 3.2;
+  // What it can go on: the level, and the other paintings lying about (set up afresh for each plan).
+  let placeRay = (o, d, far, doors) => hits.raycast(o, d, far, doors);
+  function placeRayNear(center) {
+    const onPaintings = items.paintingRay(center, PLACE_REACH + 1.5);
+    return (o, d, far, doors) => { const a = hits.raycast(o, d, far, doors), b = onPaintings(o, d, far); return b && (!a || b.distance < a.distance) ? b : a; };
+  }
   function planPlace(h) {
     const {w, h: ht} = paintingSize(h.state.art);
     camera.updateMatrixWorld();
     const o = camera.getWorldPosition(new THREE.Vector3()), dir = camera.getWorldDirection(new THREE.Vector3());
     if (boom) o.addScaledVector(dir, camDist);
-    const hit = hits.raycast(o, dir, PLACE_REACH, true);
+    placeRay = placeRayNear(o);
+    const hit = placeRay(o, dir, PLACE_REACH, true);
     if (!hit || hit.door !== undefined || onMachine(hit.mesh)) return null;
     const n = hit.normal, P = hit.point;
     if (n.y <= -.6) return null;                                  // a ceiling
     if (n.y < .7) {
       const plan = fitOn(P, n, w, ht, new THREE.Vector3(0, 1, 0));
-      return plan && {...plan, how: 'hang'};
+      // on its nail if it's on a wall; put up against another painting, there's nothing to hold it
+      return plan && {...plan, how: 'hang', hung: !hit.painting};
     }
     // a wall just beyond where you're aiming (straight, or the tunnel's curve rising from the floor): lean it there
     const fwd = new THREE.Vector3(dir.x, 0, dir.z);
@@ -654,7 +663,7 @@ async function start() {
   // works the same as a flat one: it tips back as far as it takes to touch.
   const MIN_LEAN = .12, MAX_LEAN = 1.25;
   function leanOn(P, floorN, fwd, w, ht) {
-    const wall = hits.raycast(P.clone().add(new THREE.Vector3(0, .3, 0)).addScaledVector(fwd, -.05), fwd, 1);
+    const wall = placeRay(P.clone().add(new THREE.Vector3(0, .3, 0)).addScaledVector(fwd, -.05), fwd, 1);
     if (!wall || wall.normal.y > .75 || wall.normal.y < -.5 || onMachine(wall.mesh)) return null;
     const out = new THREE.Vector3(wall.normal.x, 0, wall.normal.z);
     if (out.lengthSq() < 1e-4) return null;
@@ -665,7 +674,7 @@ async function start() {
       const u = upAt(t);
       for (const k of [-.5, 0, .5]) {
         const from = F.clone().addScaledVector(side, k * w * .96).addScaledVector(u, .03);
-        const h = hits.raycast(from, u, ht - .03);
+        const h = placeRay(from, u, ht - .03);
         if (h && !onMachine(h.mesh)) return true;
       }
       return false;
@@ -699,7 +708,7 @@ async function start() {
       for (const sx of [-1, -.5, 0, .5, 1]) for (const sy of [-1, -.5, 0, .5, 1]) {
         const x = sx * w / 2 * .97, y = sy * ht / 2 * .97;
         const from = c.clone().addScaledVector(right, x).addScaledVector(up, y).addScaledVector(n, .35);
-        const h = hits.raycast(from, back, 1, true);
+        const h = placeRay(from, back, 1, true);
         if (h && h.door === undefined && !onMachine(h.mesh) && h.normal.dot(n0) > .5) pts.push({x, y, z: h.point.clone().sub(c).dot(n)});
       }
       return pts;
@@ -733,10 +742,10 @@ async function start() {
       back.copy(n).negate();
       for (const sx of [-1, -.5, 0, .5, 1]) for (const sy of [-1, -.5, 0, .5, 1]) {
         const x = sx * (w / 2 + .006), y = sy * (ht / 2 + .006);   // (a few millimetres past its edges: never flush into a wall)
-        const h = hits.raycast(c.clone().addScaledVector(right, x).addScaledVector(up, y).addScaledVector(n, .3), back, .3);
+        const h = placeRay(c.clone().addScaledVector(right, x).addScaledVector(up, y).addScaledVector(n, .3), back, .3);
         // and across its face from the middle (a wall it reaches right into, where the ray above starts inside it)
         const mid = c.clone().addScaledVector(n, .025), to = new THREE.Vector3().addScaledVector(right, x).addScaledVector(up, y), far = to.length();
-        const across = far > .01 && hits.raycast(mid, to.divideScalar(far), far);
+        const across = far > .01 && placeRay(mid, to.divideScalar(far), far);
         if ((h && h.distance < .296) || across) { ix += x; iy += y; count++; }
       }
       if (!count) break;
@@ -750,11 +759,11 @@ async function start() {
       let lift = 0;
       for (const sx of [-1, 0, 1]) {
         const corner = c.clone().addScaledVector(right, sx * w / 2).addScaledVector(up, -ht / 2).addScaledVector(n, .02);
-        const down = hits.raycast(corner.clone().add(new THREE.Vector3(0, .6, 0)), new THREE.Vector3(0, -1, 0), 1.2);
+        const down = placeRay(corner.clone().add(new THREE.Vector3(0, .6, 0)), new THREE.Vector3(0, -1, 0), 1.2);
         if (down && down.normal.y > .7 && corner.y < down.point.y + .02) lift = Math.max(lift, (down.point.y + .02 - corner.y) / Math.max(.3, up.y));
       }
       c.addScaledVector(up, lift);
-      const above = hits.raycast(c.clone().addScaledVector(n, .05), new THREE.Vector3(0, 1, 0), ht);
+      const above = placeRay(c.clone().addScaledVector(n, .05), new THREE.Vector3(0, 1, 0), ht);
       const reach = ht / 2 * Math.abs(up.y);
       if (above && above.distance < reach + .01) c.y -= reach + .01 - above.distance;
     }
@@ -762,9 +771,53 @@ async function start() {
     const e = new THREE.Euler().setFromRotationMatrix(new THREE.Matrix4().makeBasis(right, up, n), 'YXZ');
     return {x: c.x, y: c.y, z: c.z, yaw: e.y, tilt: e.x, roll: e.z};
   }
-  function placePainting(h, plan) {
-    network.send({type: 'drop', id: h.state.id, x: r3(plan.x), y: r3(plan.y), z: r3(plan.z), yaw: r3(plan.yaw), tilt: r3(plan.tilt), roll: r3(plan.roll || 0)});
+  // Put down. On its nail it stays just as put; anything else settles under gravity first (src/settle.js):
+  // too far over an edge it tips off, and whatever it knocks moves too. Everyone sees it go as it went here.
+  let placing = false;
+  const lyingAbout = () => items.paintings().map(it => it.state);
+  function sendPlaced(h, pose, path) {
+    network.send({type: 'drop', id: h.state.id, x: r3(pose.x), y: r3(pose.y), z: r3(pose.z), yaw: r3(pose.yaw), tilt: r3(pose.tilt), roll: r3(pose.roll || 0),
+      hung: !!pose.hung && !path, ...(path ? {path} : {})});
+  }
+  function sendSettled(moved) {
+    if (moved?.length) network.send({type: 'settle', items: moved.map(m => ({id: m.id, ...m.pose, path: m.path}))});
+  }
+  async function letSettle(h, pose, vel) {
+    placing = true;
+    try { return await settlePaintings({hits, paintings: lyingAbout(), moving: {state: h.state, pose, vel}}); }
+    catch (e) { console.warn('painting physics:', e); return null; }
+    finally { placing = false; }
+  }
+  async function placePainting(h, plan) {
+    if (placing) return;
     learn('place'); learn('drop');
+    if (plan.hung) { sendPlaced(h, plan, null); return; }
+    const moved = await letSettle(h, plan);
+    if (held()?.state.id !== h.state.id) return;               // out of your hands meanwhile (punched, say)
+    const mine = moved?.find(m => m.id === h.state.id);
+    sendPlaced(h, {...(mine?.pose || plan), hung: false}, mine?.path);
+    sendSettled(moved?.filter(m => m.id !== h.state.id));
+  }
+  // Let go of with nothing in reach to put it on: it drops from your hands, flat, and falls where it falls.
+  async function dropPainting(h) {
+    if (placing) return;
+    learn('drop');
+    const yaw = controls.state.yaw, fwd = new THREE.Vector3(-Math.sin(yaw), 0, -Math.cos(yaw)), side = new THREE.Vector3(-fwd.z, 0, fwd.x);
+    const {w, h: ht} = paintingSize(h.state.art);
+    const at = new THREE.Vector3(player.x, player.y - .25, player.z);
+    const block = hits.raycast(at, fwd, ht / 2 + .9);
+    at.addScaledVector(fwd, block ? Math.max(0, block.distance - ht / 2 - .08) : .8);
+    for (const k of [-1, 1]) {                                   // kept off a wall beside you
+      const b = hits.raycast(at, side.clone().multiplyScalar(k), w / 2 + .05);
+      if (b) at.addScaledVector(side, -k * (w / 2 + .05 - b.distance));
+    }
+    const pose = {x: at.x, y: at.y, z: at.z, yaw, tilt: -Math.PI / 2, roll: 0};
+    const moved = await letSettle(h, pose, [fwd.x * 1.1 + player.vx * .4, .6, fwd.z * 1.1 + player.vz * .4]);
+    if (held()?.state.id !== h.state.id) return;
+    const mine = moved?.find(m => m.id === h.state.id);
+    if (!mine) { dropItem(h); return; }                          // (no physics: the old way, a fall to the floor)
+    sendPlaced(h, {...mine.pose, hung: false}, mine.path);
+    sendSettled(moved.filter(m => m.id !== h.state.id));
   }
   // a faint outline of the painting where a click would put it
   let placeGhost = null, placeGhostArt = 0, placeAt = 0, placePlan = null;
@@ -789,7 +842,11 @@ async function start() {
     // hands empty, a game over and the crown still on: right-click takes it off
     const h = held() || (!kothActive(koth) && network.id ? items.wornBy(network.id) : null);
     if (!h) return;
-    if (h.state.type === 'painting') { const plan = planPlace(h); if (plan) { placePainting(h, plan); return; } }
+    // a painting: put where it'd go with a click, but turned round, its back facing out; or just dropped
+    if (h.state.type === 'painting') { const plan = planPlace(h); if (plan) { placePainting(h, reversed(plan, h.state.art)); learn('reverse'); } else dropPainting(h); return; }
+    dropItem(h);
+  }
+  function dropItem(h) {
     const yaw = controls.state.yaw;
     learn('drop');
     toggleGallery(false);
@@ -1171,10 +1228,15 @@ async function start() {
     },
     onPose: m => applyPose(m.id, m.pose, m.time),
     onLeave: id => removePeer(id),
-    onItem: (it, fall) => {
-      const before = items.items.get(it.id)?.state.holder;
-      items.update(it, fall);
+    onItem: (it, fall, path) => {
+      const prev = items.items.get(it.id)?.state, before = prev?.holder;
+      items.update(it, fall, path);
       if (before === network.id && it.holder !== network.id) toggleGallery(false);
+      if (it.type === 'painting' && it.holder === network.id && before !== network.id) {
+        loadPhysics().catch(() => {});                           // ready for when it's put down
+        // whatever rested on it, or leant on it, has nothing there now
+        if (prev && !prev.holder) settlePaintings({hits, paintings: lyingAbout(), removed: prev}).then(sendSettled, e => console.warn('painting physics:', e));
+      }
     },
     onPunch: m => {
       // your fist landed: the jolt comes as it connects, not when you swing
@@ -1626,7 +1688,8 @@ async function start() {
         : type === 'paintball' ? [['fire', 'click: fire'], drop]
         : type === 'bucket' ? [['scrub', cleanTarget ? 'click: scrub it off' : 'aim at paint or graffiti to scrub it'], drop]
         : type === 'crown' ? (kothActive(koth) ? [] : [['koth', 'click: start king of the hill'], drop])
-        : type === 'painting' ? [['place', placePlan ? `click: ${{hang: 'hang it here', lean: 'lean it here', lay: 'lay it down'}[placePlan.how]}` : 'aim at a wall or the floor to put it there']]
+        : type === 'painting' ? [['place', placePlan ? `click: ${{hang: 'hang it here', lean: 'lean it here', lay: 'lay it down'}[placePlan.how]}` : 'aim at a wall or the floor to put it there'],
+          placePlan ? ['reverse', 'right-click: the same, back out'] : drop]
         : [['spray', 'click a wall: spray'], ['pieces', 'esc or tab: pick a piece'], ['tagturn', 'ctrl + scroll: turn'], ['tagsize', 'shift + scroll: size'], drop])
       : t ? (t.state.type === 'crown' && kothActive(koth) ? [['pickup:crown:on', 'click: put on the crown']]
         : [[`pickup:${t.state.type}`, `click: pick up ${ITEM_NAMES[t.state.type] || 'it'}`]]) : [];
@@ -1669,7 +1732,7 @@ async function start() {
     document.body.classList.add('ready');
   }
   window.__111k = {scene, camera, player, peers, network, renderer, items, controls, hits, doors, me, meView, vertical,
-    voice, cleaning, mimic, planPlace, get cleanTarget() { return cleanTarget; }, splatMarks, sprayMarks, addSplat, doorBatches, setView: v => { thirdPerson = v; }, primary, secondary, shoot, spray, choosePiece, choosePaint, toggleGallery, get pieces() { return pieces; }};
+    voice, cleaning, mimic, planPlace, settlePaintings, get cleanTarget() { return cleanTarget; }, splatMarks, sprayMarks, addSplat, doorBatches, setView: v => { thirdPerson = v; }, primary, secondary, shoot, spray, choosePiece, choosePaint, toggleGallery, get pieces() { return pieces; }};
 }
 
 start().catch(err => {

@@ -635,7 +635,7 @@ def scatter_paintings(meta, mesh, items, art, count=29, seed=1111, log=None, poo
         got = place(mode, w, ht, lambda: try_tunnel(mode, rng.uniform(lo, hi), w, ht, lo, hi))
         if got:
             it, plan = got
-            out.append({**it, 'art': arts[k_art]})
+            out.append({**it, 'art': arts[k_art], 'hung': mode == 'hang'})
             report.append((mode, 'tunnel', plan.get('against') or plan.get('on')))
             k_art += 1
         else:
@@ -649,7 +649,7 @@ def scatter_paintings(meta, mesh, items, art, count=29, seed=1111, log=None, poo
             got = place(mode, w, ht, lambda: try_room(mode, i, w, ht))
             if got:
                 it, plan = got
-                out.append({**it, 'art': arts[k_art]})
+                out.append({**it, 'art': arts[k_art], 'hung': mode == 'hang'})
                 report.append((mode, f'room {i}', plan.get('against') or plan.get('on')))
                 k_art += 1
                 break
@@ -669,12 +669,13 @@ def scatter_paintings(meta, mesh, items, art, count=29, seed=1111, log=None, poo
                 where = f'room {i}'
             if got:
                 it, plan = got
-                out.append({**it, 'art': arts[k_art]})
+                out.append({**it, 'art': arts[k_art], 'hung': mode == 'hang'})
                 report.append((mode, where, plan.get('against') or plan.get('on')))
                 k_art += 1
                 break
     items_out = [{'type': 'painting', 'x': round(it['x'], 3), 'y': round(it['y'], 3), 'z': round(it['z'], 3),
-                  'yaw': round(it['yaw'], 3), 'tilt': round(it['tilt'], 3), 'roll': round(it['roll'], 3), 'art': it['art']} for it in out]
+                  'yaw': round(it['yaw'], 3), 'tilt': round(it['tilt'], 3), 'roll': round(it['roll'], 3), 'art': it['art'],
+                  'hung': it['hung']} for it in out]     # hung ones are on a nail; the rest are free to fall (src/settle.js)
     return items_out, report
 
 
