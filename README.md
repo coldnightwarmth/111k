@@ -120,7 +120,14 @@ light, flicker and take paint like the level: run it again after a rebuild.
 Paintings stack, tip and fall: whoever puts one down, drops it or picks one
 up runs a few seconds of rigid-body physics (Rapier, `vendor/rapier`,
 `src/settle.js`) over the paintings and level round about, and everyone
-plays back the tumble.
+plays back the tumble. The physics runs in a worker (`src/settle-worker.js`,
+the same code as `src/settle-sim.js` on the page if there's no worker), so
+it never holds up a frame.
+
+Picking things up and putting them down is shown straight away, before the
+server has answered (`items.predict` in `src/items.js`): the server's echo
+just confirms it, and if it turns the move down (`refused`) the item goes
+back to where the server has it.
 
 ## Avatars
 

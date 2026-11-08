@@ -12,6 +12,8 @@ import {KOTH_GRACE_MS, KOTH_WIN_MS, KOTH_UNCLAIMED_MS, freshKoth, publicKoth, ko
 
 // paintings settling on their own (a 'settle' message): how many at once, and how far from the player who sends it
 const SETTLE_MAX = 16, SETTLE_RANGE = 6;
+// a pickup's checked against where the server last had the player, which can trail where they were when they clicked
+const PICKUP_SLACK = .4;
 
 export function newPlayer(id, now) {
   return {id, pose: null, lastPose: 0, lastChat: 0, lastActive: now, lastPunch: 0, lastShot: 0, lastSpray: 0,
@@ -267,20 +269,22 @@ function handle(player, data, now, room) {
 
   // ---------------------------------------------------------------- items
   const item = typeof m.id === 'string' ? items[m.id] : null;
+  // turned down: the one who asked has already been shown it done, so they're told how it really is
+  const refuse = () => ({out: item ? [{to: 'self', msg: {type: 'item', item: cleanItem(item), refused: true}}] : out, changed: false});
   if (m.type === 'pickup') {
-    if (!item || item.holder || !player.pose || player.inactive) return {out, changed: false};
+    if (!item || item.holder || !player.pose || player.inactive) return refuse();
     // while a game is on, the crown goes straight on your head, whatever's in your hands
     const crowning = item.type === 'crown' && kothActive(room.koth);
-    if (!crowning && handsFull(items, player.id)) return {out, changed: false};
-    if (flat(player.pose, item) > PICKUP_RANGE) return {out, changed: false};
+    if (!crowning && handsFull(items, player.id)) return refuse();
+    if (flat(player.pose, item) > PICKUP_RANGE + PICKUP_SLACK) return refuse();
     item.holder = player.id; player.lastActive = now;
     if (crowning) { item.on = true; room.koth.names[player.id] = player.name || ''; }
     out.push({to: 'all', msg: {type: 'item', item: cleanItem(item)}});
     return {out, changed: true, itemsChanged: true};
   }
   if (m.type === 'drop') {
-    if (!item || item.holder !== player.id || !player.pose) return {out, changed: false};
-    if (worn(item) && kothActive(room.koth)) return {out, changed: false};   // no taking it off mid-game
+    if (!item || item.holder !== player.id || !player.pose) return refuse();
+    if (worn(item) && kothActive(room.koth)) return refuse();   // no taking it off mid-game
     // put down where they aimed, or tossed and settled nearby: never far from them
     let dx = Number(m.x) - player.pose.x, dz = Number(m.z) - player.pose.z;
     if (!Number.isFinite(dx) || !Number.isFinite(dz)) { dx = 0; dz = 0; }

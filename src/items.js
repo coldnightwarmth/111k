@@ -494,6 +494,7 @@ export const ITEM_MODELS = MODELS;   // for previews
 // A dropped item's fall through the level: gravity, a couple of soft bounces, a skid to a stop.
 // Pure and fixed-step, so every client works out the same path from the same start.
 const FALL_DT = 1 / 60;
+const PREDICT_MS = 3000;       // how long something you picked up or put down is shown so before the server's had its say
 export const PATH_HZ = 30;     // a painting's recorded tumble (src/settle.js)
 export function simulateFall(hits, start, velocity) {
   const p = new THREE.Vector3(...start), v = new THREE.Vector3(...velocity), path = [p.clone()];
@@ -722,6 +723,22 @@ export function createItems({scene, camera, hits, shadows = null}) {
   const tmpQ = new THREE.Quaternion(), tmpV = new THREE.Vector3(), fwd = new THREE.Vector3();
   const _ray = new THREE.Ray(), _box = new THREE.Box3();
 
+  // start the way a state arrives: a fall eased onto where it settled, or a painting's tumble
+  function play(it, fall, path) {
+    const state = it.state;
+    it.fly = null;
+    it.path = Array.isArray(path) && path.length > 1 && !state.holder ? {frames: path, t: 0} : null;
+    if (it.path) it.fall = null;
+    else if (fall && hits && !state.holder) {
+      const f = simulateFall(hits, fall.p, fall.v);
+      // the server's resting spot is the word: ease the difference in over the whole fall, not a jump at the end
+      const last = f.path.length - 1, err = new THREE.Vector3(state.x, state.y, state.z).sub(f.path[last]);
+      f.path.forEach((q, i) => q.addScaledVector(err, last ? i / last : 1));
+      it.fall = {path: f.path, t: 0};
+    } else it.fall = null;
+    return it;
+  }
+
   function ensure(state) {
     let it = items.get(state.id);
     if (!it || it.state.type !== state.type) {
@@ -750,7 +767,9 @@ export function createItems({scene, camera, hits, shadows = null}) {
   previews();                          // the pictures' atlas: on its way from the start
   return {
     items,
-    set(list) { for (const s of list) ensure(s); },
+    // everything as the server has it (on joining, or when someone comes back): whatever you've been shown
+    // ahead of the server holds while the server catches up
+    set(list) { for (const s of list) this.update(s, null, null, false, false); },
     // the small pictures, all of them (the space waits for these before it fades in)
     get previewsReady() { return previewsReady; },
     // every full picture's file on its way, a few at a time, always the nearest one still to come (to wherever
@@ -784,19 +803,55 @@ export function createItems({scene, camera, hits, shadows = null}) {
       return Promise.allSettled(waits);
     },
     // a new state from the server; with a fall, it drops from where it was let go to where it settled; with a
-    // path (a painting's tumble, worked out by whoever let it go), it plays that: [x, y, z, qx, qy, qz, qw] at PATH_HZ
-    update(state, fall, path) {
-      const it = ensure(state);
-      it.path = Array.isArray(path) && path.length > 1 && !state.holder ? {frames: path, t: 0} : null;
-      if (it.path) it.fall = null;
-      else if (fall && hits && !state.holder) {
-        const f = simulateFall(hits, fall.p, fall.v);
-        // the server's resting spot is the word: ease the difference in over the whole fall, not a jump at the end
-        const last = f.path.length - 1, err = new THREE.Vector3(state.x, state.y, state.z).sub(f.path[last]);
-        f.path.forEach((p, i) => p.addScaledVector(err, last ? i / last : 1));
-        it.fall = {path: f.path, t: 0};
-      } else it.fall = null;
+    // path (a painting's tumble, worked out by whoever let it go), it plays that: [x, y, z, qx, qy, qz, qw] at PATH_HZ.
+    // `refused`: the server turned down what you asked for (a pickup or a drop), and this is how things really are.
+    // Returns true when this is the server saying yes to what you'd already been shown (src/main.js: predict).
+    update(state, fall, path, refused = false, animate = true) {
+      const it = items.get(state.id), p = it?.pending;
+      if (p && !refused) {
+        const holder = state.holder || null;
+        if (holder === p.holder) {
+          // yes: it carries on as it is (in your hand, or on its way down just as it was going), unless the
+          // server has it somewhere else (well off where you put it): then that's where it goes
+          it.pending = null; it.server = null;
+          const off = !holder && Math.hypot(state.x - it.state.x, state.y - it.state.y, state.z - it.state.z) > .05;
+          if (!off) { it.state = {...state}; return true; }
+        } else if (!holder || holder === p.me) {
+          // news from before the server got to yours (it's dealt with in order): kept for if yours comes to nothing
+          it.server = {...state};
+          return false;
+        } else { it.pending = null; it.server = null; }        // someone else got there first
+      }
+      if (it) { it.pending = null; it.server = null; }
+      const now = ensure(state);
+      if (animate) play(now, fall, path);
+      return false;
     },
+    // Show something happening straight away, before the server has said so: picked up (in your hand this
+    // frame), or put down / dropped (where it's going, falling or tumbling there). The server's answer
+    // then just confirms it (update); if it turns it down, or never answers, back it goes.
+    // patch: the state as it'll be; fall / path: as for update; me: your id.
+    predict(id, patch, {fall = null, path = null, me = null} = {}) {
+      const it = items.get(id);
+      if (!it) return;
+      if (!it.pending) it.server = {...it.state};
+      it.pending = {holder: patch.holder ?? null, me, until: performance.now() + PREDICT_MS};
+      it.state = {...it.state, ...patch};
+      play(it, fall, path);
+    },
+    // a painting tumbling just now (its physics having been worked out after you let it go): start its path,
+    // `ahead` seconds in, so one already thrown carries on from where it's got to
+    tumble(id, path, ahead = 0) {
+      const it = items.get(id);
+      if (it && Array.isArray(path) && path.length > 1) { it.path = {frames: path, t: Math.max(0, ahead)}; it.fall = null; it.fly = null; }
+    },
+    // a painting let go of, flying on from your hand while its physics is worked out (ballistic, no tumbling yet)
+    fly(id, from, vel) {
+      const it = items.get(id);
+      if (it) { it.fly = {from: {...from}, v: [...vel], t: 0}; it.path = it.fall = null; }
+    },
+    // being worked out (a painting's physics): not to be picked up again until it's settled
+    busy(id, on) { const it = items.get(id); if (it) it.busy = on; },
     // which item (if any) shows the pick-up glow
     highlight(id) { highlighted = id; },
     heldBy(id) { for (const it of items.values()) if (it.state.holder === id && !worn(it.state)) return it; return null; },
@@ -816,7 +871,7 @@ export function createItems({scene, camera, hits, shadows = null}) {
       let best = null, bestD = Infinity;
       _ray.set(origin, dir);
       for (const it of items.values()) {
-        if (it.state.holder || !it.model.visible) continue;
+        if (it.state.holder || !it.model.visible || it.busy) continue;
         if (Math.hypot(it.state.x - player.x, it.state.z - player.z) > reach) continue;
         _box.setFromObject(it.model).expandByScalar(.07);
         const hit = _ray.intersectBox(_box, tmpV);
@@ -887,7 +942,10 @@ export function createItems({scene, camera, hits, shadows = null}) {
       glowTime.value += dt;
       let n = 0;
       camera.getWorldPosition(_eye);
+      const clock = performance.now();
       for (const it of items.values()) {
+        // shown picked up or put down, and the server never said so (or it got lost): back as the server has it
+        if (it.pending && clock > it.pending.until && !it.busy) { it.state = it.server || it.state; it.pending = it.server = null; it.path = it.fall = it.fly = null; it.busy = false; }
         const s = it.state, m = it.model, u = m.userData;
         if (u.showArt) {
           const far = s.holder ? 0 : Math.hypot(s.x - _eye.x, s.y - _eye.y, s.z - _eye.z);
@@ -898,7 +956,7 @@ export function createItems({scene, camera, hits, shadows = null}) {
         it.kick *= Math.exp(-dt * 14); it.shake = Math.max(0, it.shake - dt);
         let origin = null, dir = null, eye = null;
         if (!(s.holder === myId && !thirdPerson) || s.type === 'flashlight') m.scale.setScalar(1);
-        it.outline.visible = !s.holder && s.id === highlighted && !it.fall && !it.path;
+        it.outline.visible = !s.holder && s.id === highlighted && !it.fall && !it.path && !it.fly;
         if (it.ghost) it.ghost.ghostAll.value = it.ghost.ghostOn.value = 0;     // (worn, it follows its wearer: below)
         if (!s.holder) {
           if (m.parent !== scene) scene.add(m);
@@ -918,6 +976,12 @@ export function createItems({scene, camera, hits, shadows = null}) {
               m.position.set(a[0] + (b[0] - a[0]) * k, a[1] + (b[1] - a[1]) * k, a[2] + (b[2] - a[2]) * k);
               m.quaternion.set(a[3], a[4], a[5], a[6]).slerp(tmpQ.set(b[3], b[4], b[5], b[6]), k);
             }
+          }
+          if (it.fly) {                       // let go of, its physics not back yet: carried on through the air
+            const f = it.fly, t = (f.t += dt);
+            m.position.set(f.from.x + f.v[0] * t, f.from.y + f.v[1] * t - 4.905 * t * t, f.from.z + f.v[2] * t);
+            m.rotation.set(f.from.tilt || 0, f.from.yaw, f.from.roll || 0, 'YXZ');
+            if (t > 1.5) it.fly = null;
           }
           if (it.fall) {                      // still on its way down: follow the path, already in its rest pose (no tumbling)
             const f = it.fall; f.t += dt;

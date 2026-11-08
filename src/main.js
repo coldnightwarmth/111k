@@ -26,7 +26,7 @@ import {cleanEmoteConfig, offeredEmotes} from './emotes.js';
 import {EMOTES, EMOTE_DURATION, PUNCH_COOLDOWN_MS, PUNCH_DURATION, PUNCH_COMBO_MS, SHOT_INTERVAL_MS, SPRAY_INTERVAL_MS, SPRAY_RANGE,
   MAX_SPLATS, MAX_SPRAYS, SPLAT_LIFE_MS, sanitizePose, sanitizeName, cleanSplat, cleanSpray, splatId, sprayId} from './protocol.js';
 import {paintingSize, paintingMatrix, paintingTris} from './paintings.js';
-import {settle as settlePaintings, loadPhysics, reversed} from './settle.js';
+import {settle as settlePaintings, warmPhysics, reversed} from './settle.js';
 
 const params = new URLSearchParams(location.search);
 const $ = id => document.getElementById(id);
@@ -588,10 +588,17 @@ async function start() {
     const o = camera.getWorldPosition(new THREE.Vector3()), d = camera.getWorldDirection(new THREE.Vector3());
     return items.target(player, o, d, dist => { const w = hits.raycast(o, d, dist); return !w || w.distance > dist - .05; });
   }
+  // Picked up: in your hand this frame, not after the server's answered (it says yes, as a rule; if not, it
+  // goes back where it was: src/items.js predict)
   function grab() {
     const t = lookTarget();
-    if (t) { network.send({type: 'pickup', id: t.state.id}); learn(`pickup:${t.state.type}`); fireLatch = true; return true; }   // this click doesn't fire what you picked up
-    return false;
+    if (!t) return false;
+    const s = {...t.state};
+    learn(`pickup:${s.type}`); fireLatch = true;                 // this click doesn't fire what you picked up
+    if (!network.send({type: 'pickup', id: s.id})) return true;
+    items.predict(s.id, {holder: network.id, ...(s.type === 'crown' && kothActive(koth) ? {on: true} : {})}, {me: network.id});
+    if (s.type === 'painting') tookPainting(s);
+    return true;
   }
   // the lap timer's button, if the crosshair is on it and it's in reach
   function onButton() {
@@ -784,34 +791,59 @@ async function start() {
   }
   // Put down. On its nail it stays just as put; anything else settles under gravity first (src/settle.js):
   // too far over an edge it tips off, and whatever it knocks moves too. Everyone sees it go as it went here.
-  let placing = false;
   const lyingAbout = () => items.paintings().map(it => it.state);
-  function sendPlaced(h, pose, path) {
-    network.send({type: 'drop', id: h.state.id, x: r3(pose.x), y: r3(pose.y), z: r3(pose.z), yaw: r3(pose.yaw), tilt: r3(pose.tilt), roll: r3(pose.roll || 0),
-      hung: !!pose.hung && !path, ...(path ? {path} : {})});
+  const poseFields = p => ({x: r3(p.x), y: r3(p.y), z: r3(p.z), yaw: r3(p.yaw), tilt: r3(p.tilt), roll: r3(p.roll || 0)});
+  function sendPlaced(id, pose, path) {
+    return network.send({type: 'drop', id, ...poseFields(pose), hung: !!pose.hung && !path, ...(path ? {path} : {})});
   }
+  // the paintings knocked or left with nothing under them: moving here straight away, and sent for everyone
   function sendSettled(moved) {
-    if (moved?.length) network.send({type: 'settle', items: moved.map(m => ({id: m.id, ...m.pose, path: m.path}))});
+    if (!moved?.length) return;
+    if (!network.send({type: 'settle', items: moved.map(m => ({id: m.id, ...m.pose, path: m.path}))})) return;
+    for (const m of moved) if (m.path) { items.predict(m.id, {holder: null, ...poseFields(m.pose), hung: false}, {me: network.id}); items.tumble(m.id, m.path); }
   }
-  async function letSettle(h, pose, vel) {
-    placing = true;
-    try { return await settlePaintings({hits, paintings: lyingAbout(), moving: {state: h.state, pose, vel}}); }
+  async function letSettle(state, pose, vel) {
+    try { return await settlePaintings({hits, paintings: lyingAbout(), moving: {state, pose, vel}}); }
     catch (e) { console.warn('painting physics:', e); return null; }
-    finally { placing = false; }
   }
-  async function placePainting(h, plan) {
-    if (placing) return;
+  // one just picked up: whatever rested on it, or leant on it, has nothing there now
+  function tookPainting(prev) {
+    warmPhysics();
+    if (prev.holder) return;
+    settlePaintings({hits, paintings: lyingAbout(), removed: prev}).then(sendSettled, e => console.warn('painting physics:', e));
+  }
+  // Let go of: out of your hands this frame, where it's going (put down, or carried on through the air if it was
+  // dropped) while its physics is worked out off the page's thread; then it tumbles as that says, and that's
+  // what's sent for everyone else. `vel`: dropped (thrown a little), rather than put down.
+  async function letGo(h, pose, vel = null) {
+    const state = {...h.state}, id = state.id, me = network.id, from = performance.now();
+    items.predict(id, {holder: null, ...poseFields(pose), hung: false}, {me});
+    if (vel) items.fly(id, pose, vel);
+    items.busy(id, true);
+    const moved = await letSettle(state, pose, vel);
+    items.busy(id, false);
+    const now = items.items.get(id)?.state;
+    if (!now || now.holder || !items.items.get(id).pending) return;   // taken meanwhile (punched out of your hands, say)
+    const mine = moved?.find(m => m.id === id);
+    if (!mine && vel) { dropItem({state: {...state, holder: me}}); return; }   // (no physics: the old way, a fall to the floor)
+    const end = {...(mine?.pose || pose), hung: false};
+    if (!sendPlaced(id, end, mine?.path)) return;
+    items.predict(id, {holder: null, ...poseFields(end), hung: false}, {me});
+    if (mine?.path) items.tumble(id, mine.path, vel ? (performance.now() - from) / 1000 : 0);
+    sendSettled(moved?.filter(m => m.id !== id));
+  }
+  // Put down. On its nail it stays just as put; anything else settles under gravity first (src/settle.js):
+  // too far over an edge it tips off, and whatever it knocks moves too. Everyone sees it go as it went here.
+  function placePainting(h, plan) {
     learn('place'); learn('drop');
-    if (plan.hung) { sendPlaced(h, plan, null); return; }
-    const moved = await letSettle(h, plan);
-    if (held()?.state.id !== h.state.id) return;               // out of your hands meanwhile (punched, say)
-    const mine = moved?.find(m => m.id === h.state.id);
-    sendPlaced(h, {...(mine?.pose || plan), hung: false}, mine?.path);
-    sendSettled(moved?.filter(m => m.id !== h.state.id));
+    if (plan.hung) {
+      if (sendPlaced(h.state.id, {...plan, hung: true}, null)) items.predict(h.state.id, {holder: null, ...poseFields(plan), hung: true}, {me: network.id});
+      return;
+    }
+    letGo(h, plan);
   }
   // Let go of with nothing in reach to put it on: it drops from your hands, flat, and falls where it falls.
-  async function dropPainting(h) {
-    if (placing) return;
+  function dropPainting(h) {
     learn('drop');
     const yaw = controls.state.yaw, fwd = new THREE.Vector3(-Math.sin(yaw), 0, -Math.cos(yaw)), side = new THREE.Vector3(-fwd.z, 0, fwd.x);
     const {w, h: ht} = paintingSize(h.state.art);
@@ -822,13 +854,7 @@ async function start() {
       const b = hits.raycast(at, side.clone().multiplyScalar(k), w / 2 + .05);
       if (b) at.addScaledVector(side, -k * (w / 2 + .05 - b.distance));
     }
-    const pose = {x: at.x, y: at.y, z: at.z, yaw, tilt: -Math.PI / 2, roll: 0};
-    const moved = await letSettle(h, pose, [fwd.x * 1.1 + player.vx * .4, .6, fwd.z * 1.1 + player.vz * .4]);
-    if (held()?.state.id !== h.state.id) return;
-    const mine = moved?.find(m => m.id === h.state.id);
-    if (!mine) { dropItem(h); return; }                          // (no physics: the old way, a fall to the floor)
-    sendPlaced(h, {...mine.pose, hung: false}, mine.path);
-    sendSettled(moved.filter(m => m.id !== h.state.id));
+    letGo(h, {x: at.x, y: at.y, z: at.z, yaw, tilt: -Math.PI / 2, roll: 0}, [fwd.x * 1.1 + player.vx * .4, .6, fwd.z * 1.1 + player.vz * .4]);
   }
   // a faint outline of the painting where a click would put it
   let placeGhost = null, placeGhostArt = 0, placeAt = 0, placePlan = null;
@@ -880,7 +906,11 @@ async function start() {
       const f = simulateFall(hits, start.toArray(), vel.toArray());
       Object.assign(msg, {x: r3(f.rest.x), y: r3(f.rest.y), z: r3(f.rest.z), fall: {p: start.toArray().map(r3), v: vel.toArray().map(r3)}});
     }
-    network.send(msg);
+    if (!network.send(msg)) return;
+    // down (or on its way down) this frame, the server's say-so to follow
+    const {type: _t, id: _i, fall, ...pose} = msg;
+    items.predict(h.state.id, {holder: null, ...pose, ...(h.state.type === 'painting' ? {roll: 0, hung: false} : {}), ...(h.state.type === 'crown' ? {on: false} : {})},
+      {fall, me: network.id});
   }
   function punch() {
     const now = performance.now();
@@ -1239,15 +1269,13 @@ async function start() {
     },
     onPose: m => applyPose(m.id, m.pose, m.time),
     onLeave: id => removePeer(id),
-    onItem: (it, fall, path) => {
+    onItem: (it, fall, path, refused) => {
       const prev = items.items.get(it.id)?.state, before = prev?.holder;
-      items.update(it, fall, path);
-      if (before === network.id && it.holder !== network.id) toggleGallery(false);
-      if (it.type === 'painting' && it.holder === network.id && before !== network.id) {
-        loadPhysics().catch(() => {});                           // ready for when it's put down
-        // whatever rested on it, or leant on it, has nothing there now
-        if (prev && !prev.holder) settlePaintings({hits, paintings: lyingAbout(), removed: prev}).then(sendSettled, e => console.warn('painting physics:', e));
-      }
+      const confirmed = items.update(it, fall, path, refused);
+      const after = items.items.get(it.id)?.state.holder;
+      if (before === network.id && after !== network.id) toggleGallery(false);
+      // in your hands without you having picked it up just now (you'd have dealt with that then: grab)
+      if (!confirmed && it.type === 'painting' && after === network.id && before !== network.id && prev) tookPainting(prev);
     },
     onPunch: m => {
       // your fist landed: the jolt comes as it connects, not when you swing
@@ -1748,6 +1776,9 @@ async function start() {
     await wait(1500 - (performance.now() - goingAt));   // "going down…" stays long enough to read, even when it all loaded while you picked
     loading.classList.add('done');
     document.body.classList.add('ready');
+    // the paintings' physics engine, started up in its worker once there's a quiet moment: ready long before
+    // anyone puts a painting down (it never touches the page's own thread)
+    (window.requestIdleCallback || (f => setTimeout(f, 1500)))(() => warmPhysics(), {timeout: 4000});
   }
   window.__111k = {scene, camera, player, peers, network, renderer, items, controls, hits, doors, me, meView, vertical,
     voice, cleaning, mimic, planPlace, settlePaintings, get cleanTarget() { return cleanTarget; }, splatMarks, sprayMarks, addSplat, doorBatches, setView: v => { thirdPerson = v; }, primary, secondary, shoot, spray, choosePiece, choosePaint, toggleGallery, get pieces() { return pieces; }};

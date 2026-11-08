@@ -262,7 +262,7 @@ export async function createAvatar(look) {
   const holdNames = new Set(Object.values(HOLD));
   for (const [clip, action] of actions) {
     action.play().setEffectiveWeight(0);
-    if (clip.startsWith('Jump') || clip.startsWith('Pose_') || clip.startsWith('Punch')) action.paused = true;
+    if (clip.startsWith('Jump') || clip.startsWith('Pose_') || clip.startsWith('Emote_') || clip.startsWith('Punch')) action.paused = true;
   }
   const look_ = createLookPose(model);
   const socket = model.getObjectByName('CardSocketR') || model.getObjectByName('CardSocket.R');  // the loader strips the dot
@@ -353,7 +353,7 @@ export async function createAvatar(look) {
         if (tail && punches[tail.hand] !== main) { const a = punches[tail.hand]; a.time = tail.t / PUNCH_DURATION * a.getClip().duration; weights.set(a, tailWeight); }
       } else if (fallbackPunch) { fallbackPunch.time = .2; weights.set(fallbackPunch, mainWeight * Math.sin(Math.PI * k)); }
       for (const [clip, action] of actions) {
-        if (clip.startsWith('Pose_') || clip.startsWith('Punch')) { action.setEffectiveWeight(weights.get(action) || 0); continue; }
+        if (clip.startsWith('Pose_') || clip.startsWith('Emote_') || clip.startsWith('Punch')) { action.setEffectiveWeight(weights.get(action) || 0); continue; }
         const base = holdNames.has(clip) ? Object.keys(HOLD).find(n => HOLD[n] === clip) : clip;
         const hw = holdNames.has(clip) ? holdBlend : HOLD[clip] && actions.has(HOLD[clip]) ? 1 - holdBlend : 1;
         const legsOnly = punching ? .35 : 1;   // the punch owns the upper body; keep a little of the stride

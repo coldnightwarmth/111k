@@ -386,7 +386,14 @@ test('king of the hill: start with the crown, grace, knocked off by punch and pa
   let r = send(a, {type: 'koth'});
   assert.deepEqual(events(r), ['start']);
   assert.equal(koth.state, 'grace'); assert.equal(crown.on, true); assert.equal(koth.wearer, 'aaa');
-  assert.equal(send(a, {type: 'drop', id: 'cr1', x: crown.x, z: crown.z}).out.length, 0, 'no taking it off mid-game');
+  r = send(a, {type: 'drop', id: 'cr1', x: crown.x, z: crown.z});
+  assert.equal(crown.holder, 'aaa', 'no taking it off mid-game');
+  assert.deepEqual(r.out.map(o => [o.to, o.msg.type, o.msg.refused]), [['self', 'item', true]], 'told so (it was shown off already)');
+  assert.equal(r.out[0].msg.item.on, true);
+  // someone else's pickup of what she has: turned down, and they're told where it really is
+  r = send(b, {type: 'pickup', id: 'cr1'});
+  assert.equal(crown.holder, 'aaa');
+  assert.deepEqual(r.out.map(o => [o.to, o.msg.refused, o.msg.item.holder]), [['self', true, 'aaa']]);
   // hands are free while it's on your head
   items.pb1.holder = null; a.pose.x = gun.x; a.pose.z = gun.z; b.pose.x = gun.x + .5; b.pose.z = gun.z;
   send(a, {type: 'pickup', id: 'pb1'});
