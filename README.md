@@ -52,6 +52,12 @@ esbuild, every import path versioned, cache headers in `_headers`), then
 server (`SITE_ROOT=_site`) and walks round, picks up and drops the torch; any
 error stops the deploy. To try it locally:
 `npm i --no-save esbuild@0.24.0 puppeteer-core@23.11.1 && bash tools/build_site.sh dev && SITE_ROOT=_site node tools/smoke.mjs`.
+The same build also goes to Cloudflare (`.github/workflows/site.yml`,
+`wrangler.site.jsonc`): static assets with brotli and long cache headers, and
+a tiny `site/worker.js` in front of `/assets` that gzips the `.glb` models
+(Cloudflare won't by itself). It's at `111k-site.<account>.workers.dev`; a
+custom domain is attached to that Worker in the Cloudflare dashboard
+(Settings → Domains & Routes) once the domain's DNS is on Cloudflare.
 In the repo settings, set Pages → Source to "GitHub Actions" once. For a
 custom domain, add a `CNAME` file at the root and add the domain to
 `ALLOWED_ORIGINS` in `server/wrangler.jsonc`.
