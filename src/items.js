@@ -302,14 +302,37 @@ function crownModel() {
 // wrapped, so the sides streak with the picture's own colours), and an open back: the canvas's raw
 // back, folded and stapled over a pine stretcher with a cross brace. Origin: the middle of the back;
 // the picture faces +z, its top is +y.
-const artTextures = new Map();
-function artTexture(art) {
-  if (!artTextures.has(art)) {
-    const t = new THREE.TextureLoader().setCrossOrigin('anonymous').load((ART[art] || ART[1]).url);
-    t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 8;
-    artTextures.set(art, t);
+// The pictures are big (up to ~2000 px and several MB each, thirty of them), so a picture is only fetched
+// once its painting comes near (or is picked up), and drawn down to ART_PX on its long side (less on a
+// phone) before it goes to the GPU. Until then the front is plain primed canvas.
+const ART_PX = globalThis.matchMedia?.('(pointer: coarse)').matches ? 512 : 1024;
+const ART_NEAR = 30;                 // metres from the eye
+const artTextures = new Map();       // art -> {texture (once it's in), waiting: [materials], failed: when}
+function loadArt(art, material) {
+  if (material.userData.art) return;
+  let a = artTextures.get(art);
+  if (a?.failed && performance.now() - a.failed < 30000) return;     // (tried a moment ago: wait a bit)
+  material.userData.art = true;
+  if (!a || a.failed) {
+    a = {texture: null, waiting: [], failed: 0};
+    artTextures.set(art, a);
+    const img = new Image();
+    img.crossOrigin = 'anonymous'; img.decoding = 'async';
+    img.onload = () => {
+      const k = Math.min(1, ART_PX / Math.max(img.width, img.height));
+      const c = document.createElement('canvas');
+      c.width = Math.max(1, Math.round(img.width * k)); c.height = Math.max(1, Math.round(img.height * k));
+      const g = c.getContext('2d'); g.imageSmoothingQuality = 'high'; g.drawImage(img, 0, 0, c.width, c.height);
+      const t = new THREE.CanvasTexture(c);
+      t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 8;
+      a.texture = t;
+      for (const m of a.waiting.splice(0)) m.map = t;
+    };
+    img.onerror = () => { a.failed = performance.now(); for (const m of a.waiting.splice(0)) m.userData.art = false; };   // try again later
+    img.src = (ART[art] || ART[1]).url;
   }
-  return artTextures.get(art);
+  if (a.texture) material.map = a.texture;
+  else a.waiting.push(material);
 }
 let woodTex = null, linenTex = null, primedTex = null;
 // white primed canvas: gesso over the weave, the weave just showing through
@@ -365,7 +388,8 @@ function paintingModel(id, state) {
   quad([[-x, -y, d], [x, -y, d], [x, y, d], [-x, y, d]], [[0, 0], [1, 0], [1, 1], [0, 1]]);
   const geo = () => { const b = new THREE.BufferGeometry(); b.setAttribute('position', new THREE.Float32BufferAttribute(pos.splice(0), 3));
     b.setAttribute('uv', new THREE.Float32BufferAttribute(uv.splice(0), 2)); b.setIndex(idx.splice(0)); b.computeVertexNormals(); return b; };
-  const canvasMat = new THREE.MeshStandardMaterial({map: artTexture(art), roughness: .82, metalness: 0});
+  primedTex ||= primedTexture();
+  const canvasMat = new THREE.MeshStandardMaterial({map: primedTex, roughness: .82, metalness: 0});   // the picture goes on when it comes near
   const front = new THREE.Mesh(geo(), canvasMat); front.name = 'canvas'; g.add(front);
   // sides: the weave running along each edge
   const tw = w * 4, th = h * 4, td = d * 4;
@@ -373,7 +397,6 @@ function paintingModel(id, state) {
   quad([[-x, -y, 0], [x, -y, 0], [x, -y, d], [-x, -y, d]], [[0, 0], [tw, 0], [tw, td], [0, td]]);   // bottom
   quad([[x, -y, d], [x, -y, 0], [x, y, 0], [x, y, d]], [[td, 0], [0, 0], [0, th], [td, th]]);       // right
   quad([[-x, -y, 0], [-x, -y, d], [-x, y, d], [-x, y, 0]], [[0, 0], [td, 0], [td, th], [0, th]]);   // left
-  primedTex ||= primedTexture();
   part(g, geo(), new THREE.MeshStandardMaterial({map: primedTex, roughness: .9, metalness: 0}));
   // the back: raw canvas behind the picture, folded over the stretcher's back edge and stapled
   woodTex ||= grainTexture(); linenTex ||= linenTexture();
@@ -408,7 +431,8 @@ function paintingModel(id, state) {
   for (const [kx, ky] of [[1, 1], [1, -1], [-1, 1], [-1, -1]]) part(g, key, wood, [kx * (x - bar - .012), ky * (y - bar - .012), .004], [0, 0, Math.PI / 4]);
   // the pick-up glow: one closed box with its corners' normals shared, so the glow wraps it without gaps
   const ob = glowBoxGeometry(new THREE.Vector3(-x, -y, 0), new THREE.Vector3(x, y, d));
-  g.userData = {tip: new THREE.Vector3(0, 0, d), ground: .002, painting: true, w, h, d, art, canvas: front, outline: ob};
+  const showArt = () => loadArt(art, canvasMat);
+  g.userData = {tip: new THREE.Vector3(0, 0, d), ground: .002, painting: true, w, h, d, art, canvas: front, outline: ob, showArt};
   return g;
 }
 
@@ -613,7 +637,7 @@ export function addOutline(model) {
 
 const worn = s => s.type === 'crown' && s.on;
 const _inv = new THREE.Matrix4();
-const _m = new THREE.Matrix4(), _onHead = new THREE.Matrix4();
+const _m = new THREE.Matrix4(), _onHead = new THREE.Matrix4(), _eye = new THREE.Vector3();
 
 export function createItems({scene, camera, hits, shadows = null}) {
   const items = new Map();          // id -> {state, model, kick}
@@ -745,8 +769,10 @@ export function createItems({scene, camera, hits, shadows = null}) {
     frame({me, myId, thirdPerson, avatarOf, poseOf, dt}) {
       glowTime.value += dt;
       let n = 0;
+      camera.getWorldPosition(_eye);
       for (const it of items.values()) {
         const s = it.state, m = it.model, u = m.userData;
+        if (u.showArt && (s.holder || Math.hypot(s.x - _eye.x, s.y - _eye.y, s.z - _eye.z) < ART_NEAR)) u.showArt();
         // the hopper shows what's loaded: yours, the holder's choice, or a mix lying on the floor
         if (u.setPaint) u.setPaint(s.holder === myId ? myPaint : s.holder ? (poseOf(s.holder)?.pc ?? RANDOM_PAINT) : RANDOM_PAINT, PAINT_COLORS);
         it.kick *= Math.exp(-dt * 14); it.shake = Math.max(0, it.shake - dt);

@@ -99,7 +99,13 @@ python3 tools/build_world.py --fast --preview   # quick bake + preview renders i
    so they wrap corners and carry the wall's own lightmap coordinates.
 
 The build also writes `src/world-items.js` (where the flashlights start), which
-the client and the multiplayer server share.
+the client and the multiplayer server share. Loose flashlights, buckets and 29
+paintings are scattered by `tools/scatter.py`; the paintings are hung, leant and
+laid down by a Python port of the game's own placing (`planPlace` in
+`src/main.js`), run against the built `world.glb`, so they sit exactly as a
+player would put them. `python3 tools/scatter.py` redoes the scatter against an
+already built level without a rebuild. The art itself is listed in
+`src/paintings.js`.
 
 ## Avatars
 

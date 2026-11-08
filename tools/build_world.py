@@ -872,6 +872,13 @@ def write_items():
     write_spawns(os.path.join(HERE, '..', 'src', 'world-items.js'), ITEMS)
 
 
+def write_paintings():
+    """Paintings go where a player could have put them, felt for on the level's mesh: so once it's built."""
+    from scatter import add_paintings, write_spawns
+    paintings, _ = add_paintings(HERE, ITEMS, json.load(open(OUT + '.json')))
+    write_spawns(os.path.join(HERE, '..', 'src', 'world-items.js'), ITEMS + paintings)
+
+
 if __name__ == '__main__':
     os.makedirs(os.path.dirname(OUT), exist_ok=True)
     write_items()
@@ -901,4 +908,5 @@ if __name__ == '__main__':
     W.build(OUT, lm_size=1024 if FAST else 2048, samples=24 if FAST else 160, ambient=(0.004, 0.004, 0.005),
             grime=grime, previews=cams, preview_dir=pr, fill=(0.03, 0.03, 0.034), group_samples=16 if FAST else 64,
             chunk=lambda c: (np.floor((np.arctan2(-c[:, 2], c[:, 0]) % (2 * math.pi)) / (2 * math.pi) * 16 + 0.5) % 16).astype(int))
+    write_paintings()
     print(f'done in {time.time() - t0:.1f}s')

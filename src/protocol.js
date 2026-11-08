@@ -70,6 +70,8 @@ export function sanitizeChat(text) {
   return text.replace(/[\u0000-\u001f\u007f\u2028\u2029]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, CHAT_MAX);
 }
 
+// the highest painting art id (the art is numbered 1 to 30000 on the CDN)
+export const ART_MAX = 30000;
 // Held items (flashlights): shared room state. Positions are where they lie when nobody holds them.
 export function cleanItem(it) {
   const out = {id: it.id, type: ITEM_TYPES.includes(it.type) ? it.type : 'flashlight', x: round(it.x), y: round(it.y), z: round(it.z), yaw: round(it.yaw),
@@ -78,7 +80,7 @@ export function cleanItem(it) {
   if (out.type === 'painting') {
     out.tilt = Number.isFinite(it.tilt) ? round(Math.max(-1.571, Math.min(1.571, it.tilt))) : 0;
     out.roll = Number.isFinite(it.roll) ? round(Math.max(-3.142, Math.min(3.142, it.roll))) : 0;
-    out.art = Number.isInteger(it.art) && it.art > 0 && it.art < 10000 ? it.art : 1;
+    out.art = Number.isInteger(it.art) && it.art > 0 && it.art <= ART_MAX ? it.art : 1;
   }
   return out;
 }
@@ -91,7 +93,7 @@ function paintingFields(s, out) {
   if (typeof s.pi === 'string' && PAINTING_ID.test(s.pi)) { out.pi = s.pi; delete out.d; return out; }
   if (Array.isArray(s.occ)) {
     const occ = s.occ.slice(0, 6).map(a => Array.isArray(a) && (a.length === 6 || a.length === 7) && a.every(Number.isFinite) && a.slice(0, 3).every(v => Math.abs(v) <= 500)
-      ? [...a.slice(0, 5).map(v => round(v)), Math.max(1, Math.min(9999, Math.round(a[5]))), ...(a.length === 7 ? [round(a[6])] : [])] : null).filter(Boolean);
+      ? [...a.slice(0, 5).map(v => round(v)), Math.max(1, Math.min(ART_MAX, Math.round(a[5]))), ...(a.length === 7 ? [round(a[6])] : [])] : null).filter(Boolean);
     if (occ.length) out.occ = occ;
   }
   return out;
