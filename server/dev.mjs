@@ -13,7 +13,8 @@ import {handleMessage, newPlayer, snapshot, freshItems, releaseItems, letGo, fre
 import {cleanEmoteConfig} from '../src/emotes.js';
 import {cleanReview, hiddenPieces} from '../src/review.js';
 
-const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
+// (SITE_ROOT=_site serves the built site instead: tools/build_site.sh, tools/smoke.mjs)
+const ROOT = resolve(process.env.SITE_ROOT || fileURLToPath(new URL('..', import.meta.url)));
 const PORT = Number(process.env.PORT || 8000);
 const TYPES = {'.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css',
   '.json': 'application/json', '.glb': 'model/gltf-binary', '.png': 'image/png', '.webp': 'image/webp',

@@ -45,7 +45,13 @@ Debug URL params: `?view=3p`, `?cam=x,z,yaw,pitch`, `?exposure=1.2`,
 
 ## Deploy
 
-**Site.** Every push to `main` deploys through `.github/workflows/pages.yml`.
+**Site.** Every push to `main` deploys through `.github/workflows/pages.yml`:
+`tools/build_site.sh` builds `_site/` (the game bundled into one file with
+esbuild, every import path versioned, cache headers in `_headers`), then
+`tools/smoke.mjs` loads that exact build in headless Chrome against the dev
+server (`SITE_ROOT=_site`) and walks round, picks up and drops the torch; any
+error stops the deploy. To try it locally:
+`npm i --no-save esbuild@0.24.0 puppeteer-core@23.11.1 && bash tools/build_site.sh dev && SITE_ROOT=_site node tools/smoke.mjs`.
 In the repo settings, set Pages → Source to "GitHub Actions" once. For a
 custom domain, add a `CNAME` file at the root and add the domain to
 `ALLOWED_ORIGINS` in `server/wrangler.jsonc`.
@@ -56,6 +62,9 @@ secrets:
 
 - `CLOUDFLARE_API_TOKEN`: create it from the "Edit Cloudflare Workers" template
 - `CLOUDFLARE_ACCOUNT_ID`
+
+Errors from visitors' browsers are kept by the room: `GET /errors` on the
+Worker (with an allowed `Origin` header) lists the latest kinds with counts.
 
 You can also deploy by hand with `npm run deploy:server`. The client expects
 the server at `wss://111k-room.<your-subdomain>.workers.dev/connect`; see
