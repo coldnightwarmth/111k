@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#050506">
+  <title>111k graffiti</title>
+  <meta name="description" content="every 111k graffiti piece, to review: keep, remove, redo or fix">
+  <link rel="icon" href="../favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="graffiti.css">
+  <script type="importmap">{"imports": {"three": "../vendor/three/three.module.min.js"}}</script>
+</head>
+<body>
+  <header id="top">
+    <div class="row1">
+      <a class="home" href="../">111k</a>
+      <h1>graffiti</h1>
+      <input id="search" type="search" placeholder="find a piece" autocomplete="off" spellcheck="false">
+      <div class="bg" role="group" aria-label="background">
+        <button type="button" data-bg="wall" aria-pressed="true" title="wall grey">wall</button>
+        <button type="button" data-bg="dark" aria-pressed="false" title="dark">dark</button>
+        <button type="button" data-bg="light" aria-pressed="false" title="light">light</button>
+      </div>
+      <span id="status">loading…</span>
+      <button type="button" id="import" class="quiet" title="load a review json">load json</button>
+      <button type="button" id="download" class="primary">download json</button>
+      <input type="file" id="importFile" accept="application/json,.json" hidden>
+    </div>
+    <nav id="filters" aria-label="show"></nav>
+    <p class="help">
+      <b>good</b> stays in the cans · <b>remove</b> comes out of the cans and off the walls straight away (it stays listed here) ·
+      <b>redo</b> gets made again in some other style · <b>kerning</b> keeps the style and spaces the letters out so they read better.
+      Both stay in until their new version is in. Keys on a focused card: 1 good · 2 remove · 3 redo · 4 kerning · 0 clear · j/k next/previous · n notes.
+    </p>
+  </header>
+  <main id="list" aria-live="polite"></main>
+  <div id="zoom" hidden><canvas></canvas><p></p></div>
+  <script type="module" src="../src/graffiti-page.js"></script>
+</body>
+</html>

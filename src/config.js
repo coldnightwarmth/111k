@@ -13,6 +13,12 @@ export const isTouch = matchMedia('(pointer: coarse)').matches || navigator.maxT
 export const lowPower = isTouch || (navigator.hardwareConcurrency || 8) <= 4;
 
 // the emote settings (GET to read, POST from /anim): the same server, over http
+export function reviewUrl() {
+  const u = new URL(serverUrl().replace(/^ws/, 'http'));
+  u.pathname = '/graffiti'; u.search = '';
+  return u.href;
+}
+
 export function emotesUrl() {
   const u = new URL(serverUrl().replace(/^ws/, 'http'));
   u.pathname = '/emotes'; u.search = '';

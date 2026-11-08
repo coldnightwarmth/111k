@@ -3,6 +3,7 @@
 // WebSockets plus automatic ping/pong mean an idle room costs nothing.
 import {INACTIVE_MS, IDLE_RESET_MS, MAX_PLAYERS} from '../src/protocol.js';
 import {cleanEmoteConfig} from '../src/emotes.js';
+import {cleanReview, hiddenPieces} from '../src/review.js';
 import {freshRace, publicRace} from '../src/race.js';
 import {handleMessage, newPlayer, snapshot, freshItems, validItems, releaseItems, letGo, validMarks, marksMessage, itemsAtSpawn,
   kothTick, kothNext, freshKoth, publicKoth} from './room.js';
@@ -19,8 +20,9 @@ export default {
     if (url.pathname === '/health') return Response.json({ok: true});
     const origin = request.headers.get('Origin');
     if (!allowedOrigins(env).includes(origin)) return new Response('Forbidden', {status: 403});
-    // the emote settings (read by anyone on the site, changed from /anim): handled by the room itself
-    if (url.pathname === '/emotes') {
+    // the emote settings (changed from /anim) and the graffiti review (made at /graffiti): read by anyone
+    // on the site, handled by the room itself
+    if (url.pathname === '/emotes' || url.pathname === '/graffiti') {
       const cors = {'Access-Control-Allow-Origin': origin, 'Vary': 'Origin', 'Access-Control-Allow-Methods': 'GET, POST',
         'Access-Control-Allow-Headers': 'Content-Type, X-Emotes-Key'};
       if (request.method === 'OPTIONS') return new Response(null, {status: 204, headers: cors});
@@ -114,8 +116,26 @@ export class Room {
     return Response.json(await this.loadEmotes(), {headers: {'Cache-Control': 'no-store'}});
   }
 
+  async loadReview() {
+    if (!this.review) this.review = cleanReview(await this.ctx.storage.get?.('review'));
+    return this.review;
+  }
+  // GET /graffiti: the whole review; POST /graffiti: a new one, saved, and the pieces it removes sent to everyone
+  async reviewRequest(request) {
+    if (request.method === 'POST') {
+      const text = await request.text();
+      if (text.length > 120000) return new Response('Too big', {status: 413});
+      let body; try { body = JSON.parse(text); } catch { return new Response('Bad JSON', {status: 400}); }
+      this.review = cleanReview({...body, updated: Date.now()});
+      await this.ctx.storage.put?.('review', this.review);
+      this.broadcast({type: 'graffiti', hidden: hiddenPieces(this.review)});
+    }
+    return Response.json(await this.loadReview(), {headers: {'Cache-Control': 'no-store'}});
+  }
+
   async fetch(request) {
     if (new URL(request.url).pathname === '/emotes') return this.emotesRequest(request);
+    if (new URL(request.url).pathname === '/graffiti') return this.reviewRequest(request);
     // Public player IDs must not expose the session token that can resume a socket.
     const session = new URL(request.url).searchParams.get('session');
     const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(session));
@@ -133,6 +153,7 @@ export class Room {
     this.send(server, {type: 'race', race: publicRace(await this.loadRace(), now)});
     this.send(server, {type: 'koth', koth: publicKoth(await this.loadKoth(), now)});
     this.send(server, {type: 'emotes', config: await this.loadEmotes()});
+    this.send(server, {type: 'graffiti', hidden: hiddenPieces(await this.loadReview())});
     await this.scheduleAlarm();
     return new Response(null, {status: 101, webSocket: client});
   }

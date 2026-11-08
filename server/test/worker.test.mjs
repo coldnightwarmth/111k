@@ -536,3 +536,24 @@ test('emote settings: saved from /anim, cleaned, sent to everyone here and to ne
   await join(room, S2);
   assert.deepEqual(sockets[1].messages().find(m => m.type === 'emotes').config, saved);
 });
+
+test('graffiti review: saved from /graffiti, cleaned, removed pieces sent to everyone here and to newcomers', async () => {
+  const {room, sockets, ctx} = makeRoom();
+  const store = new Map();
+  ctx.storage.get = async k => store.get(k);
+  ctx.storage.put = async (k, v) => { store.set(k, structuredClone(v)); };
+  await join(room, S1);
+  assert.deepEqual(sockets[0].messages().find(m => m.type === 'graffiti').hidden, [], 'nothing is removed to start with');
+  const body = JSON.stringify({pieces: {tu_loop: {s: 'remove'}, pl_walmart: {s: 'kern', note: 'R and T touch'}, 'bad name!': {s: 'remove'},
+    tag_nova: {s: 'sideways'}, sc_greed: {s: 'good', note: '   '}, pc_waxy: {}}});
+  const saved = await (await room.fetch(new Request('https://room/graffiti', {method: 'POST', body}))).json();
+  assert.deepEqual(saved.pieces, {tu_loop: {s: 'remove'}, pl_walmart: {s: 'kern', note: 'R and T touch'}, sc_greed: {s: 'good'}});
+  assert.ok(saved.updated > 0);
+  assert.deepEqual(store.get('review'), saved);
+  assert.deepEqual(sockets[0].messages().filter(m => m.type === 'graffiti').at(-1).hidden, ['tu_loop']);
+  assert.deepEqual(await (await room.fetch(new Request('https://room/graffiti'))).json(), saved);
+  await join(room, S2);
+  assert.deepEqual(sockets[1].messages().find(m => m.type === 'graffiti').hidden, ['tu_loop']);
+  const big = await room.fetch(new Request('https://room/graffiti', {method: 'POST', body: 'x'.repeat(130000)}));
+  assert.equal(big.status, 413);
+});

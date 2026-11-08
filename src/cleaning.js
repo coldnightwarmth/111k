@@ -32,11 +32,13 @@ export function createCleaning({level, scene, hits}) {
   const pieceAt = (page, u, v) => atlas.find(p => `graffiti_${p.page}` === page && u >= Math.min(p.uv[0], p.uv[2]) - 1e-4 && u <= Math.max(p.uv[0], p.uv[2]) + 1e-4
     && v >= Math.min(p.uv[1], p.uv[3]) - 1e-4 && v <= Math.max(p.uv[1], p.uv[3]) + 1e-4);
   const comps = [];                        // {mesh, tris, center, page, piece}
+  const original = new Map();              // mesh -> its index as built
   const parts = [];                        // {mesh, bvh, owner: Int32Array tri -> component, inv}
   for (const mesh of level.meshes) {
     if (!/^graffiti_/.test(mesh.material?.name || '') || !mesh.geometry.index) continue;
     const g = mesh.geometry;
     const bvh = new MeshBVH(g, {maxLeafTris: 8});          // (reorders the index: triangles are read after)
+    original.set(mesh, g.index.array.slice());               // to put back a piece that was hidden, then isn't
     const idx = g.index, pos = g.attributes.position, tex = g.attributes.uv, triCount = idx.count / 3;
     const parent = Int32Array.from({length: triCount}, (_, i) => i);
     const find = i => { while (parent[i] !== i) { parent[i] = parent[parent[i]]; i = parent[i]; } return i; };
@@ -80,11 +82,22 @@ export function createCleaning({level, scene, hits}) {
     for (const i of members) { c.addScaledVector(comps[i].center, comps[i].weight); wsum += comps[i].weight; }
     c.divideScalar(wsum);
     const id = `${comps[members[0]].page}:${c.x.toFixed(2)},${c.y.toFixed(2)},${c.z.toFixed(2)}`;
-    const entry = baked.get(id) || {parts: []};
+    const entry = baked.get(id) || {parts: [], piece: comps[members[0]].piece?.name || null};
     for (const i of members) { entry.parts.push({mesh: comps[i].mesh, tris: comps[i].tris}); compId[i] = id; }
     baked.set(id, entry);
   }
   const erased = new Set();
+  const hidden = new Set();                // ids of placed pieces whose piece was removed at /graffiti
+  const collapse = (id, on) => {
+    for (const {mesh, tris} of baked.get(id).parts) {
+      const idx = mesh.geometry.index, orig = original.get(mesh);
+      for (const t of tris) {
+        if (on) { const v = idx.getX(t * 3); idx.setX(t * 3 + 1, v); idx.setX(t * 3 + 2, v); }
+        else for (let k = 0; k < 3; k++) idx.setX(t * 3 + k, orig[t * 3 + k]);
+      }
+      idx.needsUpdate = true;
+    }
+  };
 
   // ----------------------------------------------------------- picking
   const ray = new THREE.Ray(), tri = new THREE.Triangle(), a = new THREE.Vector3(), b = new THREE.Vector3(), cc = new THREE.Vector3(), hit = new THREE.Vector3();
@@ -129,7 +142,7 @@ export function createCleaning({level, scene, hits}) {
       const g = p.mesh.geometry, idx = g.index, tex = g.attributes.uv, map = p.mesh.material.map;
       for (const h of p.bvh.raycast(ray, THREE.DoubleSide)) {
         const id = compId[p.owner[h.faceIndex]];
-        if (erased.has(id)) continue;
+        if (erased.has(id) || hidden.has(id)) continue;
         if (tex && map) {
           const [i0, i1, i2] = [0, 1, 2].map(k => idx.getX(h.faceIndex * 3 + k));
           a.fromBufferAttribute(g.attributes.position, i0); b.fromBufferAttribute(g.attributes.position, i1); cc.fromBufferAttribute(g.attributes.position, i2);
@@ -208,12 +221,17 @@ export function createCleaning({level, scene, hits}) {
     eraseBaked(id) {
       if (erased.has(id) || !baked.has(id)) return;
       erased.add(id);
-      for (const {mesh, tris} of baked.get(id).parts) {
-        const idx = mesh.geometry.index;
-        for (const t of tris) { const v = idx.getX(t * 3); idx.setX(t * 3 + 1, v); idx.setX(t * 3 + 2, v); }
-        idx.needsUpdate = true;
-      }
+      if (!hidden.has(id)) collapse(id, true);
       if (glowKey === `baked|${id}`) clearGlow();
+    },
+    // take every placed copy of these pieces off the walls (and put back any no longer listed)
+    setHidden(names) {
+      for (const [id, entry] of baked) {
+        const hide = !!entry.piece && names.has(entry.piece);
+        if (hide === hidden.has(id)) continue;
+        if (hide) { hidden.add(id); if (!erased.has(id)) collapse(id, true); if (glowKey === `baked|${id}`) clearGlow(); }
+        else { hidden.delete(id); if (!erased.has(id)) collapse(id, false); }
+      }
     },
     forget(kind, id) { if (glowKey === `${kind}|${id}`) clearGlow(); },
     get pieces() { return baked.size; },

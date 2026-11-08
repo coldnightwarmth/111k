@@ -26,7 +26,7 @@ jobs:
       - name: Collect site files
         run: |
           mkdir _site
-          cp -r index.html styles.css favicon.svg src vendor assets anim _site/
+          cp -r index.html styles.css favicon.svg src vendor assets anim graffiti _site/
           # every deploy's code gets its own version in its import paths, so browsers fetch the new code
           # straight away instead of running what they cached from the last deploy for up to ten minutes
           V="${GITHUB_SHA::10}"
@@ -43,6 +43,9 @@ jobs:
           # the emote previewer (/anim): the same for its script and stylesheet
           sed -i -E "s#src=\"\.\./src/anim\.js\"#src=\"../src/anim.js?v=$V\"#; s#href=\"anim\.css\"#href=\"anim.css?v=$V\"#" _site/anim/index.html
           grep -q "anim.js?v=$V" _site/anim/index.html
+          # the graffiti review (/graffiti): the same
+          sed -i -E "s#src=\"\.\./src/graffiti-page\.js\"#src=\"../src/graffiti-page.js?v=$V\"#; s#href=\"graffiti\.css\"#href=\"graffiti.css?v=$V\"#" _site/graffiti/index.html
+          grep -q "graffiti-page.js?v=$V" _site/graffiti/index.html
           touch _site/.nojekyll
           if [ -f CNAME ]; then cp CNAME _site/; fi
       - uses: actions/configure-pages@v5

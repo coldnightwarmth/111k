@@ -173,6 +173,7 @@ float beamVisible(int i, vec3 p, vec3 n, float d) {
 // so a rebaked level is fetched fresh but one that hasn't changed stays in the browser's cache
 // across deploys. Empty when run locally.
 const LEVEL_VERSION = '';
+export {LEVEL_VERSION};   // (for /graffiti, which reads the level's own atlas pages)
 
 export async function loadLevel(name, renderer) {
   const base = new URL(`../assets/env/${name}`, import.meta.url).href;

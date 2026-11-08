@@ -273,8 +273,12 @@ async function start() {
     return [word, k < 0 ? STYLE_ORDER.length : k, rest.join('_')]; };
   const byWord = (a, b) => { const x = pieceKey(a.name), y = pieceKey(b.name);
     return x[0].localeCompare(y[0], undefined, {numeric: true}) || x[1] - y[1] || x[2].localeCompare(y[2]); };
-  const pieces = [...(level.meta.graffiti || [])].sort(byWord);
-  const pieceByName = new Map(pieces.map(p => [p.name, p]));
+  const allPieces = [...(level.meta.graffiti || [])].sort(byWord);
+  const pieceByName = new Map(allPieces.map(p => [p.name, p]));
+  // pieces removed at /graffiti leave the cans and the walls; sprays of them wait here in case they come back
+  let hiddenPieces = new Set();
+  const pieces = allPieces.slice();
+  const parkedSprays = new Map();   // spray id -> spray
   const pageBatches = new Map();
   function pageBatch(page) {
     if (!pageBatches.has(page)) {
@@ -409,6 +413,7 @@ async function start() {
   function addSpray(s, fresh = false) {
     const piece = pieceByName.get(s.piece);
     if (!piece) return;
+    if (hiddenPieces.has(s.piece)) { parkedSprays.set(sprayId(s), s); return; }
     const onDoor = s.d !== undefined ? hits.door(s.d) : null;
     if (s.d !== undefined && !onDoor) return;
     const onPainting = s.pi ? paintingSurface(s.pi) : null;
@@ -417,7 +422,7 @@ async function start() {
     const batch = onDoor ? doorPageBatch(s.d, piece.page) : onPainting ? paintingBatch(s.pi, `page${piece.page}`, pageBatch(piece.page).mesh.material.map)
       : pageBatch(piece.page);
     const m = batch.add(verts, [255, 255, 255], fresh ? 0 : 1);
-    sprayMarks.push({batch, m, kind: 'spray', id: sprayId(s), verts: m.verts});
+    sprayMarks.push({batch, m, kind: 'spray', id: sprayId(s), verts: m.verts, s});
     while (sprayMarks.length > MAX_SPRAYS) { const old = sprayMarks.shift(); old.batch.remove(old.m); }
     if (fresh) fades.push({batch, m, t: 0});
   }
@@ -425,6 +430,7 @@ async function start() {
   function eraseMark(kind, id) {
     if (kind === 'baked') { cleaning.eraseBaked(id); return; }
     const list = kind === 'splat' ? splatMarks : sprayMarks;
+    if (kind === 'spray') parkedSprays.delete(id);
     const i = list.findIndex(k => k.id === id);
     if (i >= 0) { list[i].batch.remove(list[i].m); list.splice(i, 1); }
     cleaning.forget(kind, id);
@@ -436,7 +442,7 @@ async function start() {
     for (const b of pageBatches.values()) b.clear();
     for (const b of doorPages.values()) b.clear();
     for (const b of paintingBatches.values()) b.clear();
-    sprayMarks.length = 0;
+    sprayMarks.length = 0; parkedSprays.clear();
     for (const s of list.splats || []) { const c = cleanSplat(s); if (c) addSplat(c, false, Number.isFinite(s.age) ? s.age : 0); }
     for (const s of list.sprays || []) { const c = cleanSpray(s); if (c) addSpray(c); }
   }
@@ -897,6 +903,20 @@ async function start() {
     c.getContext('2d').drawImage(img, u0 * img.width, Math.min(v0, v1) * img.height, sw, Math.abs(sh), 0, 0, c.width, c.height);
     return c;
   }
+  function setHiddenPieces(names) {
+    hiddenPieces = new Set(names);
+    pieces.splice(0, pieces.length, ...allPieces.filter(p => !hiddenPieces.has(p.name)));
+    cleaning.setHidden(hiddenPieces);
+    for (let i = sprayMarks.length - 1; i >= 0; i--) {          // off the walls...
+      const k = sprayMarks[i];
+      if (hiddenPieces.has(k.s?.piece)) { k.batch.remove(k.m); sprayMarks.splice(i, 1); parkedSprays.set(k.id, k.s); cleaning.forget('spray', k.id); }
+    }
+    for (const [id, sp] of parkedSprays) if (!hiddenPieces.has(sp.piece)) { parkedSprays.delete(id); addSpray(sp); }   // ...and back
+    if (!pieces.some(p => p.name === chosenPiece)) chosenPiece = pieces.length ? pieces[Math.floor(Math.random() * pieces.length)].name : null;
+    if (galleryList.childElementCount) { galleryList.replaceChildren(); if (!gallery.hidden) buildGallery(); else choosePiece(chosenPiece); }
+    else if (chosenPiece) choosePiece(chosenPiece);
+    previewKey = '';
+  }
   function buildGallery() {
     if (galleryList.childElementCount || !pieces.length) return;
     for (const p of pieces) {
@@ -1176,6 +1196,7 @@ async function start() {
     },
     onMessage: m => {
       if (m.type === 'emotes') { emoteConfig = cleanEmoteConfig(m.config); emoteButtons(); return; }
+      if (m.type === 'graffiti') { setHiddenPieces(Array.isArray(m.hidden) ? m.hidden.filter(n => typeof n === 'string') : []); return; }
       if (m.type === 'rtc') { voice.signal(m.from, m.d); return; }
       if (m.type === 'door') { doors.close(m.i); return; }
       if (m.type === 'erase') {
