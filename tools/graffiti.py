@@ -11,11 +11,16 @@ fast zig-zag fill passes, a fade, a 3D block, a sprayed outline, shines.
 Run directly to write a contact sheet: python3 tools/graffiti.py
 """
 import math
+import zlib
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 from scipy import ndimage
 
 PX_PER_M = 165  # atlas resolution
+# Switches for remaking a piece just as it was, but without drips or with its letters spaced out more.
+# Neither changes which random numbers get drawn, so everything else about the piece comes out the same.
+NODRIPS = False
+KERN = 0.0      # extra space between letters, in letter heights
 
 # ------------------------------------------------------------------ alphabet
 # Single strokes in a box: x 0..w, y 0 (baseline) .. 1 (cap height), y up.
@@ -166,7 +171,7 @@ def layout(text, r, slant=0.25, bounce=0.08, spacing=0.12, jitter=0.03, scale_va
             p[:, 1] += dy
             cur.append(chaikin(p, smooth))
         letters.append(cur)
-        x += max(gw, min_width) * condense * s + spacing
+        x += max(gw, min_width) * condense * s + spacing + KERN
     return letters if per_letter else [s for l in letters for s in l]
 
 
@@ -365,6 +370,8 @@ class Can:
             # marker ink: crisp, a bit streaky, darker where the nib rested
             alpha = np.clip(dens * 1.6, 0, 1) * (0.86 + 0.14 * ndimage.gaussian_filter(self.r.random((h, wd)), 1.2) * 2)
         drips = self._drips(dens)
+        if NODRIPS:
+            drips = drips * 0
         alpha = np.maximum(alpha, drips)
         if clip is not None:
             alpha = alpha * clip
@@ -842,7 +849,7 @@ def roller(text, color, r, height_m=1.2):
         ys = np.nonzero(mask[:, x])[0]
         y0 = ys.max()
         L = int(r.uniform(0.02, 0.15) * PX_PER_M)
-        drip[y0:min(h, y0 + L), max(0, x - 1):x + 1] = 0.9
+        drip[y0:min(h, y0 + L), max(0, x - 1):x + 1] = 0 if NODRIPS else 0.9
     cv.over(color, np.maximum(a, ndimage.gaussian_filter(drip, 0.5)))
     porous(cv, r, 0.35)
     return cv
@@ -993,7 +1000,98 @@ STRAIGHT = dict(brush='square', fat=0.13, smooth=0, shape=dict(angular=0.1), spa
 ANGTHROW = dict(brush='square', fat=0.15, smooth=0, shape=dict(angular=0.09, rot_var=0.1), spacing=-0.03, slant=0.15)
 
 
-def build_pieces(seed=7, stencils=()):
+def world_stencils(doors):
+    """The level's official markings: a number by every room door, and the chainage marks round the loop."""
+    room_numbers = [f'B-{i + 1:02d}' for i in range(doors)]
+    out = [(f'st_{n.lower()}', (n, (0.86, 0.86, 0.8))) for n in room_numbers]
+    out += [(f'st_ch{k}', (f'N15+{240 + 45 * k:03d}', (0.9, 0.78, 0.18))) for k in range(5)]
+    return out
+
+
+# ---------------------------------------------------------------- revisions after review (/graffiti)
+# Pieces on the walls that were looked over and changed. Each is remade to fit the exact patch of atlas
+# the old one had, so the level's layout (and where every piece sits on the walls) doesn't move.
+WALL_NODRIPS = {'sc_9000', 'tu_111111', 'tu_111111_classic', 'sc_ai', 'sc_alotofimages', 'dd_arrow_w', 'tag_bladee', 'sc_burger',
+                'tu_cherub_classic', 'tu_dratini_classic', 'pc_drifella', 'tu_drilady', 'tu_echo', 'tu_eth_classic',
+                'tu_fool_classic', 'sc_fucknfts', 'pc_gremlins', 'dd_heart', 'dd_heart_pink', 'tu_images', 'pc_images_wild',
+                'rl_images', 'tu_jpegs', 'tu_mein_dusty', 'tu_mrworld_classic', 'tag_solfys_rune', 'tu_solfys', 'dd_star',
+                'tu_swag', 'dd_tally', 'tu_tojiba', 'sc_trust', 'tu_turtle_classic', 'sc_wwjd'}
+WALL_KERN = {'tag_111k_big', 'ex_111k', 'tu_fool', 'hs_drifella', 'sc_greed', 'hs_gremlins', 'hs_ivan', 'tu_mein', 'mk_mifella',
+             'mk_mmm', 'sc_newgen', 'sc_twosides'}
+KERN_SPACE = 0.13
+# redone in a new style: new name (its style prefix) or None to keep the name
+WALL_REDO = {'tu_loop_classic': 'mp_loop', 'hs_luhfella': 'bf_luhfella', 'tag_mein': 'wk_mein', 'hs_parker': 'bf_parker',
+             'tu_turtle': 'ol_turtle', 'tu_nap': None, 'ex_nap': None, 'ex_galaxy': None}
+DISPLAY_NAMES = {k: v for k, v in WALL_REDO.items() if v}
+
+
+def _redo(name, r):
+    import graffiti_more as M          # (the newer styles live there)
+    if name == 'tu_loop_classic':
+        return M.mop('LOOP', (0.95, 0.35, 0.62), r, 0.6, 0.04, drip_rate=1.2)
+    if name == 'hs_luhfella':
+        return M.busflow('LUH\nFELLA', (0.7, 0.05, 0.04), r, 0.4, 0.022)
+    if name == 'tag_mein':
+        return M.wicket('MEIN', BLACK, r, 0.8, 0.02, bars=0, curls=False)
+    if name == 'hs_parker':
+        return M.busflow('PARKER', (0.13, 0.13, 0.15), r, 0.4, 0.022, lift=True)
+    if name == 'tu_turtle':
+        return M.outline3d('TURTLE', BLACK, r, 0.6, block_fill=(0.1, 0.3, 0.15), hatch=False, fill=(0.45, 0.8, 0.4))
+    if name == 'tu_nap':       # the same, with a fatter bowl on the a so it reads as one
+        return piece('nap', (0.8, 0.81, 0.82), BLACK, r, 0.7, fat=0.15, sig='111K', shine=None, shadow=BLACK, glyphs=OPEN_A)
+    if name == 'ex_nap':
+        return M.scratch2('nap', r, 0.12, glyphs=OPEN_A)
+    if name == 'ex_galaxy':
+        return M.scratch2('galaxy-\nbuilding', r, 0.1)
+    raise KeyError(name)
+
+
+# a single-storey a with a clear round bowl and a stem, for pieces where the plain one closed up
+OPEN_A = {'a': [[(0.46, 0.4), (0.38, 0.52), (0.2, 0.55), (0.05, 0.45), (0.0, 0.25), (0.08, 0.06), (0.25, 0.0), (0.42, 0.08),
+                 (0.47, 0.25)], [(0.47, 0.55), (0.47, 0.12), (0.55, 0.0)]]}
+
+
+def fit(canvas, w, h, inset=0.0):
+    """A canvas exactly w x h with the given one scaled (never stretched) to fit inside, centred."""
+    out = Canvas(w, h)
+    iw, ih = w * (1 - 2 * inset), h * (1 - 2 * inset)
+    s = min(iw / canvas.w, ih / canvas.h)
+    nw, nh = max(1, int(round(canvas.w * s))), max(1, int(round(canvas.h * s)))
+    a = Image.fromarray((np.clip(canvas.a, 0, 1) * 255).astype(np.uint8)).resize((nw, nh), Image.LANCZOS)
+    rgb = np.stack([np.asarray(Image.fromarray((np.clip(canvas.rgb[..., c], 0, 1) * 255).astype(np.uint8)).resize((nw, nh), Image.LANCZOS))
+                    for c in range(3)], -1) / 255
+    x0, y0 = (w - nw) // 2, (h - nh) // 2
+    out.rgb[y0:y0 + nh, x0:x0 + nw] = rgb
+    out.a[y0:y0 + nh, x0:x0 + nw] = np.asarray(a) / 255
+    return out
+
+
+def revise(P, seed, stencils):
+    """Swap in the reviewed versions (same size as the old ones, so nothing else moves)."""
+    global NODRIPS, KERN
+    if WALL_NODRIPS & P.keys():
+        NODRIPS = True
+        try:
+            Q = build_pieces(seed, stencils, revised=False)
+        finally:
+            NODRIPS = False
+        for n in WALL_NODRIPS & P.keys():
+            P[n] = Q[n]
+    if WALL_KERN & P.keys():
+        KERN = KERN_SPACE
+        try:
+            Q = build_pieces(seed, stencils, revised=False)
+        finally:
+            KERN = 0.0
+        for n in WALL_KERN & P.keys():
+            P[n] = fit(Q[n], P[n].w, P[n].h)
+    for n in WALL_REDO.keys() & P.keys():
+        r = np.random.default_rng(zlib.crc32(n.encode()) + seed)
+        P[n] = fit(_redo(n, r), P[n].w, P[n].h, inset=0.05)
+    return P
+
+
+def build_pieces(seed=7, stencils=(), revised=True):
     """All decals used in the world: name -> Canvas. Size in metres = px / PX_PER_M.
     Prefixes say what kind of work it is, which decides where it gets painted:
     tu_ throw-up, pc_ piece, rl_ roller, fx_ extinguisher, tag_ tag, hs_ chisel handstyle, sc_ sprayed writing,
@@ -1189,7 +1287,7 @@ def build_pieces(seed=7, stencils=()):
     P['buff_beige'] = buff(1.2, 0.8, (0.62, 0.58, 0.48), r)
     for name, (text, col) in stencils:
         P[name] = stencil(text, col, r)
-    return P
+    return revise(P, seed, stencils) if revised else P
 
 
 def pack_pages(pieces, width=2048, max_h=2048):

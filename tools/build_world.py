@@ -196,8 +196,7 @@ for k, (a0, a1) in enumerate(SEGS):
 
 # ---------------------------------------------------------------- graffiti
 room_numbers = [f'B-{i + 1:02d}' for i in range(DOORS)]
-stencils = [(f'st_{n.lower()}', (n, (0.86, 0.86, 0.8))) for n in room_numbers]
-stencils += [(f'st_ch{k}', (f'N15+{240 + 45 * k:03d}', (0.9, 0.78, 0.18))) for k in range(5)]
+stencils = G.world_stencils(DOORS)
 pieces = G.build_pieces(seed=11, stencils=stencils)
 pages = G.pack_pages(pieces)
 rects = {}
@@ -861,7 +860,7 @@ W.meta.update({'name': 'world', 'ambient': [0.035, 0.035, 0.045], 'fog': {'color
           'bore': {'loop': RL, 'radius': RT, 'centre': CY, 'floorHalf': XF, 'passage': VD, 'passageTop': VTOP, 'roomCeiling': CEIL},
           'loop': {'radius': RL, 'doors': [{'angle': round(a, 5), 'room': room_numbers[i]} for i, a in enumerate(door_angles)]},
           # every piece on the graffiti pages, for the spray cans (room numbers and buffs left out)
-          'graffiti': [{'name': n, 'page': r['page'], 'uv': [round(float(x), 5) for x in r['uv']],
+          'graffiti': [{'name': G.DISPLAY_NAMES.get(n, n), 'page': r['page'], 'uv': [round(float(x), 5) for x in r['uv']],
                         'w': round(float(r['size'][0]), 3), 'h': round(float(r['size'][1]), 3)}
                        for n, r in rects.items() if not n.startswith(('st_', 'buff_'))]})
 

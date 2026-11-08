@@ -83,6 +83,8 @@ def add_drips(cv, color, r, rate=0.5, max_len_m=0.3, width_px=3.0, opacity=0.95,
         return cv
     n = int(rate * len(xs) / (PX * 0.1) * max(1.0, width_px) / 3 + r.random())
     lens = [(r.uniform(0.08, 1) ** 2) * max_len_m * PX + width_px * 2 for _ in range(n)]
+    if G.NODRIPS:     # remade without drips: nothing runs (only the fine grain of the wall texture after this differs)
+        return cv
     need = int(max(lens or [0]) + width_px * 3 + 4)
     lowest = ys.max() if len(ys) else 0
     if lowest + need > cv.h:
@@ -191,7 +193,7 @@ def placa(text, color, r, height_m=0.35, nib=0.2, angle=0.12, shadow=None, shado
 
 
 # ------------------------------------------------------------------ wickets (Philly handstyle)
-def wicket(text, color, r, height_m=0.5, width_m=0.013, bars=1, outline=None, drips=0.3):
+def wicket(text, color, r, height_m=0.5, width_m=0.013, bars=1, outline=None, drips=0.3, curls=True):
     """Very tall, narrow capitals done in one go: sharp corners, hooked curls ('wickets') off the tops of
     the stems, and a long bar run straight through the whole word."""
     hp = height_m * PX
@@ -211,7 +213,8 @@ def wicket(text, color, r, height_m=0.5, width_m=0.013, bars=1, outline=None, dr
                     a = np.linspace(0, 1.7 * math.pi, 14)
                     rad = r.uniform(0.06, 0.1)
                     curl = p + np.stack([side * rad * np.sin(a), rad * (1 - np.cos(a))], 1)
-                    st = np.vstack([st, curl[1:]]) if end == -1 else np.vstack([curl[::-1][:-1], st])
+                    if curls:   # (without them, the same random numbers are still drawn: the letters come out the same)
+                        st = np.vstack([st, curl[1:]]) if end == -1 else np.vstack([curl[::-1][:-1], st])
                     curled = True
             strokes.append(st)
     first = [st for st in strokes if st[:, 1].mean() > -0.5] or strokes    # the bar goes through the first line
@@ -259,7 +262,23 @@ def _loops(st, r, chance, rad):
     return np.array(out)
 
 
-def busflow(text, color, r, height_m=0.3, width_m=0.017, loops=0.3, outline=None, drips=0.5, underline=True):
+def scratch2(text, r, height_m=0.12, color=(0.92, 0.92, 0.88), glyphs=None, line_gap=1.6):
+    """Scratchiti as in graffiti.scratch, steadier (letters stay legible), over one or more lines."""
+    hp = height_m * PX
+    letters = lines_layout(text, r, line_gap, indent=0.15, slant=0.2, bounce=0.06, spacing=0.14, jitter=0.035, smooth=0,
+                           condense=0.85, glyphs=glyphs)
+    strokes = [s_ for l in letters for s_ in l]
+    pad = int(hp * 0.4)
+    cv, origin = G.fit_canvas(strokes, hp, pad)
+    can = G.Can(cv, color, 1.6, r, marker=True)
+    for p in G.to_px(strokes, hp, origin):
+        for k in range(2):
+            can.stroke(p + r.normal(0, 0.5, p.shape))
+    can.spray(opacity=0.75)
+    return cv
+
+
+def busflow(text, color, r, height_m=0.3, width_m=0.017, loops=0.3, outline=None, drips=0.5, underline=True, lift=False):
     """Round, even-height capitals run together in one line, the pen hardly leaving the wall, with loops
     where the corners would be."""
     hp = height_m * PX
@@ -280,6 +299,10 @@ def busflow(text, color, r, height_m=0.3, width_m=0.017, loops=0.3, outline=None
             l = [_loops(st, r, loops, r.uniform(0.04, 0.06)) for st in l]
             # the pen runs on from the last letter into this one; the letter's other strokes are quick lifts
             first = min(range(len(l)), key=lambda k: l[k][0][0])
+            base = np.vstack(l)[:, 1].min()
+            if lift and path and path[-1][1] - base > 0.35:
+                # the last letter finished up high (P, R's bowl): lift off, or the run-in reads as a leg
+                strokes.append(G.chaikin(np.array(path), 3)); path = []
             if path:
                 a, b = np.array(path[-1]), l[first][0]
                 path += [(a + b) / 2 + (0, r.uniform(-0.1, 0.05))]
