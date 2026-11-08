@@ -10,6 +10,7 @@ import {createControls} from './controls.js';
 import {createItems, ITEM_NAMES, simulateFall} from './items.js';
 import {createMachine} from './machine.js';
 import {createShelves, SHELF_COLLIDERS} from './shelves.js';
+import {loadCrates, addCrates, CRATE_COLLIDERS} from './crates.js';
 import {mergeGeometries} from '../vendor/three/BufferGeometryUtils.js';
 import {createCleaning} from './cleaning.js';
 import {MACHINE_COLLIDER, BUTTON, BUTTON_RANGE, RACE_LAPS} from './race.js';
@@ -98,6 +99,7 @@ async function chooseYourself() {
 
 async function start() {
   const levelReady = loadLevel('world', renderer);
+  const cratesReady = loadCrates();
   levelReady.catch(() => {});
   const mine = await chooseYourself();
   loading.classList.add('going');      // "going down…" while the space loads
@@ -114,7 +116,7 @@ async function start() {
     camera.far = fog.far + 5; camera.updateProjectionMatrix();
   }
   const avatarLights = createAvatarLights(level.meta, scene);
-  level.meta.colliders.push(MACHINE_COLLIDER, ...SHELF_COLLIDERS);   // the lap timer and the supply shelves stand in the level too
+  level.meta.colliders.push(MACHINE_COLLIDER, ...SHELF_COLLIDERS, ...CRATE_COLLIDERS);   // the lap timer, the supply shelves and the crates stand in the level too
   const collider = createCollider(level.meta);
   const doors = createDoors(level, collider);
   const hits = createWorldHits(level, doors.doors);
@@ -128,9 +130,13 @@ async function start() {
   }
   const shelves = createShelves(THREE, scene, mergeGeometries);
   hits.addSolid(shelves);
+  // the painting crates: they carry the level's own lightmap coordinates, so paint on them is lit like the walls
+  const crates = addCrates(await cratesReady, level, scene);
+  if (crates) hits.addPaintable(crates);
   // what blocks flashlight beams: the level (doors included), the lap timer and the shelving
   for (const m of level.meshes) if (!m.material.transparent) castsBeamShadow(m);
   castsBeamShadow(machine.root); castsBeamShadow(shelves);
+  if (crates) crates.traverse(o => { if (o.isMesh && !o.material.transparent) castsBeamShadow(o); });
   const beamShadows = createBeamShadows(renderer, scene);
   const cleaning = createCleaning({level, scene, hits});
   const mimic = createMimic(level, scene);   // the control room's ring board: occupied rooms light up

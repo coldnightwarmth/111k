@@ -11,7 +11,7 @@ def write_glb(path, materials, webp_quality=86):
     """materials: list of dicts with
          name, image (PIL or None), color (rgb), alpha (None|'BLEND'|'MASK'), double (bool),
          lightmap (bool), emissive (bool),
-         pos (n,3) float, nor (n,3), uv0 (n,2), uv1 (n,2) or None, idx (m,) int
+         pos (n,3) float, nor (n,3), uv0 (n,2), uv1 (n,2) or None, idx (m,) int, col (n,3) or None
        or, instead of the geometry keys, 'chunks': a list of dicts with those keys (one mesh each,
        all sharing the material, so the renderer can cull what is off screen)."""
     chunks, size, views, accessors = [], 0, [], []
@@ -71,6 +71,8 @@ def write_glb(path, materials, webp_quality=86):
                                     add_acc(c['uv0'].astype(np.float32), 5126, 'VEC2'))}
             if c.get('nor') is not None:  # unlit level geometry doesn't need them
                 attrs['NORMAL'] = add_acc(c['nor'].astype(np.float32), 5126, 'VEC3')
+            if c.get('col') is not None:   # optional per-vertex shade (rgb 0..1), e.g. contact darkening on props placed at runtime
+                attrs['COLOR_0'] = add_acc(np.round(np.clip(c['col'], 0, 1) * 255).astype(np.uint8), 5121, 'VEC3', normalized=True)
             if m['lightmap'] and c.get('uv1') is not None:
                 attrs['TEXCOORD_1'] = add_acc(np.round(np.clip(c['uv1'], 0, 1) * 65535).astype(np.uint16), 5123, 'VEC2',
                                               normalized=True)

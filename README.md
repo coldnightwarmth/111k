@@ -109,6 +109,14 @@ already built level without a rebuild. The art itself is listed in
 WebP copies the game loads (1024 and 512 px, plus a preview atlas of all of
 them) in `assets/paintings/`: re-run it after adding art.
 
+Crates the paintings came in (closed, opened, smashed to planks) stand about
+half the rooms, with a few bits out in the tunnel: `python3 tools/crates.py`
+models them, paints their atlas, places them against the built level and
+writes `assets/env/world-crates.glb` and `src/crates-placed.js` (their
+colliders). They're added at runtime but carry the level's lightmap
+coordinates (each vertex takes the light of the floor beside it), so they
+light, flicker and take paint like the level: run it again after a rebuild.
+
 Paintings stack, tip and fall: whoever puts one down, drops it or picks one
 up runs a few seconds of rigid-body physics (Rapier, `vendor/rapier`,
 `src/settle.js`) over the paintings and level round about, and everyone

@@ -34,7 +34,7 @@ jobs:
           sed -i -E "s#src=\"src/main\.js\"#src=\"src/main.js?v=$V\"#; s#href=\"styles\.css\"#href=\"styles.css?v=$V\"#" _site/index.html
           # the level's files go by a hash of their contents (src/level.js), so they're only fetched again
           # when the level actually changes; the preload asks for that exact file, not a second copy
-          L="$(cat assets/env/world.glb assets/env/world*.json assets/env/world-*.webp | sha256sum | cut -c1-10)"
+          L="$(cat assets/env/world.glb assets/env/world*.json assets/env/world-*.webp assets/env/world-*.glb | sha256sum | cut -c1-10)"
           sed -i -E "s#^const LEVEL_VERSION = '';#const LEVEL_VERSION = '$L';#" _site/src/level.js
           grep -q "LEVEL_VERSION = '$L'" _site/src/level.js
           sed -i -E "s#href=\"assets/env/world\.glb\"#href=\"assets/env/world.glb?v=$L\"#" _site/index.html
