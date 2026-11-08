@@ -5,6 +5,7 @@
 // A painting hung on a wall is on its nail: it holds still and things can rest on it or lean against it.
 // Everything else (leant, laid, dropped) is free to slide, tip over an edge or be knocked off a pile, but
 // starts asleep: it only moves once something touches it, so a pile nobody touches stays exactly as it is.
+import {reportError} from './errors.js';
 import * as THREE from 'three';
 import {paintingSize} from './paintings.js';
 import {PATH_HZ} from './items.js';
@@ -78,7 +79,7 @@ function physicsWorker() {
     };
     worker.onerror = e => {                     // it couldn't start: everything goes on the page from now on
       e.preventDefault?.();
-      console.warn('painting physics worker:', e.message || e);
+      console.warn('painting physics worker:', e.message || e); reportError(e.message || 'worker failed', 'physics worker');
       workerFailed = true; worker.terminate(); worker = null;
       for (const w of waiting.values()) w.reject(new Error('worker failed'));
       waiting.clear();

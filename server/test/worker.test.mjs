@@ -614,3 +614,23 @@ test('graffiti review: saved from /graffiti, cleaned, removed pieces sent to eve
   const big = await room.fetch(new Request('https://room/graffiti', {method: 'POST', body: 'x'.repeat(130000)}));
   assert.equal(big.status, 413);
 });
+
+test('client errors: logged by kind with a count, a few per player, read at /errors', async () => {
+  const {handleMessage, newPlayer, logError, ERROR_LOG_MAX} = await import('../room.js');
+  const p = newPlayer('aaa', 0);
+  let list = [];
+  const send = m => { const r = handleMessage(p, JSON.stringify({type: 'clientError', ...m}), 1000, {items: {}, players: () => [p]}); if (r.report) list = logError(list, r.report); return r; };
+  send({msg: 'boom', where: 'Error: boom\n  at frame (main.js:1:2)', ua: 'test', page: '/'});
+  send({msg: 'boom', where: 'Error: boom\n  at frame (main.js:1:2)', ua: 'test', page: '/'});
+  send({msg: 'x'.repeat(2000), where: 42, ua: null});
+  assert.equal(list.length, 2);
+  assert.equal(list.find(e => e.msg === 'boom').count, 2);
+  assert.equal(list.find(e => e.msg !== 'boom').msg.length, 300, 'trimmed');
+  for (let i = 0; i < 20; i++) send({msg: `m${i}`, where: ''});
+  assert.equal(list.length, 11, 'no more than a dozen reports from one player (two of them the same kind)');
+  for (let i = 0; i < ERROR_LOG_MAX + 10; i++) list = logError(list, {msg: `k${i}`, where: '', ua: '', page: '', at: i});
+  assert.equal(list.length, ERROR_LOG_MAX);
+  const {room} = makeRoom();
+  const res = await room.fetch(new Request('https://room/errors'));
+  assert.deepEqual(await res.json(), []);
+});

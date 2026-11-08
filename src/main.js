@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import {reportError, errorsGoVia} from './errors.js';
 import {serverUrl, isTouch, lowPower} from './config.js';
 import {loadLevel, createAvatarLights, createFlicker, lighting, ghost} from './level.js';
 import {createCuller, MIXED} from './cull.js';
@@ -851,13 +852,13 @@ async function start() {
   }
   async function letSettle(state, pose, vel) {
     try { return await settlePaintings({hits, paintings: lyingAbout(), moving: {state, pose, vel}}); }
-    catch (e) { console.warn('painting physics:', e); return null; }
+    catch (e) { console.warn('painting physics:', e); reportError(e, 'painting physics'); return null; }
   }
   // one just picked up: whatever rested on it, or leant on it, has nothing there now
   function tookPainting(prev) {
     warmPhysics();
     if (prev.holder) return;
-    settlePaintings({hits, paintings: lyingAbout(), removed: prev}).then(sendSettled, e => console.warn('painting physics:', e));
+    settlePaintings({hits, paintings: lyingAbout(), removed: prev}).then(sendSettled, e => { console.warn('painting physics:', e); reportError(e, 'painting physics'); });
   }
   // Let go of: out of your hands this frame, where it's going (put down, or carried on through the air if it was
   // dropped) while its physics is worked out off the page's thread; then it tumbles as that says, and that's
@@ -1286,7 +1287,7 @@ async function start() {
       if (peers.get(p.id) !== p || p.lookKey !== key) { a.dispose(); return; }
       p.avatar?.dispose(); p.avatar = a; scene.add(a.root);
       for (const local of p.pendingPaint.splice(0)) paintAvatar(a, local);
-    }).catch(err => console.warn('avatar failed', err));
+    }).catch(err => { console.warn('avatar failed', err); reportError(err, 'avatar'); });
   }
   function removePeer(id) {
     const p = peers.get(id); if (!p) return;
@@ -1304,6 +1305,7 @@ async function start() {
     url: serverUrl(),
     onStatus: s => {
       status.dataset.state = s; status.title = s;
+      if (s === 'online') errorsGoVia(msg => network.send(msg));
       if (s === 'online') { lastSent = ''; network.send({type: 'look', look: mine.look, name: mine.name}); }
     },
     onState: m => {
@@ -1810,7 +1812,7 @@ async function start() {
   renderer.setAnimationLoop(() => {
     try { frame(); } catch (err) {
       const key = String(err?.stack || err).slice(0, 300);
-      if (!reported.has(key)) { reported.add(key); console.error('frame failed', err); }
+      if (!reported.has(key)) { reported.add(key); console.error('frame failed', err); reportError(err, 'frame'); }
     }
   });
   // Fade the space in from black only once it's really there: the room's state and everyone in it
@@ -1839,7 +1841,7 @@ async function start() {
 }
 
 start().catch(err => {
-  console.error(err);
+  console.error(err); reportError(err, 'start');
   loading.classList.remove('done'); loading.classList.add('going');
   loading.querySelector('p').textContent = 'Could not load the space. Refresh to try again.';
 });

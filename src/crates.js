@@ -3,6 +3,7 @@
 // level is: the crate atlas times the level's own lightmap (each vertex carries the lightmap spot of the
 // floor beside it), so they take each room's light, its flickering lamps and flashlight beams. Solid,
 // paintable, and stood on like the level's furniture.
+import {reportError} from './errors.js';
 import * as THREE from 'three';
 import {GLTFLoader} from '../vendor/three/GLTFLoader.js';
 import {hookShader, LEVEL_VERSION} from './level.js';
@@ -12,7 +13,7 @@ const url = new URL('../assets/env/world-crates.glb', import.meta.url).href + (L
 
 // start fetching straight away (it's small); null if it can't be had: the level does fine without
 export function loadCrates() {
-  return new GLTFLoader().loadAsync(url).catch(err => { console.warn('crates:', err); return null; });
+  return new GLTFLoader().loadAsync(url).catch(err => { console.warn('crates:', err); reportError(err, 'crates'); return null; });
 }
 
 export function addCrates(gltf, level, scene) {

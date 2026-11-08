@@ -6,7 +6,7 @@ import {cleanEmoteConfig} from '../src/emotes.js';
 import {cleanReview, hiddenPieces} from '../src/review.js';
 import {freshRace, publicRace} from '../src/race.js';
 import {handleMessage, newPlayer, snapshot, freshItems, validItems, releaseItems, letGo, validMarks, marksMessage, itemsAtSpawn,
-  kothTick, kothNext, freshKoth, publicKoth} from './room.js';
+  kothTick, kothNext, freshKoth, publicKoth, logError} from './room.js';
 
 function allowedOrigins(env) {
   const list = (env.ALLOWED_ORIGINS || '').split(',').map(s => s.trim()).filter(Boolean);
@@ -22,7 +22,7 @@ export default {
     if (!allowedOrigins(env).includes(origin)) return new Response('Forbidden', {status: 403});
     // the emote settings (changed from /anim) and the graffiti review (made at /graffiti): read by anyone
     // on the site, handled by the room itself
-    if (url.pathname === '/emotes' || url.pathname === '/graffiti') {
+    if (url.pathname === '/emotes' || url.pathname === '/graffiti' || url.pathname === '/errors') {
       const cors = {'Access-Control-Allow-Origin': origin, 'Vary': 'Origin', 'Access-Control-Allow-Methods': 'GET, POST',
         'Access-Control-Allow-Headers': 'Content-Type, X-Emotes-Key'};
       if (request.method === 'OPTIONS') return new Response(null, {status: 204, headers: cors});
@@ -51,7 +51,9 @@ export class Room {
     if (!this.items) this.items = validItems(await this.ctx.storage.get?.('items'));
     return this.items;
   }
-  async saveItems() { await this.ctx.storage.put?.('items', this.items); }
+  // (unconfirmed: everyone's next messages aren't held back waiting for the write to be confirmed; if it ever
+  // failed the room would restart from what was last saved, which is all an item move could cost)
+  async saveItems() { await this.ctx.storage.put?.('items', this.items, {allowUnconfirmed: true}); }
   // paint marks change often; write them at most every few seconds
   async loadMarks() {
     if (!this.marks) this.marks = validMarks(await this.ctx.storage.get?.('marks'));
@@ -80,7 +82,7 @@ export class Room {
   }
   saveMarksSoon() {
     if (this.marksTimer) return;
-    this.marksTimer = setTimeout(() => { this.marksTimer = null; this.ctx.storage.put?.('marks', this.marks); }, 4000);
+    this.marksTimer = setTimeout(() => { this.marksTimer = null; this.ctx.storage.put?.('marks', this.marks, {allowUnconfirmed: true}); }, 4000);
   }
   sockets() { return this.ctx.getWebSockets(); }
   players() { return this.sockets().map(ws => ws.deserializeAttachment()).filter(Boolean); }
@@ -136,6 +138,9 @@ export class Room {
   async fetch(request) {
     if (new URL(request.url).pathname === '/emotes') return this.emotesRequest(request);
     if (new URL(request.url).pathname === '/graffiti') return this.reviewRequest(request);
+    // GET /errors: what's gone wrong in visitors' browsers lately (src/errors.js)
+    if (new URL(request.url).pathname === '/errors')
+      return Response.json((await this.ctx.storage.get?.('errors')) || [], {headers: {'Cache-Control': 'no-store'}});
     // Public player IDs must not expose the session token that can resume a socket.
     const session = new URL(request.url).searchParams.get('session');
     const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(session));
@@ -172,6 +177,7 @@ export class Room {
       else if (to === 'self') this.send(ws, msg);
       else for (const other of this.sockets()) if (other.deserializeAttachment()?.id === to) this.send(other, msg);
     }
+    if (result.report) await this.ctx.storage.put?.('errors', logError((await this.ctx.storage.get?.('errors')) || [], result.report), {allowUnconfirmed: true});
     if (result.itemsChanged) { await this.saveItems(); await this.scheduleAlarm(); }
     if (result.marksChanged) this.saveMarksSoon();
     if (result.raceChanged) await this.saveRace();

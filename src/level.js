@@ -3,6 +3,7 @@
 // lightmap, which is cheap enough for phones. A small shader hook lets single
 // lamps flicker (their share of the light is baked into a separate map, one
 // lamp group per channel) and lets flashlights light the baked surfaces.
+import {reportError} from './errors.js';
 import * as THREE from 'three';
 import {GLTFLoader} from '../vendor/three/GLTFLoader.js';
 import {ITEM_SPAWNS} from './world-items.js';
@@ -247,9 +248,9 @@ export async function loadLevel(name, renderer) {
       for (const t of [f, f2]) { t.flipY = false; t.channel = 1; t.generateMipmaps = false; t.minFilter = THREE.LinearFilter; t.needsUpdate = true; }
       lighting.flickerMap.value = f; lighting.flickerMap2.value = f2;
       lighting.flickerSplit.value = meta.flickerMap === 'share2' ? 1 : 0;
-    }).catch(e => console.warn('flicker maps:', e)) : null,
+    }).catch(e => { console.warn('flicker maps:', e); reportError(e, 'flicker maps'); }) : null,
     ...tagMaps.map((map, i) => new THREE.ImageLoader().loadAsync(`${base}-tags-${i}.webp${v}`)
-      .then(img => { map.image = img; map.needsUpdate = true; }).catch(e => console.warn('tag page:', e))),
+      .then(img => { map.image = img; map.needsUpdate = true; }).catch(e => { console.warn('tag page:', e); reportError(e, 'tag page'); })),
   ]);
   return {scene: gltf.scene, meta, materials, meshes, lightmap, baseIntensity: Math.PI * meta.lightmapScale, loadLater};
 }

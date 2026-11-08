@@ -14,6 +14,19 @@ import {KOTH_GRACE_MS, KOTH_WIN_MS, KOTH_UNCLAIMED_MS, freshKoth, publicKoth, ko
 const SETTLE_MAX = 16, SETTLE_RANGE = 6;
 // a pickup's checked against where the server last had the player, which can trail where they were when they clicked
 const PICKUP_SLACK = .4;
+const ERRORS_PER_PLAYER = 12;
+
+// the error log (GET /errors): the latest kinds, each with how often and when it was last seen
+export const ERROR_LOG_MAX = 120;
+export function logError(list, e) {
+  const key = `${e.msg}|${e.where.split('\n')[0]}`;
+  const old = list.find(x => x.key === key);
+  if (old) { old.count++; old.last = e.at; old.ua = e.ua; old.page = e.page; }
+  else list.push({key, msg: e.msg, where: e.where, ua: e.ua, page: e.page, first: e.at, last: e.at, count: 1});
+  list.sort((a, b) => b.last - a.last);
+  list.length = Math.min(list.length, ERROR_LOG_MAX);
+  return list;
+}
 
 export function newPlayer(id, now) {
   return {id, pose: null, lastPose: 0, lastChat: 0, lastActive: now, lastPunch: 0, lastShot: 0, lastSpray: 0,
@@ -171,6 +184,13 @@ function handle(player, data, now, room) {
     out.push({to: 'all', msg: {type: 'pose', id: player.id, pose, time: now}});
     const raceChanged = room.race ? trackRunner(room.race, player, now, out) : false;
     return {out, changed: true, returning, raceChanged};
+  }
+  // something went wrong in someone's browser (src/errors.js): kept for a look later (GET /errors), a few per visit
+  if (m.type === 'clientError') {
+    player.errors = (player.errors || 0) + 1;
+    if (player.errors > ERRORS_PER_PLAYER) return {out, changed: player.errors === ERRORS_PER_PLAYER + 1};
+    const text = (v, n) => (typeof v === 'string' ? v.slice(0, n) : '');
+    return {out, changed: true, report: {msg: text(m.msg, 300), where: text(m.where, 1200), ua: text(m.ua, 200), page: text(m.page, 40), at: now}};
   }
   if (m.type === 'chat') {
     if (now - player.lastChat < CHAT_INTERVAL_MS) return {out, changed: false};

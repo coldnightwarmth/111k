@@ -9,7 +9,7 @@ import {extname, join, normalize, resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {INACTIVE_MS, IDLE_RESET_MS, MAX_PLAYERS} from '../src/protocol.js';
 import {freshRace, publicRace} from '../src/race.js';
-import {handleMessage, newPlayer, snapshot, freshItems, releaseItems, letGo, freshMarks, marksMessage, itemsAtSpawn, kothTick, freshKoth, publicKoth} from './room.js';
+import {handleMessage, newPlayer, snapshot, freshItems, releaseItems, letGo, freshMarks, marksMessage, itemsAtSpawn, kothTick, freshKoth, publicKoth, logError} from './room.js';
 import {cleanEmoteConfig} from '../src/emotes.js';
 import {cleanReview, hiddenPieces} from '../src/review.js';
 
@@ -19,7 +19,7 @@ const TYPES = {'.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/jav
   '.json': 'application/json', '.glb': 'model/gltf-binary', '.png': 'image/png', '.webp': 'image/webp',
   '.jpg': 'image/jpeg', '.svg': 'image/svg+xml', '.ico': 'image/x-icon', '.woff2': 'font/woff2'};
 
-let emotes = cleanEmoteConfig(null), review = cleanReview(null);
+let emotes = cleanEmoteConfig(null), review = cleanReview(null), errors = [];
 const server = createServer(async (req, res) => {
   // the emote settings, as the worker serves them (GET, and POST from /anim)
   if (new URL(req.url, 'http://x').pathname === '/emotes') {
@@ -29,6 +29,10 @@ const server = createServer(async (req, res) => {
       broadcast({type: 'emotes', config: emotes});
     }
     res.writeHead(200, {'Content-Type': 'application/json', 'Cache-Control': 'no-store'}); res.end(JSON.stringify(emotes)); return;
+  }
+  // the error log, as the worker keeps it
+  if (new URL(req.url, 'http://x').pathname === '/errors') {
+    res.writeHead(200, {'Content-Type': 'application/json', 'Cache-Control': 'no-store'}); res.end(JSON.stringify(errors)); return;
   }
   // the graffiti review, the same way (GET, and POST from /graffiti)
   if (new URL(req.url, 'http://x').pathname === '/graffiti') {
@@ -132,6 +136,7 @@ function onText(c, text) {
   if (text === 'ping') { send(c, 'pong'); return; }
   const now = Date.now();
   const result = handleMessage(c.player, text, now, {items, marks, race, koth, players});
+  if (result.report) errors = logError(errors, result.report);
   if (result.close) { close(c); return; }
   for (const {to, msg} of result.out) {
     if (to === 'all') broadcast(msg);
