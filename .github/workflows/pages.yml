@@ -16,7 +16,24 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # a look round the site in a headless browser first (tools/smoke.mjs): it has to load, connect, draw, walk,
+  # pick something up and put it down with no errors, or nothing is deployed
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Room logic tests
+        run: node --test server/test/*.test.mjs
+      - name: Smoke test in headless Chrome
+        run: |
+          npm i --no-save puppeteer-core@23.11.1
+          node tools/smoke.mjs "$(command -v google-chrome || command -v google-chrome-stable || command -v chromium)"
   deploy:
+    needs: smoke
     runs-on: ubuntu-latest
     environment:
       name: github-pages
