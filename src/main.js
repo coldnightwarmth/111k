@@ -338,15 +338,26 @@ async function start() {
   let hiddenPieces = new Set();
   const pieces = allPieces.slice();
   const parkedSprays = new Map();   // spray id -> spray
-  const pageBatches = new Map();
-  function pageBatch(page) {
-    if (!pageBatches.has(page)) {
-      const src = level.materials.get(`graffiti_${page}`);
-      const b = createBatch(markMaterial(level, src?.map || null, 1), 8000);
-      b.mesh.renderOrder = 2; scene.add(b.mesh);
-      pageBatches.set(page, b);
+  // Newer tags go over older ones, whichever atlas page each is on. Tags are batched by page (one draw for
+  // every tag on a page), and batches of one draw order used to go in whatever order they were first made,
+  // so a new tag from one page could land under an older one from another. Now each tag gets a layer: one
+  // above the highest layer of the older tags it overlaps (so tags that don't touch share layer 0) and the
+  // batches are per page and layer, drawn in layer order. (Splats stay over all of them, at 3.)
+  const pageMats = new Map(), pageBatches = new Map();
+  const pageMat = page => {
+    if (!pageMats.has(page)) pageMats.set(page, markMaterial(level, level.materials.get(`graffiti_${page}`)?.map || null, 1));
+    return pageMats.get(page);
+  };
+  const LAYER_STEP = .005;   // 150 tags at most (MAX_SPRAYS), so even all stacked stays under the splats
+  const layerOrder = layer => 2 + Math.min(layer, 190) * LAYER_STEP;
+  function pageBatch(page, layer = 0) {
+    const key = `${page}|${layer}`;
+    if (!pageBatches.has(key)) {
+      const b = createBatch(pageMat(page), layer ? 1500 : 8000);
+      b.mesh.renderOrder = layerOrder(layer); scene.add(b.mesh);
+      pageBatches.set(key, b);
     }
-    return pageBatches.get(page);
+    return pageBatches.get(key);
   }
   const sprayMarks = [];
   const fades = [];   // freshly sprayed pieces fade in
@@ -381,13 +392,13 @@ async function start() {
   // flat on a face of the painting's box, so the face's own normal is the right one; without it they'd
   // catch next to no light and come out near black.
   const paintingBatches = new Map(), paintingMats = new Map();
-  function paintingBatch(pi, key, map) {
-    const k = `${pi}|${key}`;
+  function paintingBatch(pi, key, map, layer = null) {
+    const k = `${pi}|${key}|${layer}`;
     if (!paintingBatches.has(k)) {
       if (!paintingMats.has(key)) paintingMats.set(key, new THREE.MeshStandardMaterial({map, transparent: true, depthWrite: false, vertexColors: true,
         roughness: .82, metalness: 0, flatShading: true, polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -4}));
       const b = createBatch(paintingMats.get(key), 2000);
-      b.mesh.renderOrder = 3; items.items.get(pi).model.add(b.mesh);
+      b.mesh.renderOrder = layer === null ? 3 : layerOrder(layer); items.items.get(pi).model.add(b.mesh);   // (splats: 3; tags by layer)
       paintingBatches.set(k, b);
     }
     return paintingBatches.get(k);
@@ -450,11 +461,11 @@ async function start() {
   }
   // tags on a door live in a batch hung on that door, in its hinge space
   const doorPages = new Map();
-  function doorPageBatch(k, page) {
-    const key = `${k}:${page}`;
+  function doorPageBatch(k, page, layer = 0) {
+    const key = `${k}:${page}:${layer}`;
     if (!doorPages.has(key)) {
-      const b = createBatch(pageBatch(page).mesh.material, 3000);
-      b.mesh.renderOrder = 2; hits.door(k).mesh.add(b.mesh);
+      const b = createBatch(pageMat(page), layer ? 800 : 3000);
+      b.mesh.renderOrder = layerOrder(layer); hits.door(k).mesh.add(b.mesh);
       doorPages.set(key, b);
     }
     return doorPages.get(key);
@@ -472,21 +483,36 @@ async function start() {
     for (const q of verts) { q.u = u0 + q.u * (u1 - u0); q.v = v0 + q.v * (v1 - v0); }
     return verts;
   }
+  let spraySeq = 0;   // the order tags were sprayed in (kept by a tag that's parked, for when it comes back)
   function addSpray(s, fresh = false) {
     const piece = pieceByName.get(s.piece);
     if (!piece) return;
+    s.seq ??= ++spraySeq;
     if (hiddenPieces.has(s.piece)) { parkedSprays.set(sprayId(s), s); return; }
     const onDoor = s.d !== undefined ? hits.door(s.d) : null;
     if (s.d !== undefined && !onDoor) return;
     const onPainting = s.pi ? paintingSurface(s.pi) : null;
     if (s.pi && !onPainting) return;
     const verts = sprayVerts(s, piece, onDoor || onPainting);
-    const batch = onDoor ? doorPageBatch(s.d, piece.page) : onPainting ? paintingBatch(s.pi, `page${piece.page}`, pageBatch(piece.page).mesh.material.map)
-      : pageBatch(piece.page);
+    if (!verts.length) return;
+    // its layer: over every older tag it touches on the same surface (the world, a door, a painting)
+    const host = onDoor ? `d${s.d}` : onPainting ? `p${s.pi}` : 'w', box = new THREE.Box3();
+    for (const q of verts) box.expandByPoint(q.p);
+    box.expandByScalar(.02);
+    let layer = 0;
+    for (const k of sprayMarks) if (k.host === host && k.layer >= layer && k.box.intersectsBox(box)) layer = k.layer + 1;
+    const batch = onDoor ? doorPageBatch(s.d, piece.page, layer) : onPainting ? paintingBatch(s.pi, `page${piece.page}`, pageMat(piece.page).map, layer)
+      : pageBatch(piece.page, layer);
     const m = batch.add(verts, [255, 255, 255], fresh ? 0 : 1);
-    sprayMarks.push({batch, m, kind: 'spray', id: sprayId(s), verts: m.verts, s});
+    sprayMarks.push({batch, m, kind: 'spray', id: sprayId(s), verts: m.verts, s, host, box, layer});
     while (sprayMarks.length > MAX_SPRAYS) { const old = sprayMarks.shift(); old.batch.remove(old.m); }
     if (fresh) fades.push({batch, m, t: 0});
+  }
+  function clearSprays() {   // every tag off (paint splats stay)
+    for (const b of pageBatches.values()) b.clear();
+    for (const b of doorPages.values()) b.clear();
+    for (const [k, b] of paintingBatches) if (!k.endsWith('|null')) b.clear();
+    sprayMarks.length = 0;
   }
   // a mark scrubbed off by someone with the bucket
   function eraseMark(kind, id) {
@@ -501,10 +527,8 @@ async function start() {
     for (const id of list.erased || []) cleaning.eraseBaked(id);
     splats.clear(); splatMarks.length = 0;
     for (const d of doorBatches.values()) d.batch.clear();
-    for (const b of pageBatches.values()) b.clear();
-    for (const b of doorPages.values()) b.clear();
     for (const b of paintingBatches.values()) b.clear();
-    sprayMarks.length = 0; parkedSprays.clear();
+    clearSprays(); parkedSprays.clear();
     for (const s of list.splats || []) { const c = cleanSplat(s); if (c) addSplat(c, false, Number.isFinite(s.age) ? s.age : 0); }
     for (const s of list.sprays || []) { const c = cleanSpray(s); if (c) addSpray(c); }
   }
@@ -1059,7 +1083,14 @@ async function start() {
       const k = sprayMarks[i];
       if (hiddenPieces.has(k.s?.piece)) { k.batch.remove(k.m); sprayMarks.splice(i, 1); parkedSprays.set(k.id, k.s); cleaning.forget('spray', k.id); }
     }
-    for (const [id, sp] of parkedSprays) if (!hiddenPieces.has(sp.piece)) { parkedSprays.delete(id); addSpray(sp); }   // ...and back
+    // ...and back, under whatever's been sprayed over them since: all the tags again, in the order they were sprayed
+    const back = [...parkedSprays].filter(([, sp]) => !hiddenPieces.has(sp.piece));
+    if (back.length) {
+      for (const [id] of back) parkedSprays.delete(id);
+      const again = [...sprayMarks.map(k => k.s), ...back.map(([, sp]) => sp)].sort((a, b) => a.seq - b.seq);
+      clearSprays();
+      for (const sp of again) addSpray(sp);
+    }
     if (!pieces.some(p => p.name === chosenPiece)) chosenPiece = pieces.length ? pieces[Math.floor(Math.random() * pieces.length)].name : null;
     if (galleryList.childElementCount) { galleryList.replaceChildren(); if (!gallery.hidden) buildGallery(); else choosePiece(chosenPiece); }
     else if (chosenPiece) choosePiece(chosenPiece);
