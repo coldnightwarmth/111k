@@ -30,7 +30,13 @@ from graffiti_third import type_masks, crop_masks, dilate, erode, shift, noise, 
 PX = G.PX_PER_M
 CAUTION = (0.98, 0.8, 0.08)
 G.GLYPHS.setdefault('>', [[(0.0, 0.85), (0.45, 0.5), (0.0, 0.15)]])      # (for ASUKA > REI)
+if '(' not in G.GLYPHS:                    # (for (HELL)): the ')' turned round
+    G.GLYPHS['(' ] = [[(0.3 - x, y) for x, y in st] for st in G.GLYPHS[')']]
+    _mn = min(x for st in G.GLYPHS['('] for x, _ in st)
+    G.GLYPHS['('] = [[(x - _mn, y) for x, y in st] for st in G.GLYPHS['(']]
 # a G that stays a G in fat bubble letters: the top left open, a square spur down the right, a clear crossbar
+# a B that can't be read as an E (two clear bowls), for THUMBS
+CLEAR_B = {'B': [[(0, 0), (0, 1), (0.36, 1), (0.52, 0.9), (0.52, 0.66), (0.36, 0.55), (0.0, 0.55)], [(0.36, 0.55), (0.58, 0.44), (0.58, 0.12), (0.4, 0.0), (0.0, 0.0)]]}
 CLEAR_G = {'G': [[(0.66, 0.92), (0.4, 1.0), (0.1, 0.88), (0.0, 0.5), (0.1, 0.1), (0.38, 0.0), (0.72, 0.0), (0.72, 0.4),
                   (0.36, 0.4)]]}
 
@@ -215,10 +221,10 @@ def shadow_letters(text, color, r, height_m=0.45, depth=(0.11, 0.09), hairline=W
     return runs(cv, color, r, full(block), rate=0.1)
 
 
-def dot_letters(text, colors, r, height_m=0.45, outline=BLACK, brush='round', dot_m=0.05, base=None, lines=None):
+def dot_letters(text, colors, r, height_m=0.45, outline=BLACK, brush='round', dot_m=0.05, base=None, lines=None, glyphs=None, fat=0.19):
     """Bubble letters with a thin sprayed outline, filled with big polka dots in a few colours."""
     hp = height_m * PX
-    masks, (w, h) = G.letter_masks(text, r, hp, int(hp * 0.25), fat=0.19, brush=brush, slant=0.08, spacing=0.04)
+    masks, (w, h) = G.letter_masks(text, r, hp, int(hp * 0.25), fat=fat, brush=brush, slant=0.08, spacing=0.04, glyphs=glyphs)
     masks = [np.asarray(m) > 0 for m in masks]
     u = np.any(masks, 0)
     cv = G.Canvas(u.shape[1], u.shape[0] + int(PX * 0.12))
@@ -445,10 +451,79 @@ def build_fourth(seed=13, only=None):
     return P
 
 
+def build_fifth(seed=17, only=None):
+    """name -> Canvas: the fifth batch, two takes on each phrase in the families the reviews kept"""
+    P = {}
+
+    def add(name, fn):
+        if only and not any(o in name for o in only):
+            return
+        r = rng(name, seed)
+        T.SPRAY, T._R = name.split('_')[0] in THIRD_FAMILIES, np.random.default_rng(zlib.crc32(name.encode()) + 29)
+        try:
+            P[name] = trim(fn(r), 6)
+        finally:
+            T.SPRAY, G.NODRIPS, G.KERN = False, False, 0.0
+
+    def struck_then(first, then, color, r):
+        """a line started, crossed out, and the second thought under it"""
+        a = cross_out(trim(G.scrawl([first], color, r, 0.16, 0.016, drips=0.1)), r, color, 'strike', 0.02)
+        b = trim(G.scrawl([then], color, r, 0.16, 0.016, drips=0.15))
+        return stack([trim(a), b], int(PX * 0.04), 'left')
+
+    # phantom wallet
+    add('sc_phantomwallet', lambda r: G.scrawl(['phantom wallet'], GRAPE, r, 0.2, 0.018, drips=0.15))
+    add('ab_phantomwallet', lambda r: airbrush('phantom\nwallet', (0.85, 0.8, 1.0), GRAPE, r, 0.24, halo=LILAC, sparkles=3))
+    # GOLD
+    add('tu_gold', lambda r: G.piece('GOLD', GOLD, BLACK, r, 0.6, fill_style='fade', fill2=YELLOW, shadow=BROWN, shine=WHITE, fat=0.18))
+    add('bb_gold', lambda r: T.blockbuster('GOLD', YELLOW, BLACK, r, 0.55, fill2=GOLD, shadow=BROWN, streak=0.35, drips=0.15))
+    # is it free?
+    add('sb_isitfree', lambda r: T.speech(['IS IT FREE?'], r, 'round', height_m=0.13))
+    add('ch_isitfree', lambda r: T.chalk(['is it free?'], r, 0.24))
+    # more of the same
+    add('rb_moreofthesame', lambda r: T.ribbon('more of\nthe same', SKY, NAVY, r, 0.28))
+    add('sc_moreofthesame', lambda r: G.scrawl(['more of the same', 'more of the same', 'more of the same'], BLACK, r, 0.13, 0.014,
+                                               drips=0.15))
+    # TRY NOT TO CUM!
+    add('pc_trynottocum', lambda r: G.piece('TRY NOT\nTO CUM!', HOTPINK, BLACK, r, 0.4, fill_style='fade', fill2=WHITE, shadow=BLACK,
+                                            block=GRAPE, **SEMI))
+    add('mp_trynottocum', lambda r: M.mop('', BLACK, r, 0.28, 0.034, lines=['TRY NOT', 'TO CUM!'], drip_rate=1.0, drip_len=0.3))
+    # SEX
+    add('bb_sex', lambda r: T.blockbuster('SEX', RED, BLACK, r, 0.6, fill2=HOTPINK, shadow=WHITE, streak=0.35, drips=0.15))
+    add('tu_sex', lambda r: G.piece('SEX', BUBBLEGUM, BLACK, r, 0.6, shadow=BLOOD, shine=WHITE, fat=0.19))
+    # (HELL)
+    add('pc_hell', lambda r: G.piece('(HELL)', ORANGE, BLACK, r, 0.5, fill_style='fade', fill2=BLOOD, shadow=BLACK, block=OXBLOOD,
+                                     **WILD))
+    add('ol_hell', lambda r: M.outline3d('(HELL)', BLACK, r, 0.5, fill=RED, block_fill=None))
+    # i heard that picasso made some images
+    add('ch_picasso', lambda r: T.chalk(['i heard that picasso', 'made some images'], r, 0.18))
+    add('mk_picasso', lambda r: G.marker('', BLACK, r, 0.14, lines=['i heard that picasso', 'made some images']))
+    # damn bitch you paint like this?
+    add('sc_damnbitch', lambda r: G.scrawl(['damn bitch', 'you paint like this?'], BLOOD, r, 0.18, 0.017, drips=0.15))
+    add('sb_damnbitch', lambda r: T.speech(['DAMN BITCH', 'YOU PAINT LIKE THIS?'], r, 'round', height_m=0.1, tail='right'))
+    # VENOM
+    add('pc_venom', lambda r: G.piece('VENOM', BLACK, WHITE, r, 0.55, fill_style='solid', shadow=WHITE, shine=SILVER, **WILD))
+    add('bb_venom', lambda r: T.blockbuster('VENOM', CHARCOAL, WHITE, r, 0.5, fill2=BLACK, shadow=SILVER, streak=0.35, drips=0.15))
+    # #knightcore
+    add('tag_knightcore', lambda r: G.tag('#knightcore', BLACK, r, height_m=0.34, width_m=0.02, flourish='crown'))
+    add('rb_knightcore', lambda r: T.ribbon('#knightcore', SILVER, CHARCOAL, r, 0.3))
+    # THUMBS UP
+    add('tu_thumbsup', lambda r: G.piece('THUMBS\nUP', YELLOW, BLACK, r, 0.45, shadow=ORANGE, shine=WHITE, fat=0.15, glyphs=CLEAR_B))
+    add('dt_thumbsup', lambda r: dot_letters('THUMBS UP', [YELLOW, ORANGE], r, 0.36, base=WHITE, glyphs=CLEAR_B, fat=0.14))
+    # DR. SLUMP
+    add('tu_drslump', lambda r: G.piece('DR. SLUMP', BUBBLEGUM, BLACK, r, 0.45, shadow=SKY, shine=WHITE, fat=0.17))
+    add('ht_drslump', lambda r: T.halftone('DR. SLUMP', SKY, r, 0.36, dot=COBALT, shadow=HOTPINK))
+    # this and a- no this is enough
+    add('sc_thisisenough', lambda r: struck_then('this and a-', 'no this is enough', BLACK, r))
+    add('mk_thisisenough', lambda r: G.marker('', BLOOD, r, 0.14, lines=['this and a-', 'no this is enough']))
+    return P
+
+
 if __name__ == '__main__':
     import sys, time
     t = time.time()
     only = sys.argv[2].split(',') if len(sys.argv) > 2 else None
     P = build_fourth(only=only)
+    P.update(build_fifth(only=only))
     n = M.sheet(P, sys.argv[1] if len(sys.argv) > 1 else 'fourth_sheet')
     print(len(P), 'pieces', n, 'pages', f'{time.time() - t:.1f}s')

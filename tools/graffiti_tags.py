@@ -21,7 +21,7 @@ if __name__ == '__main__':
     t = time.time()
     pieces = M.build_extra()
     batch = {n: 2 for n in pieces}            # which batch each came in (the review page's "latest batch")
-    for k, more in ((3, T.build_third()), (4, F.build_fourth())):
+    for k, more in ((3, T.build_third()), (4, F.build_fourth()), (5, F.build_fifth())):
         assert not set(more) & set(pieces), set(more) & set(pieces)
         pieces.update(more)
         batch.update({n: k for n in more})
