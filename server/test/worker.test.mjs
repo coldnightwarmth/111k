@@ -322,6 +322,38 @@ test('lap timer: start, busy for others, laps either way then the same way, fini
   pose(b, at(R.MACHINE_ANGLE + 1)); press(b); assert.equal(race.state, 'cancelled');
 });
 
+test('lap timer: a lap counts as you cross the line at the machine, anywhere across the tunnel, at any speed', async () => {
+  const {handleMessage, newPlayer} = await import('../room.js');
+  const R = await import('../../src/race.js');
+  const race = R.freshRace();
+  const a = newPlayer('aaa', 0);
+  const room = {items: {}, marks: null, race, players: () => [a]};
+  let now = 1_000_000;
+  const pose = (where, dt) => { now += dt; return handleMessage(a, JSON.stringify({type: 'pose', pose: {x: where.x, y: 1.45, z: where.z, yaw: 0, pitch: 0}}), now, room); };
+  pose(R.loopPoint(R.MACHINE_ANGLE, 2.1), 100);
+  now += 500; handleMessage(a, JSON.stringify({type: 'button'}), now, room);
+  const start = now;
+  // flat out along the far (inner) wall, 5 m from the machine at the closest, a pose every 0.5 rad
+  // (19 m): the old 'near the machine' check never saw these laps until the next one, then gave two at once
+  const step = .5, dt = 1000;
+  const laps = [];
+  let ang = 0;
+  for (let k = 0; k < 40 && race.laps > 0; k++) {
+    ang += step;
+    const r = pose(R.loopPoint(R.MACHINE_ANGLE + ang, -2.4), dt);
+    if (r.out.some(o => o.msg.type === 'race' && o.msg.event === 'lap')) laps.push({k, split: race.splits.at(-1)});
+  }
+  assert.equal(race.laps, 0, 'all three laps');
+  // each on the pose that crossed the line, at the time it crossed (between the two poses)
+  laps.forEach(({k, split}, i) => {
+    const lapAng = 2 * Math.PI * (i + 1);
+    assert.equal(k, Math.ceil(lapAng / step) - 1, `lap ${i + 1} on the pose that crossed`);
+    assert.ok(Math.abs(split - lapAng / step * dt) < 25, `lap ${i + 1} split ${split} ≈ ${lapAng / step * dt}`);
+  });
+  assert.equal(new Set(race.splits).size, 3, 'no two laps at once');
+  assert.ok(start > 0);
+});
+
 test('voice: setup notes go only to the named player, big offers allowed, others still capped', async () => {
   const {room, sockets} = makeRoom();
   await join(room, S1); await join(room, S2);

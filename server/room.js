@@ -7,7 +7,7 @@ import {CHAT_INTERVAL_MS, CHAT_TTL_MS, POSE_INTERVAL_MS, PICKUP_RANGE, PUNCH_RAN
   SHOT_INTERVAL_MS, SPRAY_INTERVAL_MS, SPRAY_RANGE, MAX_SPLATS, MAX_SPRAYS, SPLAT_LIFE_MS,
   sanitizeChat, sanitizePose, samePose, cleanItem, cleanPath, sanitizeLook, sanitizeName, cleanSplat, cleanSpray, splatId, sprayId} from '../src/protocol.js';
 import {ITEM_SPAWNS} from '../src/world-items.js';
-import {RACE_LAPS, RACE_TIMEOUT_MS, BUTTON, BUTTON_RANGE, MACHINE, LAP_ZONE, LAP_SLACK, loopAngle, freshRace, publicRace} from '../src/race.js';
+import {RACE_LAPS, RACE_TIMEOUT_MS, BUTTON, BUTTON_RANGE, MACHINE_ANGLE, loopAngle, freshRace, publicRace} from '../src/race.js';
 import {KOTH_GRACE_MS, KOTH_WIN_MS, KOTH_UNCLAIMED_MS, freshKoth, publicKoth, kothActive, kothTime} from '../src/koth.js';
 
 // paintings settling on their own (a 'settle' message): how many at once, and how far from the player who sends it
@@ -89,22 +89,30 @@ function dropAt(item, pose, dx = 0, dz = 0, y = null) {
 const worn = it => it.type === 'crown' && it.on;
 const handsFull = (items, id) => Object.values(items).some(it => it.holder === id && !worn(it));
 
-// The runner's way round the loop: unwrapped angle since the start. A lap counts back at the
-// machine after a full turn; the first lap can go either way, later ones must keep to it.
+// The runner's way round the loop: how far round they've gone since the start (unwrapped angle), measured
+// from a finish line straight across the tunnel at the machine. A lap is done the moment they cross that line
+// a whole turn on: wherever across the tunnel, however fast (not just near the machine, where a quick pass
+// or one along the far wall could slip between two poses and leave the lap to be counted a lap late). The
+// split is when they crossed it, between the two poses either side. The first lap can go either way, later
+// ones must keep to it.
+const wrap = d => Math.atan2(Math.sin(d), Math.cos(d));
 function trackRunner(r, player, now, out) {
   if (r.state !== 'running' || player.id !== r.runner || r.laps <= 0) return false;
   const a = loopAngle(player.pose.x, player.pose.z);
-  let d = a - (r.lastA ?? a);
-  d = Math.atan2(Math.sin(d), Math.cos(d));
+  r.from ??= wrap(a - MACHINE_ANGLE);                         // where they started, from the line (set at the start)
+  const was = r.from + (r.progress || 0), then = r.lastT ?? r.startedAt;
+  const d = wrap(a - (r.lastA ?? a));
   if (Math.abs(d) < .6) r.progress = (r.progress || 0) + d;   // a bigger jump is a teleport (respawn): it earns nothing
-  r.lastA = a;
-  if (flat(player.pose, MACHINE) > LAP_ZONE) return false;
-  const done = RACE_LAPS - r.laps, need = 2 * Math.PI * (done + 1) - LAP_SLACK;
-  const along = done === 0 ? Math.abs(r.progress) : r.dir * r.progress;
-  if (along < need) return false;
-  if (done === 0) r.dir = Math.sign(r.progress);
+  r.lastA = a; r.lastT = now;
+  const at = r.from + (r.progress || 0);
+  const done = RACE_LAPS - r.laps;
+  // the line this lap ends on: a whole turn on (either way, for the first)
+  const dir = done === 0 ? Math.sign(at) || 1 : r.dir, line = dir * 2 * Math.PI * (done + 1);
+  if (dir * at < dir * line - 1e-4 || at === was) return false;   // (on the line counts, to a few mm)
+  if (done === 0) r.dir = dir;
+  const when = then + (now - then) * Math.min(1, Math.max(0, (line - was) / (at - was)));
   r.laps--;
-  r.splits = [...(r.splits || []), now - r.startedAt];
+  r.splits = [...(r.splits || []), Math.round(when - r.startedAt)];
   out.push({to: 'all', msg: {type: 'race', race: publicRace(r, now), event: 'lap', by: player.id, byName: player.name || ''}});
   return true;
 }
@@ -267,7 +275,8 @@ function handle(player, data, now, room) {
     } else event = 'start';
     if (!event) { out.push({to: 'self', msg: {type: 'race', race: publicRace(r, now), busy: true, by: player.id}}); return {out, changed: true}; }
     if (event === 'start') Object.assign(r, freshRace(), {state: 'running', runner: player.id, name: player.name || '', startedAt: now,
-      progress: 0, lastA: loopAngle(player.pose.x, player.pose.z), dir: 0});
+      progress: 0, lastA: loopAngle(player.pose.x, player.pose.z), lastT: now,
+      from: wrap(loopAngle(player.pose.x, player.pose.z) - MACHINE_ANGLE), dir: 0});
     else Object.assign(r, {state: event === 'finish' ? 'done' : 'cancelled', time: now - r.startedAt, endedAt: now});
     out.push({to: 'all', msg: {type: 'race', race: publicRace(r, now), event, by: player.id, byName: player.name || ''}});
     return {out, changed: true, raceChanged: true};

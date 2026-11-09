@@ -6,8 +6,6 @@ export const MACHINE_ANGLE = -0.2;
 export const RACE_LAPS = 3;
 export const RACE_TIMEOUT_MS = 3 * 60 * 1000;   // after this anyone can call off a run
 export const BUTTON_RANGE = 3.4;                // metres from the button to push it
-export const LAP_ZONE = 4.5;                    // pass within this of the machine for a lap to count
-export const LAP_SLACK = .3;                    // radians short of a full lap still counted (the zone is wide)
 
 // a point at loop angle a, offset x from the centreline (outward positive)
 export const loopPoint = (a, x) => ({x: (LOOP_RADIUS + x) * Math.cos(a), z: -(LOOP_RADIUS + x) * Math.sin(a)});
