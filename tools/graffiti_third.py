@@ -1087,6 +1087,9 @@ def chart(r, words=None, big=None, up=True, n=14, width_m=1.5, height_m=0.85, wo
     if big:
         bm = type_masks([big], 'black', head * 0.8, r, tracking=-0.02, per_letter=False)[0][0]
         bm = crop_masks([bm], 0)[0]
+        if bm.shape[1] > W * 0.97:          # too long for the chart: set smaller to fit
+            bm = type_masks([big], 'black', head * 0.8 * W * 0.95 / bm.shape[1], r, tracking=-0.02, per_letter=False)[0][0]
+            bm = crop_masks([bm], 0)[0]
         outer = np.zeros((cv.h, cv.w), bool)
         tmp = G.Canvas(cv.w, cv.h)
         place(tmp, bm, WHITE, 10 + bm.shape[1] / 2 + PX * 0.03, 6)

@@ -1,4 +1,4 @@
-"""Writes the spray-can-only graffiti (tools/graffiti_more.py and tools/graffiti_third.py) to its own atlas next to the level:
+"""Writes the spray-can-only graffiti (tools/graffiti_more.py, graffiti_third.py, graffiti_fourth.py) to its own atlas next to the level:
 assets/env/world-tags.json (where each piece sits) and assets/env/world-tags-N.webp (the pages).
 The game loads these alongside the world and adds them to the spray cans' list; nothing here is painted
 onto the walls, so the world doesn't need rebuilding or re-lighting.
@@ -13,15 +13,18 @@ sys.path.insert(0, HERE)
 import graffiti as G          # noqa: E402
 import graffiti_more as M     # noqa: E402
 import graffiti_third as T    # noqa: E402
+import graffiti_fourth as F   # noqa: E402
 
 OUT = os.path.join(HERE, '..', 'assets', 'env')
 
 if __name__ == '__main__':
     t = time.time()
     pieces = M.build_extra()
-    third = T.build_third()
-    assert not set(third) & set(pieces), set(third) & set(pieces)
-    pieces.update(third)
+    batch = {n: 2 for n in pieces}            # which batch each came in (the review page's "latest batch")
+    for k, more in ((3, T.build_third()), (4, F.build_fourth())):
+        assert not set(more) & set(pieces), set(more) & set(pieces)
+        pieces.update(more)
+        batch.update({n: k for n in more})
     pages = G.pack_pages(pieces, width=2048, max_h=2048)
     meta = {'pages': len(pages), 'graffiti': []}
     total = 0
@@ -36,7 +39,8 @@ if __name__ == '__main__':
         total += buf.tell()
         for name, rr in sorted(rects.items()):
             meta['graffiti'].append({'name': name, 'page': f't{i}', 'uv': [round(float(x), 5) for x in rr['uv']],
-                                     'w': round(float(rr['size'][0]), 3), 'h': round(float(rr['size'][1]), 3)})
+                                     'w': round(float(rr['size'][0]), 3), 'h': round(float(rr['size'][1]), 3),
+                                     'batch': batch[name]})
     meta['graffiti'].sort(key=lambda p: p['name'])
     with open(os.path.join(OUT, 'world-tags.json'), 'w') as f:
         json.dump(meta, f, separators=(',', ':'))

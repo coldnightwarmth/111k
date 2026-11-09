@@ -100,7 +100,10 @@ python3 tools/build_world.py --fast --preview   # quick bake + preview renders i
    hollow 3D throws, hand-cut stencils) and `tools/graffiti_third.py`
    (blockbusters, stickers, wheatpaste posters, ransom-note cut-ups, tile
    mosaics, LED tickers, neon, glitch, pop-art halftone, chalk, comic
-   balloons, doctored signs, candlestick charts, ribbon letters), and are
+   balloons, doctored signs, candlestick charts, ribbon letters) and
+   `tools/graffiti_fourth.py` (airbrush, circles, hazard panels, shadow
+   letters, polka dots, vertical heaven-spot letters, crossed-out pieces),
+   and are
    written to their own atlas,
    `assets/env/world-tags*`, by `python3 tools/graffiti_tags.py`, so adding
    to them never needs the world rebuilt.

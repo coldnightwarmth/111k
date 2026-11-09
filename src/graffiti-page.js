@@ -11,12 +11,13 @@ const STYLE = {tag: 'tag', wk: 'philly wickets', bf: 'busflow', mp: 'mop', tu: '
   hs: 'chisel handstyle', sp: 'brush script', fx: 'extinguisher', rl: 'roller', sc: 'sprayed writing', sn: 'stencil', mk: 'marker',
   ex: 'scratched', dd: 'doodle', bb: 'blockbuster', sl: 'sticker', ps: 'wheatpaste poster', rn: 'ransom cut-up', mo: 'tile mosaic',
   tk: 'LED ticker', ne: 'neon', gl: 'glitch', ht: 'pop-art halftone', ch: 'chalk', sb: 'speech balloon', sg: 'sign', cx: 'chart',
-  rb: 'ribbon letters'};
-// the latest batch's families (tools/graffiti_third.py), for the "latest batch" filter
-const LATEST = new Set(['bb', 'sl', 'ps', 'rn', 'mo', 'tk', 'ne', 'gl', 'ht', 'ch', 'sb', 'sg', 'cx', 'rb']);
-const isLatest = p => LATEST.has(p.name.split('_')[0]);
-const STYLE_ORDER = ['tag', 'wk', 'bf', 'mp', 'tu', 'pc', 'bb', 'ol', 'pl', 'hs', 'sp', 'ne', 'rb', 'ht', 'gl', 'fx', 'rl', 'sc', 'sn',
-  'mo', 'tk', 'cx', 'sb', 'sl', 'ps', 'rn', 'sg', 'ch', 'mk', 'ex', 'dd'];
+  rb: 'ribbon letters', ab: 'airbrush', ci: 'circle', hz: 'hazard panel', sh: 'shadow letters', dt: 'polka dots',
+  vt: 'vertical (heaven spot)'};
+// the "latest batch" filter: the cans-only pieces from the newest batch (tools/graffiti_tags.py marks each)
+let latestBatch = 0;
+const isLatest = p => !!p.batch && p.batch === latestBatch;
+const STYLE_ORDER = ['tag', 'wk', 'bf', 'mp', 'tu', 'pc', 'bb', 'vt', 'sh', 'dt', 'ol', 'pl', 'hs', 'sp', 'ab', 'ne', 'rb', 'ht', 'gl', 'fx',
+  'rl', 'sc', 'sn', 'mo', 'tk', 'cx', 'ci', 'hz', 'sb', 'sl', 'ps', 'rn', 'sg', 'ch', 'mk', 'ex', 'dd'];
 const keyOf = name => { const [style, word = '', ...rest] = name.split('_'), k = STYLE_ORDER.indexOf(style);
   return [word, k < 0 ? STYLE_ORDER.length : k, rest.join('_')]; };
 const byWord = (a, b) => { const x = keyOf(a.name), y = keyOf(b.name);
@@ -56,6 +57,7 @@ async function load() {
     }));
     const known = new Set(pieces.map(p => p.name));
     for (const p of tags.graffiti) if (!known.has(p.name)) pieces.push({...p, walls: false});
+    latestBatch = Math.max(0, ...tags.graffiti.map(p => p.batch || 0));
   }
   return {pieces: pieces.sort(byWord), pages};
 }

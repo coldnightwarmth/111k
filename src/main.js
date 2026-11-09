@@ -325,8 +325,8 @@ async function start() {
   // The tags menu (and scrolling through tags) goes word by word: names are style_word[_variant], so every
   // take on a word sits together (words A to Z; within one, tags first, then throw-ups, pieces and the rest,
   // each plain before its variants).
-  const STYLE_ORDER = ['tag', 'wk', 'bf', 'mp', 'tu', 'pc', 'bb', 'ol', 'pl', 'hs', 'sp', 'ne', 'rb', 'ht', 'gl', 'fx', 'rl', 'sc', 'sn',
-    'mo', 'tk', 'cx', 'sb', 'sl', 'ps', 'rn', 'sg', 'ch', 'mk', 'ex', 'dd'];
+  const STYLE_ORDER = ['tag', 'wk', 'bf', 'mp', 'tu', 'pc', 'bb', 'vt', 'sh', 'dt', 'ol', 'pl', 'hs', 'sp', 'ab', 'ne', 'rb', 'ht', 'gl',
+    'fx', 'rl', 'sc', 'sn', 'mo', 'tk', 'cx', 'ci', 'hz', 'sb', 'sl', 'ps', 'rn', 'sg', 'ch', 'mk', 'ex', 'dd'];
   const pieceKey = name => { const [style, word = '', ...rest] = name.split('_'), k = STYLE_ORDER.indexOf(style);
     return [word, k < 0 ? STYLE_ORDER.length : k, rest.join('_')]; };
   const byWord = (a, b) => { const x = pieceKey(a.name), y = pieceKey(b.name);
