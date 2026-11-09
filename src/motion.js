@@ -7,6 +7,7 @@ export const JUMP_TAKEOFF = .14;
 export const JUMP_FLIGHT = 2 / 3;
 export const MAX_HOP_POWER = 1.42;
 const LANDED = JUMP_TAKEOFF + JUMP_FLIGHT;
+const JUMP_PEAK = 2 / 3;       // the most a power-1 jump lifts the feet (jumpHeight at the top)
 const HOP_WINDOW = .13;
 const HOP_GAIN = 1.15;         // each clean hop: 15% faster than you already were        // press this close to touchdown (either side) for a clean hop
 const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
@@ -22,14 +23,20 @@ export function jumpHeight(time, power = 1) {
 export function createVerticalMovement() {
   let crouch = 0, jumpTime = -1, power = 1, chain = 0, queued = -1, grounded = 0, hopped = false;
   let falling = false, pressedAt = -1, clock = 0;   // dropping off a ledge (not part of a jump)
+  let room = Infinity;   // how far the feet may rise before the eye meets the ceiling (setHeadroom)
+  let aloft = false;     // jumped off an edge: the arc ends in mid-air, so a hop waits for the ground (setAloft)
   function launch(clean) {
     chain = clean ? chain + 1 : 0;                                    // no cap: keep hopping, keep speeding up
     power = clean ? Math.min(MAX_HOP_POWER, 1 + .07 * chain) : 1;     // but the height tops out
+    power = Math.min(power, Math.max(.05, room / JUMP_PEAK));             // and stays under the ceiling
     jumpTime = clean ? JUMP_TAKEOFF : 0;     // a clean hop leaves straight away
     grounded = 0; queued = -1; hopped = clean;
   }
   return {
     get pose() { return {crouch, jumpTime, jumpPower: power}; },
+    // a low ceiling overhead (on a crate stack): jumps from here rise no further than this
+    setHeadroom(lift) { room = lift; },
+    setAloft(on) { aloft = on; },
     get chain() { return chain; },
     // horizontal speed multiplier earned by chaining clean hops
     // compounding, so every hop feels as big as the first, however fast you're already going
@@ -53,6 +60,7 @@ export function createVerticalMovement() {
     jump() {
       if (falling && (jumpTime < 0 || jumpTime >= LANDED)) { pressedAt = clock; return true; }
       if (jumpTime < 0) { launch(false); return true; }
+      if (jumpTime >= LANDED && aloft) { pressedAt = clock; return true; }
       if (jumpTime >= LANDED) { launch(jumpTime - LANDED < HOP_WINDOW); return true; }
       if (jumpTime >= LANDED - HOP_WINDOW) { queued = jumpTime; return true; }
       return false;
@@ -64,7 +72,8 @@ export function createVerticalMovement() {
       clock += dt;
       if (jumpTime >= 0) {
         jumpTime += dt;
-        if (queued >= 0 && jumpTime >= LANDED) launch(true);
+        if (queued >= 0 && jumpTime >= LANDED && (aloft || falling)) { pressedAt = clock; queued = -1; }   // hop once down
+        else if (queued >= 0 && jumpTime >= LANDED) launch(true);
         else if (jumpTime >= JUMP_DURATION) jumpTime = -1;
       }
       if (!falling && (jumpTime < 0 || jumpTime >= LANDED)) {

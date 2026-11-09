@@ -5,7 +5,7 @@ import {loadLevel, createAvatarLights, createFlicker, lighting, ghost} from './l
 import {createCuller, MIXED} from './cull.js';
 import {createCollider, STEP_UP} from './physics.js';
 import {createAvatar, preloadLook, AVATAR_SCALE} from './avatar.js';
-import {createVerticalMovement, createPoseBuffer, EYE_HEIGHT, jumpHeight} from './motion.js';
+import {createVerticalMovement, createPoseBuffer, EYE_HEIGHT, CROUCH_DEPTH, jumpHeight} from './motion.js';
 import {connectRoom} from './net.js';
 import {createChatUI, createBubble} from './chat.js';
 import {createControls} from './controls.js';
@@ -34,6 +34,7 @@ const params = new URLSearchParams(location.search);
 const $ = id => document.getElementById(id);
 const status = $('status'), loading = $('loading');
 const wait = ms => new Promise(r => setTimeout(r, ms));
+const CRAMPED = 1.8;   // less room than this between what you stand on and the ceiling: you crouch
 
 // ------------------------------------------------- who you are, per tab
 // sessionStorage survives a refresh (you come back where you were); closing
@@ -1546,7 +1547,12 @@ async function start() {
     if (player.emote) player.emoteTime = Math.min(EMOTE_DURATION, player.emoteTime + dt);
     if (player.punchTime >= 0) { player.punchTime += dt; if (player.punchTime > PUNCH_DURATION) player.punchTime = -1; }
     if (player.impactIn >= 0) { player.impactIn -= dt; if (player.impactIn < 0) shake = Math.max(shake, .45); }
-    const eye = vertical.update(dt, !frozen && input.crouch);
+    // standing somewhere with too little room overhead to stand up (on a crate stack, a cabinet): crouch, and
+    // keep jumps from lifting the eye into the ceiling
+    const overhead = ceilingAt(player.x, player.z) - player.ground, cramped = overhead < CRAMPED;
+    vertical.setHeadroom(overhead - .15 - (cramped ? EYE_HEIGHT - CROUCH_DEPTH : EYE_HEIGHT));
+    vertical.setAloft(!!player.leapt);
+    const eye = vertical.update(dt, !frozen && (input.crouch || cramped));
     // standing on things: step up onto low tops, land on higher ones from a jump, drop off edges
     {
       const feetNow = player.ground + vertical.lift;
@@ -1557,17 +1563,25 @@ async function start() {
           // landing on something higher: the view carries on from where the feet were and eases onto it
           player.stepLag += feetNow - support; player.ground = support; player.fall = 0; vertical.touchdown();
         }
+        if (player.ground === support) player.leapt = false;
       } else if (support < player.ground - 1e-4) {
-        player.fall -= 13 * dt;
-        player.ground = Math.max(support, player.ground + player.fall * dt);
-        if (player.ground <= support + 1e-4) { player.ground = support; player.fall = 0; }
-      } else player.fall = 0;
+        // jumped off an edge (a desk, a crate): the jump's arc carries on from the height it left, so it reaches
+        // as high as it would have from there (onto a crate stack); once it's back down to that height the fall
+        // goes on at the speed the arc was coming down
+        if (vertical.lift > 1e-4) { player.fall = 0; player.leapt = true; }
+        else {
+          if (player.leapt) { player.fall = Math.min(player.fall, -4 * (vertical.pose.jumpPower || 1)); player.leapt = false; }
+          player.fall -= 13 * dt;
+          player.ground = Math.max(support, player.ground + player.fall * dt);
+          if (player.ground <= support + 1e-4) { player.ground = support; player.fall = 0; }
+        }
+      } else { player.fall = 0; player.leapt = false; }
       // a short drop just smooths down; a real one is a fall (no jumping mid-air)
       vertical.setFalling(player.fall < -1.2 || (player.fall < 0 && vertical.lift <= 1e-4 && player.ground - support > STEP_UP));
       player.stepLag *= Math.exp(-dt * 14);
     }
     // (read again: a touchdown just now ended the jump's lift)
-    player.y = player.ground + vertical.eye + player.stepLag;
+    player.y = Math.min(player.ground + vertical.eye + player.stepLag, ceilingAt(player.x, player.z) - .1);   // never through the ceiling
     const h = held(), holding = !!h;
     if (!input.firing) fireLatch = false;
     if (h?.state.type === 'paintball' && input.firing && !fireLatch && !frozen) shoot();

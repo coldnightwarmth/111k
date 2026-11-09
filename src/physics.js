@@ -6,7 +6,7 @@
 // into a grid so only the ones nearby are tested.
 const LITTER = .12;          // shorter than this: not there at all
 export const STEP_UP = .2;   // walk straight up onto tops this far above your feet
-const WALKABLE = 1.25;       // tops up to this height can be stood on
+const WALKABLE = 1.5;        // tops up to this height can be stood on (two crates stacked: 1.44)
 const HEAD = 1.5;            // things hanging higher than this above your feet don't block you
 const CELL = 4;
 
