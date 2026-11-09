@@ -33,12 +33,34 @@ export function createControls({canvas, isTouch, onToggleView, onJump, onChat, o
   document.addEventListener('contextmenu', e => { if (state.locked || e.target === canvas) e.preventDefault(); });
   document.addEventListener('pointerlockchange', () => {
     state.locked = document.pointerLockElement === canvas;
+    if (state.locked) { lockedAt = performance.now(); last = 0; held = null; }
     if (!state.locked) { keys.clear(); state.firing = false; }
     onLockChange?.(state.locked);
   });
+  // Now and then the mouse's movement comes in as one huge jump that never happened: a long-standing Chrome
+  // bug when it re-centres the hidden cursor (worse when the page is busy: more players, lower frame rate),
+  // and the first move after the mouse is captured can carry the cursor's whole trip to the middle. Taken
+  // as it comes, that's a sudden half-turn (about 1400 px is 180 degrees here). Such a jump stands alone,
+  // where a real flick builds up and carries on: so a move far bigger than the one before is held back
+  // for one event, and only goes through if the next one carries on the same way. A big move straight
+  // after capturing the mouse is dropped.
+  const SPIKE_PX = 250, SPIKE_RATIO = 8, SETTLE_MS = 150;
+  let last = 0, lastMoveAt = 0, lockedAt = 0, held = null;
   document.addEventListener('mousemove', e => {
     if (!state.locked) return;
-    look(e.movementX * .0022, e.movementY * .0022);
+    const dx = e.movementX || 0, dy = e.movementY || 0, m = Math.hypot(dx, dy), t = performance.now();
+    last *= Math.exp(-(t - lastMoveAt) / 300);           // the move before, fading as it stops
+    lastMoveAt = t;
+    if (t - lockedAt < SETTLE_MS && m > 60) { held = null; return; }
+    let goesOn = false;
+    if (held) {                                           // a big jump just now: real if this carries on from it
+      goesOn = dx * held.dx + dy * held.dy > 0 && m * 4 >= held.m;
+      if (goesOn) look(held.dx * .0022, held.dy * .0022);
+      held = null;
+    }
+    if (!goesOn && m > SPIKE_PX && m > SPIKE_RATIO * Math.max(last, 30)) { held = {dx, dy, m}; return; }
+    last = m;
+    look(dx * .0022, dy * .0022);
   });
   function look(dx, dy) {
     state.yaw -= dx;
@@ -66,7 +88,8 @@ export function createControls({canvas, isTouch, onToggleView, onJump, onChat, o
   canvas.addEventListener('pointerdown', e => {
     if (e.pointerType !== 'touch') return;
     state.touch = true; document.body.classList.add('touch');
-    if (lookId !== null) return;
+    // (a finger whose lift went missing, its id since reused: start again from where this one is, not jump)
+    if (lookId !== null && e.pointerId !== lookId) return;
     lookId = e.pointerId; lastX = e.clientX; lastY = e.clientY; canvas.setPointerCapture(e.pointerId);
   });
   // looking: the finger can be anywhere once it's down (so a thumb that pressed jump or punch
