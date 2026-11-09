@@ -1651,6 +1651,7 @@ async function start() {
     const camWorld = camera.getWorldPosition(new THREE.Vector3());
     if (boom) me.ghostFor(camWorld, dt);
     me.ghostNear(boom); meView.ghostNear(false);
+    me.drawOrder(camWorld); meView.drawOrder(camWorld);   // see-through bodies after the walls' paint, far ones first
     // remote peers
     const serverNow = network.now();
     for (const p of peers.values()) {
@@ -1665,6 +1666,7 @@ async function start() {
       p.avatar.update(pdt, v, {...s, holding: !!items.heldBy(p.id), emoteConfig});
       p.avatar.ghostNear(true);            // walking into someone dissolves them, first person too
       p.avatar.ghostFor(camWorld, pdt);
+      p.avatar.drawOrder(camWorld);
       doors.push(s.x, s.z, v * pdt * Math.sin(-s.yaw), 0, p.id);
       if (p.bubble && serverNow > p.bubbleExpires) { p.bubble.dispose(); p.bubble = null; }
       if (p.bubble || p.typing) {

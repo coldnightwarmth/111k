@@ -31,7 +31,7 @@ function createPortraits() {
   function extent(root) {
     let reach = 0, top = -Infinity, bottom = Infinity;
     root.traverse(o => {
-      if (!o.isMesh) return;
+      if (!o.isMesh || o.userData.shell) return;   // (a ghost body's depth twins: the same vertices again)
       const pos = o.geometry.attributes.position;
       for (let i = 0; i < pos.count; i++) {
         v.fromBufferAttribute(pos, i);

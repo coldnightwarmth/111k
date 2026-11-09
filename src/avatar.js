@@ -252,6 +252,36 @@ export async function createAvatar(look, {waitForEmotes = false} = {}) {
     else if (!o.material.isShaderMaterial) o.material = ghostMaterial(o.material, ghostOwn);
   });
   model.traverse(o => { if (o.isMesh) o.frustumCulled = false; });
+  // See-through bodies (the ghost body style) don't write depth, and three.js orders see-through meshes by their
+  // origin, which every part of a skinned body shares: so its head, hood, hands and tail drew in whatever order
+  // they were made in, the far ones over the near. Each ghost part gets an invisible twin that only writes depth
+  // and draws just before the whole body does (shells, below): then only the nearest ghost surface shows at each
+  // pixel, the same every frame. (drawOrder, each frame, puts the body after the paint and graffiti on the walls.)
+  const shells = [], seeThrough = [];
+  const shellMat = ghostMaterial(new THREE.MeshLambertMaterial({colorWrite: false, transparent: true,   // (Lambert: the dither needs its view position)
+    polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1}), ghostOwn);
+  const skipMat = new THREE.MeshBasicMaterial({visible: false});
+  model.traverse(o => {
+    if (!o.isMesh || o.userData.shell) return;
+    const mats = [o.material].flat();
+    if (!mats.some(m => m.transparent)) return;
+    seeThrough.push(o);
+    if (!mats.some(m => m.userData.drifGhost)) return;
+    const pick = m => (m.userData.drifGhost ? shellMat : skipMat);
+    const shell = o.isSkinnedMesh ? new THREE.SkinnedMesh(o.geometry, Array.isArray(o.material) ? mats.map(pick) : pick(o.material))
+      : new THREE.Mesh(o.geometry, Array.isArray(o.material) ? mats.map(pick) : pick(o.material));
+    if (o.isSkinnedMesh) { shell.bindMode = o.bindMode; shell.bind(o.skeleton, o.bindMatrix); }
+    // the body's own geometry, whatever it is now (first person trims the head off it; the dinosaur suit its tail)
+    Object.defineProperty(shell, 'geometry', {get: () => o.geometry, set() {}});
+    shell.userData = {shell: true, noHit: true}; shell.raycast = () => {};
+    shell.frustumCulled = false;
+    o.add(shell); shells.push(shell);
+  });
+  const setOrder = order => {
+    for (const s of shells) s.renderOrder = order - 1e-6;
+    for (const o of seeThrough) o.renderOrder = order;
+  };
+  setOrder(5);
   model.scale.setScalar(AVATAR_SCALE); model.rotation.y = Math.PI;
   const root = new THREE.Group(); root.name = 'avatar'; root.add(model);
   // the body's extent (around its root, before it moves), for telling when the camera is inside it
@@ -384,6 +414,15 @@ export async function createAvatar(look, {waitForEmotes = false} = {}) {
     // dissolve the whole avatar while the camera is inside it (eased in and out)
     // dither away the faces close to the camera (instead of the near plane slicing through them)
     ghost: ghostOwn,   // its dither uniforms (a crown on its head dissolves with it)
+    // where its see-through parts come among the scene's: after the paint and graffiti on walls (2-4), before the
+    // placing guides (6+); farther bodies first, so a nearer one is seen over them. Paint on it comes just after.
+    drawOrder(cameraPos) {
+      if (!seeThrough.length && !this.paint?.length) return;
+      root.getWorldPosition(camLocal);
+      const order = 5 + .9 / (1 + camLocal.distanceTo(cameraPos));
+      setOrder(order);
+      for (const p of this.paint || []) p.renderOrder = order + 1e-6;
+    },
     ghostNear(on) { ghostOwn.ghostOn.value = on ? 1 : 0; },
     ghostFor(cameraPos, dt) {
       root.updateMatrixWorld(); camLocal.copy(cameraPos); root.worldToLocal(camLocal); camLocal.y -= model.position.y;
