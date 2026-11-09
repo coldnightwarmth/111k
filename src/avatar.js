@@ -198,6 +198,20 @@ function withoutHead(mesh) {
   return geo;
 }
 
+// The ghost body style (cards.art's): its one see-through surface is made as dense as about two and a half of
+// them stacked, the deeper purple its overlapping inner layers used to add up to before only the nearest one
+// showed (the shells in createAvatar). Leaves every other finish alone.
+const GHOST_ALPHA = 'diffuseColor.a *= 0.16 + 0.84 * drifRim;';
+function deepGhost(material) {
+  const before = material.onBeforeCompile, key = material.customProgramCacheKey;
+  material.onBeforeCompile = (shader, renderer) => {
+    before?.call(material, shader, renderer);
+    shader.fragmentShader = shader.fragmentShader.replace(GHOST_ALPHA, GHOST_ALPHA + '\ndiffuseColor.a = 1.0 - pow(1.0 - clamp(diffuseColor.a, 0.0, 1.0), 2.5);');
+  };
+  material.customProgramCacheKey = () => key.call(material) + '|deep';
+  return material;
+}
+
 // Apply camera aim to the head after the clip mixer, restoring the untouched
 // pose before the next mixer tick so rotations never accumulate.
 function createLookPose(model) {
@@ -248,8 +262,8 @@ export async function createAvatar(look, {waitForEmotes = false} = {}) {
   const ghostOwn = {ghostAll: {value: 0}, ghostOn: {value: 0}};
   model.traverse(o => {
     if (!o.isMesh) return;
-    if (Array.isArray(o.material)) o.material = o.material.map(m => m.isShaderMaterial ? m : ghostMaterial(m, ghostOwn));
-    else if (!o.material.isShaderMaterial) o.material = ghostMaterial(o.material, ghostOwn);
+    if (Array.isArray(o.material)) o.material = o.material.map(m => m.isShaderMaterial ? m : deepGhost(ghostMaterial(m, ghostOwn)));
+    else if (!o.material.isShaderMaterial) o.material = deepGhost(ghostMaterial(o.material, ghostOwn));
   });
   model.traverse(o => { if (o.isMesh) o.frustumCulled = false; });
   // See-through bodies (the ghost body style) don't write depth, and three.js orders see-through meshes by their
