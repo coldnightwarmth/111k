@@ -509,7 +509,7 @@ def paper(cv, mask, color, r, wrinkle=0.5, torn=True):
 
 
 def poster(lines, r, kind='type', width_m=0.7, font_kind='black', ink=BLACK, sheet=PAPER, small=None, line_gap=1.12,
-           margin=0.1):
+           margin=0.1, panel=True):
     """A wheatpasted print. kind: 'type' (ink on paper), anything else is just the colours given.
     (Spray mode: a sprayed panel with big sprayed block letters on it.)"""
     if SPRAY:
@@ -532,6 +532,13 @@ def poster(lines, r, kind='type', width_m=0.7, font_kind='black', ink=BLACK, she
     sheet_mask[5:5 + H, 5:5 + W] = True
     if not SPRAY:
         cv.over(BLACK, ndimage.gaussian_filter(shift(sheet_mask, 1, 2).astype(float), 1.5) * 0.25)
+    if SPRAY and not panel:                # no panel at all: just the words, edged in what was the panel's colour
+        tmp = G.Canvas(cv.w, cv.h)
+        place(tmp, m, WHITE, cv.w / 2, 5 + mh)
+        words = tmp.a > 0.5
+        flat(cv, dilate(words, max(2.0, m.shape[0] * 0.03)), sheet)
+        flat(cv, words, ink)
+        return light_drips(cv, sheet, r, dilate(words, 2), rate=0.1)
     sheet_mask = paper(cv, sheet_mask, sheet, r)
     place(cv, m, ink, cv.w / 2, 5 + mh, 0.93)
     if sm is not None:
@@ -927,8 +934,14 @@ def speech(lines, r, kind='round', fill=WHITE, line=BLACK, ink=BLACK, height_m=0
 def arc_text(cv, text, kind, cap, cx, cy, radius, centre_angle, color, inside=False):
     """letters set round a circle (centre_angle in radians, 0 = right, -pi/2 = top)"""
     f = font(kind, cap_size(kind, cap))
-    widths = [f.getlength(c) + cap * 0.12 for c in text]
+    widths = [f.getlength(c) + cap * (0.12 + G.KERN) for c in text]
     total = sum(widths) / radius
+    if G.KERN and total > math.pi * 0.9:   # spaced out past half the ring: set smaller so it still fits its half
+        k = math.pi * 0.9 / total
+        cap *= k
+        f = font(kind, cap_size(kind, cap))
+        widths = [f.getlength(c) + cap * (0.12 + G.KERN) for c in text]
+        total = sum(widths) / radius
     a = centre_angle - total / 2 * (-1 if inside else 1)
     for c, w in zip(text, widths):
         step = w / radius * (-1 if inside else 1)
@@ -1204,11 +1217,11 @@ def build_third(seed=11, only=None):
     add('tk_ethereum', lambda r: ticker(['ETHEREUM'], r, color=(0.45, 0.8, 1.0), arrow='up'))
     add('rb_ethereum', lambda r: ribbon('ethereum', LILAC, GRAPE, r, 0.3))
     # crucify him
-    add('ps_crucifyhim', lambda r: poster(['CRUCIFY', 'HIM'], r, width_m=1.24, sheet=BLACK, ink=PAPER))
+    add('ps_crucifyhim', lambda r: poster(['CRUCIFY', 'HIM'], r, width_m=1.7, sheet=BLACK, ink=PAPER, panel=False))
     add('ch_crucifyhim', lambda r: chalk(['crucify him'], r, 0.255, colors=[(0.96, 0.95, 0.9)]))
     # round n round n round
     add('rb_roundnround', lambda r: ribbon('round n round\nn round', TANGERINE, BROWN, r, 0.24))
-    add('ne_roundnround', lambda r: neon('round n round n round', HOTPINK, r, 0.2))
+    # (ne_roundnround: remade after the 9 Nov review, see tools/graffiti_fourth.py)
     # ah shit here we go again
     add('sb_ahshit', lambda r: speech(['AH SHIT,', 'HERE WE GO', 'AGAIN'], r, 'round', height_m=0.09))
     add('ch_ahshit', lambda r: chalk(['ah shit', 'here we go again'], r, 0.195))
@@ -1229,10 +1242,10 @@ def build_third(seed=11, only=None):
     # ORGANIC EVOLUTION
     add('ps_organicevolution', lambda r: poster(['ORGANIC', 'EVOLUTION'], r, width_m=1.5, font_kind='serif', ink=FOREST,
                                                 sheet=CREAM))
-    add('ht_organicevolution', lambda r: halftone('ORGANIC\nEVOLUTION', LIME, r, 0.2, dot=FOREST))
+    # (ht_organicevolution: remade after the 9 Nov review, see tools/graffiti_fourth.py)
     # buy swag coin now
     add('cx_buyswagcoinnow', lambda r: chart(r, words=['buy swag coin now'], up=True))
-    add('tk_buyswagcoinnow', lambda r: ticker(['BUY SWAG COIN NOW'], r, color=(0.35, 1.0, 0.45), arrow='up'))
+    # (tk_buyswagcoinnow: remade after the 9 Nov review, see tools/graffiti_fourth.py)
     # i miss hikki
     add('ch_imisshikki', lambda r: chalk(['i miss hikki'], r, 0.24, colors=[CHALK[2]], hearts=1))
     add('sl_imisshikki', lambda r: slap('hello', r, lines=['i miss hikki'], color=COBALT, size_m=0.66))
@@ -1247,8 +1260,8 @@ def build_third(seed=11, only=None):
     add('rb_lamb', lambda r: ribbon('lamb', CREAM, BONE, r, 0.42))
     # GUCCI GUCCI LOUISE LOUISE FENDI FENDI PRADA
     add('rn_gucci', lambda r: ransom(['GUCCI GUCCI', 'LOUISE LOUISE', 'FENDI FENDI', 'PRADA'], r, 0.11))
-    add('ps_gucci', lambda r: poster(['GUCCI GUCCI', 'LOUISE LOUISE', 'FENDI FENDI', 'PRADA'], r, width_m=1.24, sheet=PAPER,
-                                     ink=BLACK, font_kind='serif', line_gap=1.2))
+    add('ps_gucci', lambda r: poster(['GUCCI GUCCI', 'LOUISE LOUISE', 'FENDI FENDI', 'PRADA'], r, width_m=1.7, sheet=PAPER,
+                                     ink=BLACK, font_kind='serif', line_gap=1.2, panel=False))
     # lowbie
     add('ht_lowbie', lambda r: halftone('lowbie', SKY, r, 0.34, dot=COBALT, shadow=NAVY))
     add('sl_lowbie', lambda r: slap('vinyl', r, text='lowbie', color=HOTPINK, ink=WHITE, size_m=0.65))
@@ -1284,16 +1297,16 @@ def build_third(seed=11, only=None):
     add('mo_gottamint', lambda r: mosaic(['GOTTA MINT', "'EM ALL"], r, 0.04, 7, colors=(RED, WHITE), shade=BLACK))
     # BORN TO MON WORLD IS A MANA
     add('ch_borntomon', lambda r: chalk(['BORN TO MON', 'WORLD IS A MANA'], r, 0.18, upper=True))
-    add('ps_borntomon', lambda r: poster(['BORN TO MON', 'WORLD IS A MANA'], r, width_m=1.24, sheet=OXBLOOD, ink=PAPER))
+    add('ps_borntomon', lambda r: poster(['BORN TO MON', 'WORLD IS A MANA'], r, width_m=2.0, sheet=OXBLOOD, ink=PAPER, panel=False))
     # GAN
     add('gl_gan', lambda r: glitch('GAN', r, LIME, 0.45))
     add('bb_gan', lambda r: blockbuster('GAN', MINT, BLACK, r, 0.55, fill2=TEAL, shadow=WHITE, cut=BLACK))
     # generative adversarial network
-    add('gl_gan_long', lambda r: glitch('generative\nadversarial\nnetwork', r, WHITE, 0.15, kind='mono'))
-    add('tk_gan_long', lambda r: ticker(['GENERATIVE', 'ADVERSARIAL', 'NETWORK'], r, color=MAGENTA, dot_m=0.022))
+    # (gl_gan_long: remade after the 9 Nov review, see tools/graffiti_fourth.py)
+    # (tk_gan_long: remade after the 9 Nov review, see tools/graffiti_fourth.py)
     # OLD MODELS :)
-    add('mo_oldmodels', lambda r: mosaic(['OLD MODELS :)'], r, 0.048, 7, colors=(SKY, WHITE), shade=NAVY))
-    add('sb_oldmodels', lambda r: speech(['OLD MODELS :)'], r, 'round', height_m=0.12))
+    # (mo_oldmodels: remade after the 9 Nov review, see tools/graffiti_fourth.py)
+    # (sb_oldmodels: remade after the 9 Nov review, see tools/graffiti_fourth.py)
     # no i did not anticipate this
     add('sb_noididnot', lambda r: speech(['NO I DID NOT', 'ANTICIPATE THIS'], r, 'round', height_m=0.09, tail='right'))
     add('rn_noididnot', lambda r: ransom(['no i did not', 'anticipate this'], r, 0.11))
@@ -1304,7 +1317,7 @@ def build_third(seed=11, only=None):
     add('rb_swagbound', lambda r: ribbon('SWAGBOUND', GOLD, BROWN, r, 0.26, script=False))
     add('gl_swagbound', lambda r: glitch('SWAGBOUND', r, GOLD, 0.26))
     # J48BAFORMS
-    add('gl_j48baforms', lambda r: glitch('J48BAFORMS', r, MINT, 0.22, kind='mono'))
+    # (gl_j48baforms: remade after the 9 Nov review, see tools/graffiti_fourth.py)
     add('mo_j48baforms', lambda r: mosaic(['J48BAFORMS'], r, 0.042, 7, colors=(LIME, MINT), frame=CHARCOAL, back=BLACK))
     # BONK
     add('sb_bonk', lambda r: speech(['BONK!'], r, 'shout', fill=ORANGE, height_m=0.2))
@@ -1320,8 +1333,7 @@ def build_third(seed=11, only=None):
                                       scrawl=['surely i can', 'go faster']))
     add('ch_topspeed', lambda r: chalk(['top speed record 202mph', 'surely i can go faster'], r, 0.165, underline=True))
     # counter-terrorists win! (redone from the earlier batch's throw-up, in a new style)
-    add('bb_counterterroristswin', lambda r: blockbuster('COUNTER-\nTERRORISTS WIN!', SKY, NAVY, r, 0.3, fill2=WHITE,
-                                                         shadow=BLACK, streak=0.35, drips=0.2))
+    # (bb_counterterroristswin: remade after the 9 Nov review, see tools/graffiti_fourth.py)
     # PUMP
     add('cx_pump', lambda r: chart(r, big='PUMP', up=True, n=12))
     add('bb_pump', lambda r: blockbuster('PUMP', LIME, BLACK, r, 0.5, fill2=TOXIC, shadow=FOREST, cut=BLACK))

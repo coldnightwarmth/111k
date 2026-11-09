@@ -24,11 +24,15 @@ import graffiti_third as T
 from graffiti_more import (BLACK, WHITE, SILVER, CHARCOAL, BLOOD, OXBLOOD, BONE, HOTPINK, BUBBLEGUM, LILAC, GRAPE, SKY,
                            COBALT, NAVY, TEAL, LIME, TOXIC, FOREST, MINT, YELLOW, GOLD, ORANGE, TANGERINE, RED, CREAM,
                            BROWN, MAUVE, STRAIGHT, WILD, SEMI, ANGTHROW, paint_mask, spray_paths, stack, trim, paste, add_drips)
+from graffiti_third import MAGENTA as MAGENTA_
 from graffiti_third import type_masks, crop_masks, dilate, erode, shift, noise, rough, mix, hand_strokes, stroke_mask
 
 PX = G.PX_PER_M
 CAUTION = (0.98, 0.8, 0.08)
 G.GLYPHS.setdefault('>', [[(0.0, 0.85), (0.45, 0.5), (0.0, 0.15)]])      # (for ASUKA > REI)
+# a G that stays a G in fat bubble letters: the top left open, a square spur down the right, a clear crossbar
+CLEAR_G = {'G': [[(0.66, 0.92), (0.4, 1.0), (0.1, 0.88), (0.0, 0.5), (0.1, 0.1), (0.38, 0.0), (0.72, 0.0), (0.72, 0.4),
+                  (0.36, 0.4)]]}
 
 
 def spray(cv, mask, color, r, soft=1.0, mist=1.2, streak=0.2, opacity=1.0):
@@ -278,6 +282,9 @@ def rng(name, seed):
     return np.random.default_rng(zlib.crc32(name.encode()) + seed * 104729)
 
 
+# after review (/graffiti, 9 Nov): letters spaced out, and remade without drips
+KERN4 = {'sc_psuedointellectual', 'sc_secretlyfamous', 'sc_stolenimages', 'ci_swagworld'}
+NODRIPS4 = {'ol_source', 'bb_spx111111'}
 THIRD_FAMILIES = {'bb', 'sl', 'ps', 'rn', 'mo', 'tk', 'ne', 'gl', 'ht', 'ch', 'sb', 'sg', 'cx', 'rb'}
 
 
@@ -290,14 +297,14 @@ def build_fourth(seed=13, only=None):
             return
         r = rng(name, seed)
         T.SPRAY, T._R = name.split('_')[0] in THIRD_FAMILIES, np.random.default_rng(zlib.crc32(name.encode()) + 23)
+        G.NODRIPS, G.KERN = name in NODRIPS4, G.KERN_SPACE if name in KERN4 else 0.0
         try:
             P[name] = trim(fn(r), 6)
         finally:
-            T.SPRAY = False
+            T.SPRAY, G.NODRIPS, G.KERN = False, False, 0.0
 
     # paint me like one of your old models
     add('sc_paintmelike', lambda r: G.scrawl(['paint me like one', 'of your old models'], HOTPINK, r, 0.16, 0.016, drips=0.2))
-    add('ab_paintmelike', lambda r: airbrush('paint me like one\nof your old models', BUBBLEGUM, GRAPE, r, 0.18, halo=LILAC))
     # GLUE FACTORY
     add('tu_gluefactory', lambda r: G.piece('GLUE\nFACTORY', WHITE, BLACK, r, 0.42, shadow=SKY, shine=None, **ANGTHROW))
     add('vt_gluefactory', lambda r: vertical('GLUE FACTORY', CREAM, BROWN, r, 0.24, shadow=BLACK))
@@ -306,12 +313,11 @@ def build_fourth(seed=13, only=None):
                                              block=NAVY, **SEMI))
     add('ci_imagecollider', lambda r: circle(('IMAGE COLLIDER', None), SKY, r, 0.5, middle='tracks', accent=TANGERINE))
     # BACON
-    add('bb_bacon', lambda r: T.blockbuster('BACON', (0.85, 0.35, 0.3), OXBLOOD, r, 0.45, fill2=(0.98, 0.8, 0.7), shadow=BLACK,
-                                            streak=0.35, drips=0.2))
     add('dt_bacon', lambda r: dot_letters('BACON', [(0.98, 0.78, 0.68), (0.8, 0.3, 0.25)], r, 0.45, outline=OXBLOOD,
                                           base=(0.9, 0.5, 0.42)))
     # EGGS
-    add('tu_eggs', lambda r: G.piece('EGGS', WHITE, BLACK, r, 0.55, shadow=YELLOW, fat=0.2, shine=None))
+    add('tu_eggs', lambda r: G.piece('EGGS', WHITE, BLACK, r, 0.55, shadow=YELLOW, fat=0.14, shine=None, glyphs=CLEAR_G,
+                                     spacing=0.16))
     add('ab_eggs', lambda r: airbrush('EGGS', WHITE, YELLOW, r, 0.4, halo=GOLD, keyline=ORANGE, script=False))
     # retarded psuedointellectual bullshit (spelled as given)
     add('sc_psuedointellectual', lambda r: G.scrawl(['retarded', 'psuedointellectual', 'bullshit'], BLACK, r, 0.15, 0.015, drips=0.25))
@@ -334,7 +340,6 @@ def build_fourth(seed=13, only=None):
     add('sn_admiresgod', lambda r: M.cutstencil('SOMEONE WHO\nADMIRES GOD', BLACK, r, 0.15, fade=0.05))
     # sometimes we're all gay
     add('ch_sometimesgay', lambda r: T.chalk(["sometimes we're", 'all gay'], r, 0.2))
-    add('bf_sometimesgay', lambda r: M.busflow("SOMETIMES WE'RE ALL GAY", HOTPINK, r, 0.24, 0.015, outline=BLACK))
     # GAYMER
     add('pc_gaymer', lambda r: G.piece('GAYMER', HOTPINK, BLACK, r, 0.5, fill_style='stripes', fill2=SKY, shadow=BLACK, block=GRAPE,
                                        **SEMI))
@@ -347,7 +352,6 @@ def build_fourth(seed=13, only=None):
     add('sh_hehe', lambda r: shadow_letters('HEHE', HOTPINK, r, 0.45, brush='round'))
     # damn bro
     add('sb_damnbro', lambda r: T.speech(['DAMN BRO'], r, 'shout', fill=WHITE, height_m=0.14))
-    add('bf_damnbro', lambda r: M.busflow('DAMN BRO', COBALT, r, 0.32, 0.018))
     # flipper
     add('bf_flipper', lambda r: M.busflow('FLIPPER', TEAL, r, 0.34, 0.018, outline=BLACK))
     add('vt_flipper', lambda r: vertical('FLIPPER', SKY, NAVY, r, 0.24, shadow=WHITE))
@@ -377,12 +381,10 @@ def build_fourth(seed=13, only=None):
                                     **STRAIGHT))
     add('sh_lsw', lambda r: shadow_letters('LSW', GOLD, r, 0.6))
     # it's a swag world after all
-    add('ab_swagworld', lambda r: airbrush("it's a swag world\nafter all", GOLD, ORANGE, r, 0.2, halo=YELLOW))
     add('ci_swagworld', lambda r: circle(("IT'S A SWAG WORLD", 'AFTER ALL'), GOLD, r, 0.48, middle='globe', accent=YELLOW,
                                          inner=COBALT))
     # TRADING ROOM FLOOR
     add('cx_tradingroomfloor', lambda r: T.chart(r, big='TRADING ROOM FLOOR', up=False, n=16))
-    add('pl_tradingroomfloor', lambda r: M.placa('TRADING\nROOM FLOOR', BLACK, r, 0.22, shadow=BLOOD))
     # SPX111111
     add('tk_spx111111', lambda r: T.ticker(['SPX111111'], r, color=(0.35, 1.0, 0.45), arrow='up'))
     add('bb_spx111111', lambda r: T.blockbuster('SPX111111', LIME, BLACK, r, 0.36, fill2=TOXIC, shadow=FOREST, streak=0.35, drips=0.2))
@@ -393,13 +395,10 @@ def build_fourth(seed=13, only=None):
     add('tag_tbh', lambda r: G.tag('#tbh', BLACK, r, height_m=0.35, width_m=0.022, flourish='underline'))
     add('mk_tbh', lambda r: G.marker('', COBALT, r, 0.2, lines=['#tbh']))
     # we would like to take a moment to acknowledge that we are standing on stolen images
-    add('ps_stolenimages', lambda r: T.poster(['WE WOULD LIKE TO TAKE A MOMENT', 'TO ACKNOWLEDGE THAT WE ARE',
-                                               'STANDING ON STOLEN IMAGES'], r, width_m=1.7, sheet=CREAM, ink=BLACK, line_gap=1.25))
     add('sc_stolenimages', lambda r: G.scrawl(['we would like to take a moment', 'to acknowledge that we are standing',
                                               'on stolen images'], BLACK, r, 0.12, 0.013, drips=0.15))
     # DO NOT ENTER THE PORTAL
     add('hz_donotenter', lambda r: hazard(['DO NOT ENTER', 'THE PORTAL'], r, 1.2))
-    add('sn_donotenter', lambda r: M.cutstencil('DO NOT ENTER\nTHE PORTAL', BLACK, r, 0.16, fade=0.05))
     # the other side has some dope art bro you should visit sometime
     add('ch_otherside', lambda r: T.chalk(['the other side has some dope art bro', 'you should visit sometime'], r, 0.15))
     add('sb_otherside', lambda r: T.speech(['THE OTHER SIDE HAS SOME', 'DOPE ART BRO YOU SHOULD', 'VISIT SOMETIME'], r, 'round',
@@ -416,10 +415,33 @@ def build_fourth(seed=13, only=None):
     add('dt_source', lambda r: dot_letters('SOURCE', [WHITE, SKY], r, 0.4, base=TEAL))
     # read rudolf steiner
     add('sn_rudolfsteiner', lambda r: M.cutstencil('READ\nRUDOLF STEINER', BLACK, r, 0.16, fade=0.05))
-    add('ch_rudolfsteiner', lambda r: T.chalk(['read rudolf steiner'], r, 0.2))
     # FRAZETTA
-    add('pl_frazetta', lambda r: M.placa('FRAZETTA', BLACK, r, 0.3, shadow=GOLD))
-    add('sh_frazetta', lambda r: shadow_letters('FRAZETTA', BLOOD, r, 0.4))
+    # ---- remade after the 9 Nov review, each in some other style (the old names are gone from the cans)
+    add('rb_paintmelike', lambda r: T.ribbon('paint me like one\nof your old models', BUBBLEGUM, GRAPE, r, 0.2))
+    add('rb_bacon', lambda r: T.ribbon('BACON', (0.95, 0.55, 0.45), OXBLOOD, r, 0.42, script=False))
+    add('tu_damnbro', lambda r: G.piece('DAMN\nBRO', SKY, BLACK, r, 0.42, shadow=NAVY, shine=WHITE, **ANGTHROW))
+    add('rl_donotenter', lambda r: G.roller('DO NOT ENTER\nTHE PORTAL', BLOOD, r, 0.3))
+    add('pc_frazetta', lambda r: G.piece('FRAZETTA', GOLD, BLACK, r, 0.5, fill_style='fade', fill2=BLOOD, shadow=BLACK, block=OXBLOOD,
+                                         **SEMI))
+    add('rb_frazetta', lambda r: T.ribbon('Frazetta', GOLD, BROWN, r, 0.4))
+    add('tu_rudolfsteiner', lambda r: G.piece('READ RUDOLF\nSTEINER', CREAM, FOREST, r, 0.32, shadow=BLACK, shine=None, **ANGTHROW))
+    add('rb_sometimesgay', lambda r: T.ribbon("sometimes we're\nall gay", HOTPINK, GRAPE, r, 0.24))
+    add('ch_stolenimages', lambda r: T.chalk(['we would like to take a moment', 'to acknowledge that we are', 'standing on stolen images'],
+                                             r, 0.14))
+    add('tu_swagworld', lambda r: G.piece("IT'S A SWAG WORLD\nAFTER ALL", GOLD, BLACK, r, 0.26, fill_style='fade', fill2=ORANGE,
+                                          shadow=BLACK, shine=WHITE, **ANGTHROW))
+    add('bb_tradingroomfloor', lambda r: T.blockbuster('TRADING\nROOM FLOOR', LIME, BLACK, r, 0.32, fill2=FOREST, shadow=WHITE,
+                                                       streak=0.35, drips=0.15))
+    # (from the third batch: the digital-looking ones as actual graffiti)
+    add('ol_counterterroristswin', lambda r: M.outline3d('COUNTER-\nTERRORISTS WIN!', BLACK, r, 0.3, fill=SKY, block_fill=None))
+    add('ol_gan_long', lambda r: M.outline3d('GENERATIVE\nADVERSARIAL\nNETWORK', BLACK, r, 0.22, fill=MAGENTA_, block_fill=None))
+    add('sn_gan_long', lambda r: M.cutstencil('GENERATIVE\nADVERSARIAL\nNETWORK', BLACK, r, 0.22, fade=0.05))
+    add('tu_j48baforms', lambda r: G.piece('J48BAFORMS', MINT, BLACK, r, 0.38, shadow=TEAL, shine=WHITE, **ANGTHROW))
+    add('tu_buyswagcoinnow', lambda r: G.piece('BUY SWAG\nCOIN NOW', LIME, BLACK, r, 0.34, shadow=FOREST, shine=WHITE, fat=0.15))
+    add('tu_oldmodels', lambda r: G.piece('OLD MODELS :)', SKY, BLACK, r, 0.36, shadow=WHITE, shine=None, fat=0.15))
+    add('ch_oldmodels', lambda r: T.chalk(['old models :)'], r, 0.22))
+    add('rb_organicevolution', lambda r: T.ribbon('organic\nevolution', LIME, FOREST, r, 0.26))
+    add('ci_roundnround', lambda r: circle(('ROUND N ROUND N', 'ROUND'), HOTPINK, r, 0.45, middle='tracks', accent=BUBBLEGUM))
     return P
 
 
