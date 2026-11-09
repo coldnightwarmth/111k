@@ -61,6 +61,9 @@ h1 { margin: 0 6px 0 0; font-size: 13px; font-weight: 600; letter-spacing: .16em
 .meta .name { font-weight: 600; word-break: break-all; }
 .chip { font-size: 10px; letter-spacing: .06em; padding: 1px 7px; border-radius: 99px; border: 1px solid var(--line); color: var(--dim); }
 .chip.walls { border-color: rgba(255, 207, 90, .35); }
+.meta .png { margin-left: auto; font-size: 10px; letter-spacing: .06em; padding: 2px 9px; border-radius: 6px; border: 1px solid var(--line); background: transparent; color: var(--dim); }
+.meta .png:hover { color: var(--ink); border-color: var(--ink); }
+#downloadAll:disabled { opacity: .7; cursor: progress; }
 .states { display: flex; flex-wrap: wrap; gap: 4px; }
 .states button { flex: 1 1 auto; padding: 6px 8px; border-radius: 6px; border: 1px solid var(--line); background: transparent; color: var(--dim); }
 .states button:hover { color: var(--ink); }

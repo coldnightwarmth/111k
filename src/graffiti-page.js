@@ -78,6 +78,67 @@ function draw(canvas, piece, pages, w, h, upTo = 1) {
   g.drawImage(img, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
 }
 
+// ------------------------------------------------------------------ downloads
+// a piece as a png at its full resolution (the atlas holds every piece 1:1 as it was rendered)
+function pieceBlob(piece) {
+  const img = pages.get(String(piece.page));
+  const [u0, v0, u1, v1] = piece.uv;
+  const sx = Math.round(Math.min(u0, u1) * img.width), sy = Math.round(Math.min(v0, v1) * img.height);
+  const sw = Math.round(Math.abs(u1 - u0) * img.width), sh = Math.round(Math.abs(v1 - v0) * img.height);
+  const c = document.createElement('canvas'); c.width = sw; c.height = sh;
+  c.getContext('2d').drawImage(img, sx, sy, sw, sh, 0, 0, sw, sh);
+  return new Promise((ok, bad) => c.toBlob(b => (b ? ok(b) : bad(Error('png'))), 'image/png'));
+}
+function saveFile(blob, name) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob); a.download = name;
+  document.body.append(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+}
+// a zip of files kept as they are (pngs don't squeeze any further), made here so nothing extra is loaded
+const CRC = new Uint32Array(256).map((_, n) => { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; return c; });
+const crc32 = bytes => { let c = ~0; for (let i = 0; i < bytes.length; i++) c = CRC[(c ^ bytes[i]) & 255] ^ (c >>> 8); return ~c >>> 0; };
+function zip(files) {          // [{name, bytes}]
+  const enc = new TextEncoder(), now = new Date();
+  const time = (now.getHours() << 11) | (now.getMinutes() << 5) | (now.getSeconds() >> 1);
+  const date = ((now.getFullYear() - 1980) << 9) | ((now.getMonth() + 1) << 5) | now.getDate();
+  const parts = [], dir = [];
+  let at = 0;
+  for (const f of files) {
+    const name = enc.encode(f.name), crc = crc32(f.bytes), n = f.bytes.length;
+    const head = new DataView(new ArrayBuffer(30));
+    [[0, 0x04034b50, 4], [4, 20, 2], [6, 0x0800, 2], [8, 0, 2], [10, time, 2], [12, date, 2], [14, crc, 4], [18, n, 4], [22, n, 4], [26, name.length, 2], [28, 0, 2]]
+      .forEach(([o, v, w]) => (w === 4 ? head.setUint32(o, v, true) : head.setUint16(o, v, true)));
+    const cen = new DataView(new ArrayBuffer(46));
+    [[0, 0x02014b50, 4], [4, 20, 2], [6, 20, 2], [8, 0x0800, 2], [10, 0, 2], [12, time, 2], [14, date, 2], [16, crc, 4], [20, n, 4], [24, n, 4], [28, name.length, 2],
+      [30, 0, 2], [32, 0, 2], [34, 0, 2], [36, 0, 2], [38, 0, 4], [42, at, 4]].forEach(([o, v, w]) => (w === 4 ? cen.setUint32(o, v, true) : cen.setUint16(o, v, true)));
+    parts.push(head, name, f.bytes); dir.push(cen, name);
+    at += 30 + name.length + n;
+  }
+  const size = dir.reduce((t, d) => t + d.byteLength, 0), end = new DataView(new ArrayBuffer(22));
+  [[0, 0x06054b50, 4], [4, 0, 2], [6, 0, 2], [8, files.length, 2], [10, files.length, 2], [12, size, 4], [16, at, 4], [20, 0, 2]]
+    .forEach(([o, v, w]) => (w === 4 ? end.setUint32(o, v, true) : end.setUint16(o, v, true)));
+  return new Blob([...parts, ...dir, end], {type: 'application/zip'});
+}
+let zipping = false;
+async function downloadAll() {
+  if (zipping || !all.length) return;
+  zipping = true;
+  const button = $('downloadAll'), was = button.textContent;
+  button.disabled = true;
+  try {
+    const files = [];
+    for (const [i, p] of all.entries()) {
+      if (i % 10 === 0) { button.textContent = `zipping ${i} / ${all.length}`; await new Promise(r => setTimeout(r)); }
+      files.push({name: `111k-graffiti/${p.name}.png`, bytes: new Uint8Array(await (await pieceBlob(p)).arrayBuffer())});
+    }
+    saveFile(zip(files), `111k-graffiti-${new Date().toISOString().slice(0, 10)}.zip`);
+  } catch (err) {
+    console.error(err); setStatus(`couldn't make the zip (${err.message || err})`, 'err');
+  } finally { button.textContent = was; button.disabled = false; zipping = false; }
+}
+$('downloadAll').addEventListener('click', downloadAll);
+
 // ------------------------------------------------------------------ the review
 let review = cleanReview(null), all = [], pages = null, filter = 'all', query = '';
 const entry = name => review.pieces[name] || {};
@@ -227,7 +288,10 @@ function build() {
     const st = document.createElement('span'); st.className = 'chip'; st.textContent = STYLE[p.name.split('_')[0]] || p.name.split('_')[0];
     const src = document.createElement('span'); src.className = `chip${p.walls ? ' walls' : ''}`; src.textContent = p.walls ? 'on the walls' : 'cans only';
     const size = document.createElement('span'); size.className = 'chip'; size.textContent = `${p.w.toFixed(2)} × ${p.h.toFixed(2)} m`;
-    meta.append(nm, st, src, size);
+    const png = document.createElement('button'); png.type = 'button'; png.className = 'png'; png.textContent = 'png';
+    png.title = 'download this one as a png, full resolution';
+    png.addEventListener('click', async () => { try { saveFile(await pieceBlob(p), `${p.name}.png`); } catch { setStatus("couldn't make that png", 'err'); } });
+    meta.append(nm, st, src, size, png);
     const states = document.createElement('div'); states.className = 'states';
     for (const s of REVIEW_STATUSES) {
       const b = document.createElement('button'); b.type = 'button'; b.dataset.s = s; b.textContent = LABEL[s];
@@ -309,11 +373,7 @@ function exportDoc() {
   };
 }
 $('download').addEventListener('click', () => {
-  const blob = new Blob([JSON.stringify(exportDoc(), null, 2)], {type: 'application/json'});
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob); a.download = `111k-graffiti-review-${new Date().toISOString().slice(0, 10)}.json`;
-  document.body.append(a); a.click(); a.remove();
-  setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+  saveFile(new Blob([JSON.stringify(exportDoc(), null, 2)], {type: 'application/json'}), `111k-graffiti-review-${new Date().toISOString().slice(0, 10)}.json`);
 });
 $('import').addEventListener('click', () => $('importFile').click());
 $('importFile').addEventListener('change', async e => {
