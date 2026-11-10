@@ -40,6 +40,12 @@ you hold · right click (or F) drops it.
 
 On phones: left stick moves, drag to look, buttons for the rest.
 
+Voice chat (the mic button, top left, or the start screen): you always hear players near you, from where they
+stand. Your mic (M) is opt-in. So is text-to-speech, which reads your chat messages out from your avatar like
+your mic would, in one of two voices each: Hugo (higher) or Bruno (lower) for a Drifella, Kiki or Rosie for a
+Drilady. The voices are KittenTTS nano running in the browser (`src/tts-worker.js`, `assets/tts/`), and are
+only downloaded (about 35 MB) when someone turns it on.
+
 Debug URL params: `?view=3p`, `?cam=x,z,yaw,pitch`, `?exposure=1.2`,
 `?server=wss://…`, `?pick=auto&name=…` (skip the picker with a random avatar).
 
@@ -184,6 +190,7 @@ src/                      client (ES modules, no bundler)
   decals.js  doors.js     paint and tags on the level, swinging doors
   picker.js  looks.js     avatar picker, random looks; cards/ = cards.art appearance code
   net.js     chat.js      websocket client, chat log + bubbles
+  voice.js   tts*.js      proximity voice chat, text-to-speech for chat
   controls.js             keyboard/mouse and touch input
   protocol.js             message validation shared with the server
 server/
@@ -193,4 +200,6 @@ server/
 tools/                    asset pipeline (python + blender)
 assets/                   built models, lightmaps, level data
 vendor/three/             three.js r165
+vendor/onnxruntime/       ONNX Runtime Web 1.22 (wasm), for text-to-speech
+vendor/phonemizer/        phonemizer.js (eSpeak NG), text to phonemes for text-to-speech
 ```

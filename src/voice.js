@@ -2,7 +2,10 @@
 // room server only passes the setup notes along). Two players link up within CONNECT metres
 // when at least one of them has their mic on, and drop past DROP. Each voice plays from that player's head through a 3D panner,
 // fades with distance, and is muffled when a wall is in the way.
+// Text-to-speech rides the same links: with it on, your chat messages are read out in your avatar's voice
+// (src/tts.js) and mixed into what you send, so they come from your head like your mic would.
 import * as THREE from 'three';
+import {createTTS, RATE} from './tts.js';
 
 const CONNECT = 30, DROP = 40, FADE_FROM = 24;
 // Public STUN servers find a direct route for most networks. Strict ones (some offices,
@@ -12,11 +15,12 @@ const KEY = '111k:voice';
 const isChromium = !!(navigator.userAgentData?.brands || []).find(b => /Chromium|Google Chrome|Edge/.test(b.brand)) || /Chrome\//.test(navigator.userAgent);
 
 function loadPrefs() {
-  const prefs = {mic: false, deviceId: '', volume: 1};
+  const prefs = {mic: false, deviceId: '', volume: 1, tts: false, ttsPitch: 'lower'};
   try {
     const saved = JSON.parse(localStorage.getItem(KEY) || '{}');
     if (saved.mic === undefined && saved.on) saved.mic = !saved.muted;   // from when voice had an on switch
-    Object.assign(prefs, {mic: !!saved.mic, deviceId: saved.deviceId || '', volume: Number.isFinite(saved.volume) ? saved.volume : 1});
+    Object.assign(prefs, {mic: !!saved.mic, deviceId: saved.deviceId || '', volume: Number.isFinite(saved.volume) ? saved.volume : 1,
+      tts: !!saved.tts, ttsPitch: saved.ttsPitch === 'higher' ? 'higher' : 'lower'});
   } catch {}
   return prefs;
 }
@@ -35,6 +39,11 @@ export function createVoice() {
   const changed = () => { save(); for (const f of listeners) f(api); };
   let ctx = null, master = null, mic = null, micSource = null, micAnalyser = null, micError = '';
   let send = null, myId = () => '';
+  // text-to-speech: what's said plays to you through `speech`, and (unless it's a preview) into `outMix`,
+  // which is what your links send while it's on (your mic goes in there too)
+  let speech = null, sendBus = null, outMix = null, speechEnd = 0;
+  const playing = new Set();
+  const tts = createTTS({onSpeech: (pcm, job) => play(pcm, job), onState: () => changed()});
   const peers = new Map();       // id -> link
   const levelBuf = new Float32Array(512);
 
@@ -46,6 +55,8 @@ export function createVoice() {
     const comp = ctx.createDynamicsCompressor();          // keep a shout from clipping
     comp.threshold.value = -14; comp.ratio.value = 4;
     master.connect(comp);
+    speech = ctx.createGain(); speech.connect(master);
+    sendBus = ctx.createGain(); outMix = ctx.createMediaStreamDestination(); sendBus.connect(outMix);
     if (isChromium) {
       // Chrome's echo cancellation only hears audio played through WebRTC, not Web Audio, so
       // the spatial mix goes round a local loopback link into an <audio> element.
@@ -83,8 +94,8 @@ export function createVoice() {
       micSource?.disconnect();
       micSource = audio().createMediaStreamSource(mic);
       micAnalyser = ctx.createAnalyser(); micAnalyser.fftSize = 512;
-      micSource.connect(micAnalyser);
-      for (const p of peers.values()) p.sender?.replaceTrack(track).catch(() => {});
+      micSource.connect(micAnalyser); micSource.connect(sendBus);
+      retrack();
     } catch (err) {
       // no mic (or no permission): you can still listen
       micError = err?.name === 'NotAllowedError' ? 'mic blocked: allow it in the browser to talk' : 'no mic found';
@@ -95,9 +106,36 @@ export function createVoice() {
   }
   function closeMic() {
     mic?.getTracks().forEach(t => t.stop()); mic = null; micSource?.disconnect(); micSource = null; micAnalyser = null;
-    for (const p of peers.values()) p.sender?.replaceTrack(null).catch(() => {});
+    retrack();
   }
-  const micTrack = () => mic?.getAudioTracks()[0] || null;
+  // what the links send: the mic as it is, or with text-to-speech on, the mix of it and the speech
+  const outTrack = () => prefs.tts && outMix ? outMix.stream.getAudioTracks()[0] : mic?.getAudioTracks()[0] || null;
+  const retrack = () => { for (const p of peers.values()) p.sender?.replaceTrack(outTrack()).catch(() => {}); };
+
+  // ------------------------------------------------------- text-to-speech
+  // drifella: hugo (higher) or bruno (lower); drilady: kiki or rosie
+  const voiceFor = kind => kind === 'drilady' ? (prefs.ttsPitch === 'higher' ? 'kiki' : 'rosie') : (prefs.ttsPitch === 'higher' ? 'hugo' : 'bruno');
+  function play(pcm, job) {
+    if (!pcm.length) return;
+    const c = audio();
+    const buf = c.createBuffer(1, pcm.length, RATE); buf.copyToChannel(pcm, 0);
+    const src = c.createBufferSource(); src.buffer = buf;
+    src.connect(speech); if (job.send) src.connect(sendBus);
+    const at = Math.max(c.currentTime + .03, speechEnd);       // back to back, in order
+    src.start(at); speechEnd = at + buf.duration;
+    src.job = job; src.end = speechEnd; playing.add(src);
+    src.onended = () => { playing.delete(src); src.disconnect(); };
+  }
+  function hush(pred) {
+    tts.cancel(pred);
+    for (const src of [...playing]) if (pred(src.job)) { try { src.stop(); } catch {} playing.delete(src); src.disconnect(); }
+    speechEnd = Math.max(0, ...[...playing].map(src => src.end));
+  }
+  function preview(kind) {
+    hush(job => !job.send);                    // a new preview cuts off the last
+    const v = voiceFor(kind);
+    tts.say('hi, this is how i sound.', v, {send: false});
+  }
 
   // ---------------------------------------------------------------- links
   function link(id, initiator) {
@@ -111,7 +149,7 @@ export function createVoice() {
     };
     if (initiator) {
       p.sender = pc.addTransceiver('audio', {direction: 'sendrecv'}).sender;
-      p.sender.replaceTrack(micTrack()).catch(() => {});
+      p.sender.replaceTrack(outTrack()).catch(() => {});
       (async () => {
         const offer = await pc.createOffer(); offer.sdp = stereoOpus(offer.sdp);
         await pc.setLocalDescription(offer);
@@ -158,7 +196,7 @@ export function createVoice() {
         p = link(from, false);
         await p.pc.setRemoteDescription(d.sdp);
         const tr = p.pc.getTransceivers()[0];
-        if (tr) { tr.direction = 'sendrecv'; p.sender = tr.sender; await p.sender.replaceTrack(micTrack()); }
+        if (tr) { tr.direction = 'sendrecv'; p.sender = tr.sender; await p.sender.replaceTrack(outTrack()); }
         const answer = await p.pc.createAnswer(); answer.sdp = stereoOpus(answer.sdp);
         await p.pc.setLocalDescription(answer);
         send({type: 'rtc', to: from, d: {sdp: {type: answer.type, sdp: answer.sdp}}});
@@ -188,6 +226,29 @@ export function createVoice() {
     get hasMic() { return !!mic; },
     get error() { return micError; },
     get talking() { return !!mic && micAnalyser && rms(micAnalyser) > .08; },
+    // something to send: your mic, or text-to-speech ready to read your messages out
+    get sending() { return api.micOn || prefs.tts; },
+    get ttsOn() { return prefs.tts; },
+    get ttsPitch() { return prefs.ttsPitch; },
+    get ttsState() { return tts.state; },      // idle, loading, ready or error
+    // kind: whose voice the preview's in (drifella or drilady)
+    setTTS(on, kind) {
+      prefs.tts = !!on;
+      audio(); api.unlock?.(); ctx.resume();
+      if (on) { tts.warm(); preview(kind); } else hush(() => true);
+      retrack(); changed();
+    },
+    setTTSPitch(pitch, kind) {
+      prefs.ttsPitch = pitch === 'higher' ? 'higher' : 'lower';
+      if (prefs.tts) preview(kind);
+      changed();
+    },
+    // read a chat message out (if text-to-speech is on) in that kind of avatar's voice
+    say(text, kind) {
+      if (!prefs.tts) return;
+      audio(); ctx.resume();
+      tts.say(text, voiceFor(kind));
+    },
     onChange(f) { listeners.add(f); return () => listeners.delete(f); },
     unlock: null,
     // talking is opt-in; hearing others is always on
@@ -207,7 +268,7 @@ export function createVoice() {
     // how loud someone is right now (0..1), for the speaking marker over their head
     levelOf(id) { return peers.get(id)?.level || 0; },
     // join the room's signalling once connected
-    attach(sendFn, idFn) { send = sendFn; myId = idFn; },
+    attach(sendFn, idFn) { send = sendFn; myId = idFn; if (prefs.tts) { audio(); tts.warm(); } },
     signal,
     // once a frame: who to link with, where everyone is, what's between you
     update({camera, peers: others, hits}) {
@@ -222,7 +283,7 @@ export function createVoice() {
         } else { L.setPosition(camPos.x, camPos.y, camPos.z); L.setOrientation(fwd.x, fwd.y, fwd.z, up.x, up.y, up.z); }
       }
       const seen = new Set();
-      const talking = api.micOn;
+      const talking = api.sending;
       for (const o of others) {
         const d = Math.hypot(o.x - camPos.x, o.z - camPos.z);
         const wanted = talking || !!o.vc;            // someone in the pair has something to say
@@ -256,14 +317,21 @@ export function createVoice() {
 
 // ------------------------------------------------------------------- panel
 // The same small panel on the start screen and the Esc screen: you always hear people near
-// you; your mic is up to you.
-// checkbox: the mic toggle as a checkbox labelled "enable mic" (the start screen) rather than a button that says what it'll do
-export function voicePanel(voice, {checkbox = false} = {}) {
+// you; your mic and text-to-speech are up to you.
+// kind: which avatar's voices to offer (drifella or drilady), asked whenever they're needed
+let panels = 0;
+export function voicePanel(voice, {kind = () => 'drifella'} = {}) {
   const el = document.createElement('section');
   el.className = 'voice-panel';
+  const group = `tts-pitch-${++panels}`;
   el.innerHTML = `
     <h2>voice chat</h2>
-    <button type="button" class="row toggle on"><span class="label">enable mic</span> <kbd>M</kbd></button>
+    <button type="button" class="row toggle tts" role="checkbox"><span class="label">text-to-speech</span></button>
+    <div class="row pitch" role="radiogroup" aria-label="voice">
+      <label><input type="radio" name="${group}" value="higher"><span>higher</span></label>
+      <label><input type="radio" name="${group}" value="lower"><span>lower</span></label>
+    </div>
+    <button type="button" class="row toggle on" role="checkbox"><span class="label">enable mic</span> <kbd>M</kbd></button>
     <div class="more">
       <label class="row"><span>mic</span><select class="mic"><option value="">default mic</option></select></label>
       <div class="meter" aria-hidden="true"><i></i></div>
@@ -271,8 +339,8 @@ export function voicePanel(voice, {checkbox = false} = {}) {
     <label class="row"><span>voices</span><input type="range" class="vol" min="0" max="1.5" step="0.05"></label>
     <p class="note"></p>`;
   const $ = s => el.querySelector(s);
-  if (checkbox) $('.on').setAttribute('role', 'checkbox');
-  const on = $('.on'), mic = $('.mic'), vol = $('.vol'), note = $('.note'), bar = $('.meter i');
+  const on = $('.on'), ttsOn = $('.tts'), mic = $('.mic'), vol = $('.vol'), note = $('.note'), bar = $('.meter i');
+  const pitches = [...el.querySelectorAll('.pitch input')];
   for (const type of ['keydown', 'keyup']) el.addEventListener(type, e => { if (e.key !== 'Escape') e.stopPropagation(); });
   async function fillDevices() {
     const list = await voice.devices();
@@ -281,19 +349,32 @@ export function voicePanel(voice, {checkbox = false} = {}) {
     }));
     mic.value = voice.deviceId && list.some(d => d.deviceId === voice.deviceId) ? voice.deviceId : (list[0]?.deviceId || '');
   }
+  // each choice says whose voice it is (hugo or bruno, kiki or rosie)
+  const NAMES = {drifella: {higher: 'hugo', lower: 'bruno'}, drilady: {higher: 'kiki', lower: 'rosie'}};
+  function names() {
+    const n = NAMES[kind() === 'drilady' ? 'drilady' : 'drifella'];
+    for (const r of pitches) r.parentElement.title = n[r.value];
+  }
   function sync() {
-    on.querySelector('.label').textContent = checkbox || !voice.micOn ? 'enable mic' : 'disable mic';
-    on.setAttribute(checkbox ? 'aria-checked' : 'aria-pressed', voice.micOn ? 'true' : 'false');
+    on.setAttribute('aria-checked', voice.micOn ? 'true' : 'false');
+    ttsOn.setAttribute('aria-checked', voice.ttsOn ? 'true' : 'false');
+    for (const r of pitches) r.checked = r.value === voice.ttsPitch;
     vol.value = voice.volume;
     el.classList.toggle('enabled', voice.micOn);
-    note.textContent = voice.error;              // only when something's wrong with the mic
-    note.hidden = !voice.error;
+    el.classList.toggle('tts-on', voice.ttsOn);
+    // only when something's wrong (or the voices are still on their way)
+    note.textContent = voice.error || (voice.ttsOn && voice.ttsState === 'error' ? "text-to-speech couldn't load" :
+      voice.ttsOn && voice.ttsState === 'loading' ? 'loading voices…' : '');
+    note.hidden = !note.textContent;
   }
   on.addEventListener('click', async () => { await voice.setMicOn(!voice.micOn); fillDevices(); });
+  ttsOn.addEventListener('click', () => voice.setTTS(!voice.ttsOn, kind()));
+  for (const r of pitches) r.addEventListener('change', () => { if (r.checked) voice.setTTSPitch(r.value, kind()); });
+  el.addEventListener('pointerenter', names); el.addEventListener('focusin', names);
   mic.addEventListener('change', () => voice.setDevice(mic.value));
   vol.addEventListener('input', () => voice.setVolume(Number(vol.value)));
   voice.onChange(sync);
-  sync(); fillDevices();
+  sync(); fillDevices(); names();
   navigator.mediaDevices?.addEventListener?.('devicechange', fillDevices);
   // the level meter runs while the panel is on screen
   (function meter() {

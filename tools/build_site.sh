@@ -62,5 +62,7 @@ cat > _site/_headers <<'EOF'
   Cache-Control: public, max-age=86400, stale-while-revalidate=604800
 /assets/avatars/*
   Cache-Control: public, max-age=86400, stale-while-revalidate=604800
+/assets/tts/*
+  Cache-Control: public, max-age=604800, stale-while-revalidate=2592000
 EOF
 echo "built _site (code $V, level $L)"

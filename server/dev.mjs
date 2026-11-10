@@ -18,7 +18,8 @@ const ROOT = resolve(process.env.SITE_ROOT || fileURLToPath(new URL('..', import
 const PORT = Number(process.env.PORT || 8000);
 const TYPES = {'.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css',
   '.json': 'application/json', '.glb': 'model/gltf-binary', '.png': 'image/png', '.webp': 'image/webp',
-  '.jpg': 'image/jpeg', '.svg': 'image/svg+xml', '.ico': 'image/x-icon', '.woff2': 'font/woff2'};
+  '.jpg': 'image/jpeg', '.svg': 'image/svg+xml', '.ico': 'image/x-icon', '.woff2': 'font/woff2',
+  '.wasm': 'application/wasm'};
 
 let emotes = cleanEmoteConfig(null), review = cleanReview(null), errors = [];
 const server = createServer(async (req, res) => {

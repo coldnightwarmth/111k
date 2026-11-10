@@ -120,7 +120,14 @@ async function chooseYourself() {
   if (params.get('pick') === 'auto') return {look: randomLook(Math.random() < .5 ? 'drifella' : 'drilady'), name: params.get('name') || ''};
   // the picker comes up over the black; "going down…" only shows once you've picked
   const last = lastMe.get();
-  const pick = await pickAvatar({previous: last?.look ? cleanLook(last.look) : null, name: last?.name || '', extra: voicePanel(voice, {checkbox: true})});
+  // text-to-speech's voices go with whichever kind of avatar is picked (or the tab you're looking at)
+  const kind = () => {
+    const id = document.querySelector('#picker .card.chosen')?.dataset.id;
+    if (id === 'previous') return last?.look?.character === 'drilady' ? 'drilady' : 'drifella';
+    if (id) return id.split(':')[0];
+    return document.querySelector('#picker .tabs button[aria-selected="true"]')?.dataset.kind || 'drifella';
+  };
+  const pick = await pickAvatar({previous: last?.look ? cleanLook(last.look) : null, name: last?.name || '', extra: voicePanel(voice, {kind})});
   return {look: pick.look, name: sanitizeName(pick.name)};
 }
 
@@ -1371,6 +1378,7 @@ async function start() {
     onChat: m => {
       const own = m.id === network.id;
       chat.record(m.text, {own, hue: hueOf(m.id), name: m.name || ''});
+      if (own) voice.say(m.text, mine.look.character);     // read out (text-to-speech on) from your head to everyone near
       const bubble = createBubble(m.text);
       if (own) { myBubble?.dispose(); myBubble = bubble; myBubbleExpires = m.expiresAt; return; }
       const target = peer(m.id);
@@ -1456,7 +1464,7 @@ async function start() {
   voice.attach(m => network.send(m), () => network.id || '');
   if (voice.wantsMic && !voice.hasMic) voice.setMicOn(true);      // mic on from last time (or just switched on at the door)
   const bubbleLayer = $('bubbles'), micBtn = $('micBtn'), voiceDock = $('voiceDock');
-  voiceDock.append(voicePanel(voice));
+  voiceDock.append(voicePanel(voice, {kind: () => mine.look.character}));
   // the mic icon shows and hides the voice box (M, or the button in the box, turns the mic on and off)
   micBtn.addEventListener('click', () => {
     const open = voiceDock.classList.toggle('open');
@@ -1684,7 +1692,7 @@ async function start() {
     if (now - sentAt >= 1000 / 15 && network.online) {
       const pose = sanitizePose({x: player.x, y: player.y, z: player.z, g: player.ground, pc: chosenPaint, yaw: faceYaw, pitch: facePitch, room: 'office',
         crouch: motion.crouch, jumpTime: motion.jumpTime, jumpPower: motion.jumpPower, emote: player.emote, emoteTime: player.emoteTime,
-        typing: chat.typing, punchTime: player.punchTime, punchHand: player.punchHand, vc: voice.micOn ? 1 : 0});
+        typing: chat.typing, punchTime: player.punchTime, punchHand: player.punchHand, vc: voice.sending ? 1 : 0});
       const key = JSON.stringify(pose);
       if (key !== lastSent) settle = 3;
       if (key !== lastSent || settle > 0) { network.sendPose(pose); if (key === lastSent) settle--; lastSent = key; }
