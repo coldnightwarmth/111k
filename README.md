@@ -46,6 +46,14 @@ your mic would, in one of two voices each: Hugo (higher) or Bruno (lower) for a 
 Drilady. The voices are KittenTTS nano running in the browser (`src/tts-worker.js`, `assets/tts/`), and are
 only downloaded (about 35 MB) when someone turns it on.
 
+Sounds: footsteps, jumps and landings, punches, the spray can, the paintball gun and its splats, the sponge,
+flashlight clicks, picking things up and putting them down, things (paintings especially) clattering as they
+fall, doors, the lap timer, the crown, incoming chat and the tunnel's hum. They're all made in code, nothing
+recorded (`src/sfx-synth.js`), a few fresh takes of each, and play from where they happen like voices do,
+muffled through walls, with some of the tunnel's echo (`src/sfx.js`). "sounds" in the voice box sets their
+volume. `/sfx` (on the GitHub copy) plays every version of every sound; pick one there to hear it in the game
+in that browser, and `PICKS` in `src/sfx.js` is what everyone hears.
+
 Debug URL params: `?view=3p`, `?cam=x,z,yaw,pitch`, `?exposure=1.2`,
 `?server=wss://…`, `?pick=auto&name=…` (skip the picker with a random avatar).
 
@@ -191,6 +199,7 @@ src/                      client (ES modules, no bundler)
   picker.js  looks.js     avatar picker, random looks; cards/ = cards.art appearance code
   net.js     chat.js      websocket client, chat log + bubbles
   voice.js   tts*.js      proximity voice chat, text-to-speech for chat
+  sfx.js     sfx-synth.js sound effects: played in 3D / made from scratch (sfx/ is the page to pick versions)
   controls.js             keyboard/mouse and touch input
   protocol.js             message validation shared with the server
 server/

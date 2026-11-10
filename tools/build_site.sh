@@ -10,7 +10,7 @@
 set -euo pipefail
 V="${1:?usage: build_site.sh <version>}"
 rm -rf _site && mkdir _site
-cp -r index.html 404.html styles.css favicon.svg src vendor assets anim graffiti _site/
+cp -r index.html 404.html styles.css favicon.svg src vendor assets anim graffiti sfx _site/
 [ -f CNAME ] && cp CNAME _site/
 touch _site/.nojekyll
 
@@ -33,11 +33,13 @@ sed -i -E "s#src=\"src/main\.js\"#src=\"src/main.js?v=$V\"#; s#href=\"styles\.cs
 sed -i -E "s#href=\"assets/env/world\.glb\"#href=\"assets/env/world.glb?v=$L\"#" _site/index.html
 grep -q "world.glb?v=$L" _site/index.html
 grep -q "main.js?v=$V" _site/index.html
-# the emote previewer (/anim) and the graffiti review (/graffiti): the same for their script and stylesheet
+# the emote previewer (/anim), the graffiti review (/graffiti) and the sounds (/sfx): the same for their script and stylesheet
 sed -i -E "s#src=\"\.\./src/anim\.js\"#src=\"../src/anim.js?v=$V\"#; s#href=\"anim\.css\"#href=\"anim.css?v=$V\"#" _site/anim/index.html
 grep -q "anim.js?v=$V" _site/anim/index.html
 sed -i -E "s#src=\"\.\./src/graffiti-page\.js\"#src=\"../src/graffiti-page.js?v=$V\"#; s#href=\"graffiti\.css\"#href=\"graffiti.css?v=$V\"#" _site/graffiti/index.html
 grep -q "graffiti-page.js?v=$V" _site/graffiti/index.html
+sed -i -E "s#src=\"\.\./src/sfx-page\.js\"#src=\"../src/sfx-page.js?v=$V\"#; s#href=\"sfx\.css\"#href=\"sfx.css?v=$V\"#" _site/sfx/index.html
+grep -q "sfx-page.js?v=$V" _site/sfx/index.html
 
 # how long browsers may keep things (Cloudflare Pages reads this; GitHub Pages ignores it): the code and the
 # level are asked for by version, so they keep; pictures and avatars a day (then checked again); pages never
@@ -51,6 +53,8 @@ cat > _site/_headers <<'EOF'
 /anim/
   Cache-Control: no-cache
 /graffiti/
+  Cache-Control: no-cache
+/sfx/
   Cache-Control: no-cache
 /src/*
   Cache-Control: public, max-age=604800, immutable

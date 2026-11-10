@@ -23,6 +23,7 @@ import {createWorldHits, cutDecal, createBatch, markMaterial, splatAtlas, splatC
 import {createDoors} from './doors.js';
 import {pickAvatar} from './picker.js';
 import {createVoice, voicePanel} from './voice.js';
+import {createSfx} from './sfx.js';
 import {randomLook, cleanLook} from './looks.js';
 import {cleanEmoteConfig, offeredEmotes} from './emotes.js';
 import {EMOTES, EMOTE_DURATION, PUNCH_COOLDOWN_MS, PUNCH_DURATION, PUNCH_COMBO_MS, SHOT_INTERVAL_MS, SPRAY_INTERVAL_MS, SPRAY_RANGE,
@@ -46,6 +47,7 @@ const store = (s, key) => ({
 });
 const tabMe = store(sessionStorage, '111k:me'), lastMe = store(localStorage, '111k:last');
 const voice = createVoice();   // proximity voice: set up on the start screen or the Esc screen
+const sfx = createSfx(voice);  // the game's sounds (src/sfx.js), out through voice chat's audio
 
 // --------------------------------------------------------------- renderer
 const canvas = $('view');
@@ -152,7 +154,11 @@ async function start() {
   const avatarLights = createAvatarLights(level.meta, scene);
   level.meta.colliders.push(MACHINE_COLLIDER, ...SHELF_COLLIDERS, ...CRATE_COLLIDERS);   // the lap timer, the supply shelves and the crates stand in the level too
   const collider = createCollider(level.meta);
-  const doors = createDoors(level, collider);
+  // a door's sounds come from the middle of its leaf
+  const doors = createDoors(level, collider, (what, d, k) => {
+    const t = d.yaw + d.angle, at = {x: d.hinge[0] + Math.cos(t) * d.width / 2, y: 1.1, z: d.hinge[1] - Math.sin(t) * d.width / 2};
+    sfx.play({open: 'doorOpen', bump: 'doorBump', shut: 'doorShut'}[what], {at, gain: k, key: `door${d.index}`});
+  });
   const hits = createWorldHits(level, doors.doors);
   const machine = createMachine(scene);
   // the lap timer takes tags and paint (all but its display and its button); its paint borrows the baked
@@ -222,6 +228,46 @@ async function start() {
     ground: resumed && Number.isFinite(mine.g) ? mine.g : 0,   // height of whatever's under your feet (floor, pallet, desk)
     fall: 0, stepLag: 0};
   const vertical = createVerticalMovement();
+  // Footsteps, jumps and landings, for you and everyone else alike, from how a body moves: a step every stride
+  // on the ground (longer strides the faster they go, softer crouched), a scuff as they jump, a thud as they come
+  // down (harder from higher). Bunny hopping, each touchdown is a quick tap that rises a little as the run goes on.
+  // b: this body's own record; key: who (null: you)
+  function footfalls(b, x, z, g, lift, crouch, dt, key) {
+    const h = g + lift, now = performance.now();
+    if (b.h === undefined || dt <= 0) { Object.assign(b, {h, x, z, air: false, d: 0, landAt: -1e9, fall: 0, chain: 0}); return; }
+    const vy = (h - b.h) / dt, hs = Math.hypot(x - b.x, z - b.z) / dt;
+    b.h = h; b.x = x; b.z = z;
+    if (hs > 40) return;                                       // (a jump across the map: they've just come back)
+    const at = key ? {x, y: g + .05, z} : null, air = lift > .02 || vy < -2.5;
+    if (air) b.fall = Math.min(b.fall, vy);
+    if (air && !b.air) {                                      // off the ground
+      if (lift > .02) {
+        if (now - b.landAt < 220) b.chain++;                   // straight back up: a hop (its sound's at the touchdown)
+        else { b.chain = 0; sfx.play('jump', {at, key}); }
+      }
+      b.fall = 0;
+    } else if (!air && b.air) {                               // down again
+      const hard = Math.min(1.5, Math.max(.35, -b.fall / 4));
+      if (b.chain) sfx.play('hop', {at, key, gain: .9, rate: 1 + Math.min(b.chain, 12) * .015});
+      else sfx.play('land', {at, key, gain: hard, rate: 1.08 - hard * .1});
+      b.landAt = now; b.d = 0;
+    } else if (!air) {
+      if (hs < .4) b.d = Math.min(b.d, .35);                  // standing: the first step comes soon after setting off
+      else {
+        b.d += hs * dt;
+        const stride = .8 + .08 * hs;
+        if (b.d >= stride) {
+          b.d -= stride;
+          const soft = crouch > .5;
+          sfx.play('step', {at, key, gain: Math.min(1.15, .5 + hs * .12) * (soft ? .45 : 1), rate: soft ? .92 : hs > 4 ? 1.06 : 1});
+        }
+      }
+      if (b.chain && now - b.landAt > 300) b.chain = 0;
+    }
+    b.air = air;
+  }
+  const myFeet = {};
+  let hum = null, humInRoom = null;
   const me = await createAvatar(mine.look);
   scene.add(me.root);
   // first person: a headless copy of you rides the camera so you can see your own punch
@@ -634,7 +680,22 @@ async function start() {
   }
 
   // ------------------------------------------------------------- items
-  const items = createItems({scene, camera, hits, shadows: beamShadows});
+  // things landing, bouncing and tumbling: each sounds like what it's made of
+  const THUNK = {painting: 'thunkWood', crown: 'thunkMetal', spray: 'thunkCan'};
+  const items = createItems({scene, camera, hits, shadows: beamShadows, onImpact: (it, speed, p) =>
+    sfx.play(THUNK[it.state.type] || 'thunkPlastic', {at: {x: p.x, y: p.y, z: p.z}, gain: Math.min(1.3, Math.max(.25, speed / 6)), rate: Math.min(1.1, .9 + speed / 40), key: it.state.id})});
+  // a sound from a player: yours straight to you, anyone else's from where they are (up: how high on them)
+  function hear(name, id, {up = 1.2, ...o} = {}) {
+    if (id === network.id) { sfx.play(name, o); return; }
+    const p = peers.get(id);
+    if (p?.last) sfx.play(name, {...o, at: {x: p.last.x, y: (p.last.g || 0) + up, z: p.last.z}, key: id});
+  }
+  // a sound from an item: from whoever has it, or where it lies
+  function hearItem(name, state, o = {}) {
+    if (state.holder) hear(name, state.holder, o);
+    else sfx.play(name, {...o, at: {x: state.x, y: state.y, z: state.z}, key: state.id});
+  }
+  const MACHINE_AT = {x: BUTTON.x, y: 1.2, z: BUTTON.z};
   // king of the hill, as the server last told it (and when, to run its clocks on)
   let koth = null, kothAt = 0, kothWonAt = -1e9;
   const kothNow = () => koth ? koth.now + (performance.now() - kothAt) : 0;
@@ -677,6 +738,7 @@ async function start() {
     const s = {...t.state};
     learn(`pickup:${s.type}`); fireLatch = true;                 // this click doesn't fire what you picked up
     if (!network.send({type: 'pickup', id: s.id})) return true;
+    sfx.play('grab');
     items.predict(s.id, {holder: network.id, ...(s.type === 'crown' && kothActive(koth) ? {on: true} : {})}, {me: network.id});
     if (s.type === 'painting') tookPainting(s);
     return true;
@@ -697,19 +759,19 @@ async function start() {
   }
   function primary() {
     if (chat.open || !emoteMenu.hidden) return;
-    if (onButton()) { machine.press(); network.send({type: 'button'}); learn('button'); return; }
+    if (onButton()) { machine.press(); sfx.play('button', {at: MACHINE_AT}); network.send({type: 'button'}); learn('button'); return; }
     const h = held();
     if (!h && !lookTarget()) {
       const door = doorTarget();
       if (door !== null) { doors.close(door); network.send({type: 'door', i: door}); learn('door'); return; }
     }
-    if (h?.state.type === 'flashlight') { network.send({type: 'toggle', id: h.state.id, on: !h.state.on}); learn('flashlight'); return; }
+    if (h?.state.type === 'flashlight') { network.send({type: 'toggle', id: h.state.id, on: !h.state.on}); sfx.play('flashlight', {rate: h.state.on ? .92 : 1}); learn('flashlight'); return; }
     if (h?.state.type === 'paintball') { shoot(); return; }
     if (h?.state.type === 'spray') { spray(); return; }
     if (h?.state.type === 'crown') { if (!kothActive(koth)) network.send({type: 'koth'}); learn('koth'); return; }
     if (h?.state.type === 'painting') { const plan = planPlace(h); if (plan) placePainting(h, plan); return; }
     if (h?.state.type === 'bucket') {
-      if (cleanTarget) { network.send({type: 'erase', kind: cleanTarget.kind, id: cleanTarget.id}); items.scrub(h.state.id); learn('scrub'); }
+      if (cleanTarget) { network.send({type: 'erase', kind: cleanTarget.kind, id: cleanTarget.id}); items.scrub(h.state.id); sfx.play('scrub'); learn('scrub'); }
       return;
     }
     if (grab()) return;
@@ -918,6 +980,7 @@ async function start() {
   function placePainting(h, plan) {
     learn('place'); learn('drop');
     if (plan.hung) {
+      sfx.play('place', {at: plan});
       if (sendPlaced(h.state.id, {...plan, hung: true}, null)) items.predict(h.state.id, {holder: null, ...poseFields(plan), hung: true}, {me: network.id});
       return;
     }
@@ -988,6 +1051,7 @@ async function start() {
       Object.assign(msg, {x: r3(f.rest.x), y: r3(f.rest.y), z: r3(f.rest.z), fall: {p: start.toArray().map(r3), v: vel.toArray().map(r3)}});
     }
     if (!network.send(msg)) return;
+    if (!start) sfx.play('place', {at: msg});
     // down (or on its way down) this frame, the server's say-so to follow
     const {type: _t, id: _i, fall, ...pose} = msg;
     items.predict(h.state.id, {holder: null, ...pose, ...(h.state.type === 'painting' ? {roll: 0, hung: false} : {}), ...(h.state.type === 'crown' ? {on: false} : {})},
@@ -999,6 +1063,7 @@ async function start() {
     // keep clicking and the hands alternate, jab-cross; leave it a moment and the next starts from the right
     player.punchHand = now - lastPunch < PUNCH_COMBO_MS ? 1 - player.punchHand : 0;
     lastPunch = now; player.punchTime = 0; player.emote = '';
+    sfx.play('swing', {rate: player.punchHand ? 1.08 : 1});
     // whoever is closest in front of you, within reach
     const yaw = controls.state.yaw, fx = -Math.sin(yaw), fz = -Math.cos(yaw);
     let best = null, bestD = 1.95;
@@ -1059,6 +1124,7 @@ async function start() {
       }
     }
     items.kick(gun.state.id);
+    sfx.play('fire');
     network.send(msg);
   }
   const r3 = x => Math.round(x * 1000) / 1000;
@@ -1254,7 +1320,9 @@ async function start() {
     camera.updateMatrixWorld();
     const msg = planSpray();
     items.shake(can.state.id);
+    sfx.play('rattle');
     if (!msg) return;
+    sfx.play('spray', {delay: .06});
     lastSpray = now;
     const parts = paintingParts('spray', msg, pieceByName.get(msg.piece));
     if (parts.length) msg.parts = parts;
@@ -1313,7 +1381,7 @@ async function start() {
     let p = peers.get(id);
     if (p) return p;
     p = {id, motion: createPoseBuffer(), avatar: null, look: null, lookKey: '', previous: null, lastUpdate: 0, bubble: null,
-      typing: null, hue: hueOf(id), last: null, pendingPaint: []};
+      typing: null, hue: hueOf(id), last: null, pendingPaint: [], punchSeen: -1};
     peers.set(id, p); updateCount();
     return p;
   }
@@ -1360,6 +1428,12 @@ async function start() {
     onLeave: id => removePeer(id),
     onItem: (it, fall, path, refused) => {
       const prev = items.items.get(it.id)?.state, before = prev?.holder;
+      // what others did with it (yours made its sound as you did it)
+      if (prev && !refused) {
+        if (it.holder && it.holder !== before && it.holder !== network.id) hear('grab', it.holder, {up: 1});
+        else if (!it.holder && before && before !== network.id && !fall && !path) sfx.play('place', {at: it, key: it.id});
+        if (it.type === 'flashlight' && !!prev.on !== !!it.on && it.holder !== network.id) hearItem('flashlight', it, {rate: it.on ? 1 : .92});
+      }
       const confirmed = items.update(it, fall, path, refused);
       const after = items.items.get(it.id)?.state.holder;
       if (before === network.id && after !== network.id) toggleGallery(false);
@@ -1369,6 +1443,8 @@ async function start() {
     onPunch: m => {
       // your fist landed: the jolt comes as it connects, not when you swing
       if (m.from === network.id) player.impactIn = Math.max(0, PUNCH_IMPACT - Math.max(0, player.punchTime));
+      // the fist landing (on time for yours; theirs a moment after their swing)
+      hear('hit', m.target, {delay: m.from === network.id ? player.impactIn : .04, up: 1.3});
       if (m.target === network.id) {
         // knocked back, a little hop, and the screen jolts
         player.kx += m.dir[0] * 7.5; player.kz += m.dir[1] * 7.5;
@@ -1379,6 +1455,7 @@ async function start() {
       const own = m.id === network.id;
       chat.record(m.text, {own, hue: hueOf(m.id), name: m.name || ''});
       if (own) voice.say(m.text, mine.look.character);     // read out (text-to-speech on) from your head to everyone near
+      else sfx.play('chat');
       const bubble = createBubble(m.text);
       if (own) { myBubble?.dispose(); myBubble = bubble; myBubbleExpires = m.expiresAt; return; }
       const target = peer(m.id);
@@ -1392,7 +1469,7 @@ async function start() {
       if (m.type === 'door') { doors.close(m.i); return; }
       if (m.type === 'erase') {
         eraseMark(m.kind, m.id);
-        if (m.by !== network.id) { const b = items.heldBy(m.by); if (b) items.scrub(b.state.id); }
+        if (m.by !== network.id) { const b = items.heldBy(m.by); if (b) items.scrub(b.state.id); hear('scrub', m.by, {up: 1}); }
         return;
       }
       if (m.type === 'look' && m.id !== network.id) setLook(peer(m.id), m.look);
@@ -1402,12 +1479,15 @@ async function start() {
         // out of the shooter's barrel as you see it: your view model's, or their avatar's gun
         const gun = items.heldBy(m.from);
         const from = gun?.state.type === 'paintball' && gun.model.visible !== false ? items.tip(gun) : null;
+        if (m.from !== network.id) sfx.play('fire', {at: from || o, key: m.from});       // (yours went off as you clicked)
         launch(o, v, m.c, m.t, () => {
+          const end = simulate(o, v, m.t);
+          if (m.target === network.id) sfx.play('splatBody');
+          else sfx.play(m.target ? 'splatBody' : 'splat', {at: end});
           if (m.hit) { const s = cleanSplat(m.hit); if (s) addSplat({...s, c: m.c, s: m.s}, true); }
           for (const part of m.parts || []) { const s = cleanSplat({...part, c: m.c, s: m.s}); if (s) addSplat(s, true); }
           if (m.target && m.local) {
             const local = {...m.local, c: m.c, s: m.s};
-            const end = simulate(o, v, m.t);
             if (m.target === network.id) {
               paintAvatar(me, local); paintAvatar(meView, local); shake = Math.max(shake, .6);
               // knocked back along the ball's flight (you keep whatever you're holding)
@@ -1426,6 +1506,8 @@ async function start() {
         const name = (id, n) => id === network.id ? 'you' : (n || 'anon');
         const who = name(m.by, m.byName), at = `${who} (${crownTime(m.time || 0)})`;
         const say = text => chat.record(text, {system: true});
+        const tune = {start: 'crownStart', take: 'crownTake', lost: 'crownLost', win: 'crownWin'}[m.event];
+        if (tune) sfx.play(tune);
         if (m.event === 'start') say(`${who} initiated a game of king's crown`);
         else if (m.event === 'grace') say('the game begins!');
         else if (m.event === 'take') say(`${at} got the crown`);
@@ -1437,7 +1519,9 @@ async function start() {
         else if (m.event === 'cancel') say('we wait another day for our king...');
       } else if (m.type === 'race') {
         machine.setRace(m.race);
-        if (m.by && m.by !== network.id) machine.press();
+        if (m.by && m.by !== network.id) { machine.press(); sfx.play('button', {at: MACHINE_AT}); }
+        const tone = {start: 'raceStart', lap: 'lap', finish: 'finish', cancel: 'raceCancel'}[m.event];
+        if (tone && !m.busy) sfx.play(tone, {at: MACHINE_AT, delay: m.event === 'start' ? .12 : 0});
         const who = m.by === network.id ? 'you' : (m.byName || 'anon'), whose = m.by === network.id ? 'your' : `${m.byName || 'anon'}'s`;
         const say = text => chat.record(text, {system: true});
         const splits = m.race.splits || [];
@@ -1452,6 +1536,7 @@ async function start() {
           say(`${who} finished the loop run in ${formatRace(m.race.time)}${laps ? ` (laps ${laps})` : ''}`);
         } else if (m.event === 'cancel') say(m.race.runner === m.by ? `${whose} loop run was called off` : `${who} called off ${m.race.name || 'anon'}'s loop run`);
       } else if (m.type === 'spray') {
+        if (m.from !== network.id) { hear('rattle', m.from, {up: 1.3}); hear('spray', m.from, {up: 1.3, delay: .06}); }
         addSpray(m.mark, true);
         for (const part of m.parts || []) addSpray(part, true);
         const p = peers.get(m.from);
@@ -1462,6 +1547,7 @@ async function start() {
 
   // ------------------------------------------------------------- voice
   voice.attach(m => network.send(m), () => network.id || '');
+  sfx.warm();                     // every sound made ahead, a little at a time
   if (voice.wantsMic && !voice.hasMic) voice.setMicOn(true);      // mic on from last time (or just switched on at the door)
   const bubbleLayer = $('bubbles'), micBtn = $('micBtn'), voiceDock = $('voiceDock');
   voiceDock.append(voicePanel(voice, {kind: () => mine.look.character, preview: false}));
@@ -1621,6 +1707,7 @@ async function start() {
     }
     // (read again: a touchdown just now ended the jump's lift)
     player.y = Math.min(player.ground + vertical.eye + player.stepLag, ceilingAt(player.x, player.z) - .1);   // never through the ceiling
+    footfalls(myFeet, player.x, player.z, player.ground, vertical.lift, vertical.pose.crouch, dt, null);
     const h = held(), holding = !!h;
     if (!input.firing) fireLatch = false;
     if (h?.state.type === 'paintball' && input.firing && !fireLatch && !frozen) shoot();
@@ -1687,6 +1774,11 @@ async function start() {
     firstFrame = false; wasBoom = boom;
     camera.rotation.set(input.pitch + sy, input.yaw + sx, 0);
     camera.updateMatrixWorld();
+    // sound: hear from the camera; less echo in the rooms than the tunnel; the tunnel's hum, always there
+    const inRoom = culler.roomOf(camera.position.x, camera.position.z) >= 0;
+    sfx.frame({camera, hits, inRoom});
+    if (!hum && sfx.running && sfx.ready('hum')) { hum = sfx.loop('hum'); humInRoom = null; }
+    if (hum && inRoom !== humInRoom) { humInRoom = inRoom; hum.gain(inRoom ? .45 : 1); }
 
     // network: 15 Hz while something changes, then 3 settling packets
     if (now - sentAt >= 1000 / 15 && network.online) {
@@ -1712,6 +1804,14 @@ async function start() {
       if (!s) continue;
       p.last = s;
       if (!p.avatar) continue;
+      {
+        const fdt = Math.min(.1, Math.max(0, (now - (p.feetAt || now)) / 1000)); p.feetAt = now;
+        footfalls(p.feet ||= {}, s.x, s.z, s.g || 0, jumpHeight(s.jumpTime ?? -1, s.jumpPower), s.crouch || 0, fdt, p.id);
+        // a punch thrown (its swing; whether it lands is the server's to say: onPunch)
+        const pt = s.punchTime ?? -1;
+        if (pt >= 0 && (p.punchSeen < 0 || pt < p.punchSeen - .05)) hear('swing', p.id, {up: 1.3, rate: s.punchHand ? 1.08 : 1});
+        p.punchSeen = pt;
+      }
       const pdt = Math.min(.1, Math.max(0, (now - (p.lastUpdate || now)) / 1000)); p.lastUpdate = now;
       const v = p.previous && pdt > 0 ? Math.hypot(s.x - p.previous.x, s.z - p.previous.z) / pdt : 0;
       p.previous = s;
@@ -1892,7 +1992,7 @@ async function start() {
     // anyone puts a painting down (it never touches the page's own thread)
     (window.requestIdleCallback || (f => setTimeout(f, 1500)))(() => warmPhysics(), {timeout: 4000});
   }
-  window.__111k = {scene, camera, player, peers, network, renderer, items, controls, hits, doors, me, meView, vertical,
+  window.__111k = {scene, camera, player, peers, network, renderer, items, controls, hits, doors, me, meView, vertical, sfx,
     voice, cleaning, mimic, planPlace, settlePaintings, culler, cullNow: () => { cullStaticNow(); items.frame(frameArgs(0)); }, get cleanTarget() { return cleanTarget; }, splatMarks, sprayMarks, addSplat, doorBatches, setView: v => { thirdPerson = v; }, primary, secondary, shoot, spray, choosePiece, choosePaint, toggleGallery, get pieces() { return pieces; }};
 }
 

@@ -776,7 +776,8 @@ const worn = s => s.type === 'crown' && s.on;
 const _inv = new THREE.Matrix4();
 const _m = new THREE.Matrix4(), _onHead = new THREE.Matrix4(), _eye = new THREE.Vector3();
 
-export function createItems({scene, camera, hits, shadows = null}) {
+// onImpact(item, speed, position): something falling or tumbling hit something (for its sound)
+export function createItems({scene, camera, hits, shadows = null, onImpact = null}) {
   const items = new Map();          // id -> {state, model, kick}
   const spots = [];                 // real spotlights so avatars catch the beams
   const slotOf = new Map(), used = new Array(MAX_FLASHLIGHTS).fill(false);   // torch id -> its beam slot
@@ -847,6 +848,21 @@ export function createItems({scene, camera, hits, shadows = null}) {
     }
     it.state = {...state};
     return it;
+  }
+
+  // While something's falling or tumbling: a sudden change in how it's moving is it hitting something (the
+  // floor, a wall, another painting), the harder the louder. Coming to rest counts too, if it was still going.
+  function bumps(it, p, moving, dt, clock) {
+    if (!moving && !it.was) return;
+    if (it.was && dt > 1e-3) {
+      const vx = (p.x - it.was.x) / dt, vy = (p.y - it.was.y) / dt, vz = (p.z - it.was.z) / dt;
+      if (it.vel) {
+        const dv = Math.hypot(vx - it.vel[0], vy - it.vel[1], vz - it.vel[2]);
+        if (dv > 2.2 && (vy - it.vel[1] > 1.2 || !moving) && clock - (it.bumpAt || 0) > 70) { it.bumpAt = clock; onImpact?.(it, dv, p); }
+      }
+      it.vel = [vx, vy, vz];
+    }
+    if (moving) (it.was ||= new THREE.Vector3()).copy(p); else it.was = it.vel = null;
   }
 
   previews();                          // the pictures' atlas: on its way from the start
@@ -1075,6 +1091,7 @@ export function createItems({scene, camera, hits, shadows = null}) {
               m.position.lerpVectors(f.path[i], f.path[i + 1], k); m.position.y += u.ground;
             }
           }
+          bumps(it, m.position, !!(it.path || it.fall || it.fly), dt, clock);
           m.updateMatrixWorld();
           origin = m.localToWorld(tmpV.copy(u.tip)).clone();
           dir = new THREE.Vector3(0, 0, -1).applyQuaternion(m.getWorldQuaternion(tmpQ));

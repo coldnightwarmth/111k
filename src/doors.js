@@ -4,7 +4,8 @@
 // drifts on with a little momentum, slowed by friction and the floor.
 const BODY = .3;
 
-export function createDoors(level, collider) {
+// onSound(what, door, strength): 'open' (it starts to swing from still), 'bump' (it hits its stop), 'shut' (pulled to)
+export function createDoors(level, collider, onSound = null) {
   const doors = [];
   // each door's leaf parts were exported as meshes named "<material>#<1000 + door number>"
   const parts = new Map();
@@ -115,15 +116,23 @@ export function createDoors(level, collider) {
     close(index) { const d = doors.find(d => d.index === index); if (d) d.closing = true; },
     isOpen(index) { const d = doors.find(d => d.index === index); return !!d && Math.abs(d.angle - (d.closed || 0)) > .04; },
     update(dt) {
+      const now = performance.now();
+      const sound = (what, d, k) => { if (now - (d.soundAt || 0) > 150) { d.soundAt = now; onSound?.(what, d, k); } };
       for (const d of doors) {
         if (d.closing) {                                // eased in like a door closer
           const diff = (d.closed || 0) - d.angle;
           d.w = diff * 5.5;
-          if (Math.abs(diff) < .004) { d.angle = d.closed || 0; d.w = 0; d.closing = false; }
+          if (Math.abs(diff) < .004) { d.angle = d.closed || 0; d.w = 0; d.closing = false; sound('shut', d, 1); }
         }
+        // a door that's been still a moment starting to swing: it creaks
+        if (!d.closing && Math.abs(d.w) > .3 && d.still > .4) sound('open', d, Math.min(1.4, Math.abs(d.w) / 2));
+        d.still = Math.abs(d.w) < .05 ? (d.still || 0) + dt : 0;
         d.angle += d.w * dt;
         d.w *= Math.exp(-dt * 3.2);                    // hinge friction
-        if (d.angle < d.lo || d.angle > d.hi) { d.angle = Math.max(d.lo, Math.min(d.hi, d.angle)); d.w *= -.25; }   // bounce off the stop
+        if (d.angle < d.lo || d.angle > d.hi) {        // bounce off the stop
+          if (Math.abs(d.w) > .4) sound('bump', d, Math.min(1.4, Math.abs(d.w) / 3));
+          d.angle = Math.max(d.lo, Math.min(d.hi, d.angle)); d.w *= -.25;
+        }
         for (const m of d.meshes) m.rotation.y = d.angle;
       }
     },

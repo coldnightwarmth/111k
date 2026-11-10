@@ -15,12 +15,12 @@ const KEY = '111k:voice';
 const isChromium = !!(navigator.userAgentData?.brands || []).find(b => /Chromium|Google Chrome|Edge/.test(b.brand)) || /Chrome\//.test(navigator.userAgent);
 
 function loadPrefs() {
-  const prefs = {mic: false, deviceId: '', volume: 1, tts: false, ttsPitch: 'lower'};
+  const prefs = {mic: false, deviceId: '', volume: 1, sfx: 1, tts: false, ttsPitch: 'lower'};
   try {
     const saved = JSON.parse(localStorage.getItem(KEY) || '{}');
     if (saved.mic === undefined && saved.on) saved.mic = !saved.muted;   // from when voice had an on switch
     Object.assign(prefs, {mic: !!saved.mic, deviceId: saved.deviceId || '', volume: Number.isFinite(saved.volume) ? saved.volume : 1,
-      tts: !!saved.tts, ttsPitch: saved.ttsPitch === 'higher' ? 'higher' : 'lower'});
+      sfx: Number.isFinite(saved.sfx) ? saved.sfx : 1, tts: !!saved.tts, ttsPitch: saved.ttsPitch === 'higher' ? 'higher' : 'lower'});
   } catch {}
   return prefs;
 }
@@ -37,7 +37,7 @@ export function createVoice() {
   const save = () => { try { localStorage.setItem(KEY, JSON.stringify(prefs)); } catch {} };
   const listeners = new Set();
   const changed = () => { save(); for (const f of listeners) f(api); };
-  let ctx = null, master = null, mic = null, micSource = null, micAnalyser = null, micError = '';
+  let ctx = null, master = null, effects = null, mic = null, micSource = null, micAnalyser = null, micError = '';
   let send = null, myId = () => '';
   // text-to-speech: what's said plays to you through `speech`, and (unless it's a preview) into `outMix`,
   // which is what your links send while it's on (your mic goes in there too)
@@ -55,6 +55,7 @@ export function createVoice() {
     const comp = ctx.createDynamicsCompressor();          // keep a shout from clipping
     comp.threshold.value = -14; comp.ratio.value = 4;
     master.connect(comp);
+    effects = ctx.createGain(); effects.gain.value = prefs.sfx; effects.connect(comp);     // the game's sounds (src/sfx.js)
     speech = ctx.createGain(); speech.connect(master);
     sendBus = ctx.createGain(); outMix = ctx.createMediaStreamDestination(); sendBus.connect(outMix);
     if (isChromium) {
@@ -233,6 +234,10 @@ export function createVoice() {
     get micOn() { return prefs.mic && !!mic; },
     get wantsMic() { return prefs.mic; },
     get volume() { return prefs.volume; },
+    get sfxVolume() { return prefs.sfx; },
+    // where the game's sound effects go (src/sfx.js): their own volume, then out with the voices
+    effects() { audio(); return {ctx, out: effects}; },
+    setSfxVolume(v) { prefs.sfx = v; if (effects) effects.gain.setTargetAtTime(v, ctx.currentTime, .05); changed(); },
     get deviceId() { return prefs.deviceId; },
     get hasMic() { return !!mic; },
     get error() { return micError; },
@@ -350,9 +355,10 @@ export function voicePanel(voice, {kind = () => 'drifella', preview = true} = {}
       <div class="meter" aria-hidden="true"><i></i></div>
     </div>
     <label class="row"><span>voices</span><input type="range" class="vol" min="0" max="1.5" step="0.05"></label>
+    <label class="row"><span>sounds</span><input type="range" class="sfx" min="0" max="1.5" step="0.05"></label>
     <p class="note"></p>`;
   const $ = s => el.querySelector(s);
-  const on = $('.on'), ttsOn = $('.tts'), mic = $('.mic'), vol = $('.vol'), note = $('.note'), bar = $('.meter i');
+  const on = $('.on'), ttsOn = $('.tts'), mic = $('.mic'), vol = $('.vol'), sfx = $('.sfx'), note = $('.note'), bar = $('.meter i');
   const pitches = [...el.querySelectorAll('.pitch input')];
   for (const type of ['keydown', 'keyup']) el.addEventListener(type, e => { if (e.key !== 'Escape') e.stopPropagation(); });
   async function fillDevices() {
@@ -372,7 +378,7 @@ export function voicePanel(voice, {kind = () => 'drifella', preview = true} = {}
     on.setAttribute('aria-checked', voice.micOn ? 'true' : 'false');
     ttsOn.setAttribute('aria-checked', voice.ttsOn ? 'true' : 'false');
     for (const r of pitches) r.checked = r.value === voice.ttsPitch;
-    vol.value = voice.volume;
+    vol.value = voice.volume; sfx.value = voice.sfxVolume;
     el.classList.toggle('enabled', voice.micOn);
     el.classList.toggle('tts-on', voice.ttsOn);
     // only when something's wrong (or the voices are still on their way)
@@ -388,6 +394,7 @@ export function voicePanel(voice, {kind = () => 'drifella', preview = true} = {}
   el.addEventListener('pointerenter', names); el.addEventListener('focusin', names);
   mic.addEventListener('change', () => voice.setDevice(mic.value));
   vol.addEventListener('input', () => voice.setVolume(Number(vol.value)));
+  sfx.addEventListener('input', () => voice.setSfxVolume(Number(sfx.value)));
   voice.onChange(sync);
   sync(); fillDevices(); names();
   navigator.mediaDevices?.addEventListener?.('devicechange', fillDevices);
