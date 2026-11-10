@@ -3,9 +3,12 @@
 //  - until the launch (11/11/2026 11:11 am Eastern), the pages show "111k - soon" instead of the game, in the
 //    look of the "going down…" screen; at the launch they open by themselves, nothing to deploy. (The copy on
 //    GitHub Pages isn't behind this, so it stays open for testing.)
+//  - /playtest is the game itself, open before the launch too, on the real server: for playtesters. It's the
+//    same page as /, with <base href="/"> so everything it loads still comes from the site's root. After the
+//    launch it just goes to /.
 //  - Cloudflare doesn't compress .glb models by itself (gzip takes the level from 8.6 MB to 4.4 MB on the way),
 //    and the files under /assets get the same cache headers as _site/_headers gives everything else.
-export const LAUNCH = Date.UTC(2026, 10, 11, 16, 11);      // 11:11 EST (UTC-5) on 11 November 2026
+const LAUNCH = Date.UTC(2026, 10, 11, 16, 11);      // 11:11 EST (UTC-5) on 11 November 2026
 
 const cacheFor = path => (path.startsWith('/assets/env/') ? 'public, max-age=604800, immutable'
   : 'public, max-age=86400, stale-while-revalidate=604800');
@@ -53,6 +56,14 @@ export default {
     const url = new URL(request.url), path = url.pathname, left = LAUNCH - Date.now();
     // the emote previewer and the graffiti review are tools for working on the space: only on the GitHub copy
     if (/^\/(anim|graffiti)(\/|$)/.test(path)) return lost(request, env);
+    if (/^\/playtest(\/|\/index\.html)?$/.test(path)) {
+      if (left <= 0) return Response.redirect(new URL('/', url), 302);
+      const page = await env.ASSETS.fetch(new Request(new URL('/', url)));
+      if (page.status !== 200) return page;
+      const html = (await page.text()).replace(/<head>/i, '<head>\n  <base href="/">');
+      return new Response(request.method === 'HEAD' ? null : html,
+        {headers: {'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-cache', 'X-Robots-Tag': 'noindex'}});
+    }
     if (left > 0 && (request.method === 'GET' || request.method === 'HEAD') && !path.startsWith('/assets/'))
       return new Response(request.method === 'HEAD' ? null : soon(left),
         {headers: {'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'X-Robots-Tag': 'noindex'}});

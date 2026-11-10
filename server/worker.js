@@ -5,8 +5,14 @@ import {INACTIVE_MS, IDLE_RESET_MS, MAX_PLAYERS} from '../src/protocol.js';
 import {cleanEmoteConfig} from '../src/emotes.js';
 import {cleanReview, hiddenPieces} from '../src/review.js';
 import {freshRace, publicRace} from '../src/race.js';
-import {handleMessage, newPlayer, snapshot, freshItems, validItems, releaseItems, letGo, validMarks, marksMessage, itemsAtSpawn,
+import {handleMessage, newPlayer, snapshot, freshItems, freshMarks, validItems, releaseItems, letGo, validMarks, marksMessage, itemsAtSpawn,
   kothTick, kothNext, freshKoth, publicKoth, logError} from './room.js';
+
+// The scene: everything players have done to the space (items moved, pieces sprayed, paint, the level's own
+// graffiti scrubbed off, the lap timer, king of the hill). When this changes, the room starts over once with
+// the space as it was built: bump it and deploy. (The graffiti review and the emote settings stay.)
+//   1: as it was up to the playtest  2: cleared for the playtest on 1-1-1k.online/playtest (9 Nov 2026)
+export const SCENE = 2;
 
 function allowedOrigins(env) {
   const list = (env.ALLOWED_ORIGINS || '').split(',').map(s => s.trim()).filter(Boolean);
@@ -46,8 +52,18 @@ export class Room {
     this.marksTimer = null;
     ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair('ping', 'pong'));
   }
+  // a new SCENE: start over (once, before anything's read)
+  sceneReady() {
+    return this.scene ||= (async () => {
+      if ((await this.ctx.storage.get?.('scene')) === SCENE) return;
+      await this.ctx.storage.put?.({items: freshItems(), marks: freshMarks(), race: freshRace(), koth: freshKoth(), scene: SCENE});
+      await this.ctx.storage.delete?.('left');
+      this.items = this.marks = this.race = this.koth = null;
+    })();
+  }
   // held items are the room's only shared state; they survive hibernation in storage
   async loadItems() {
+    await this.sceneReady();
     if (!this.items) this.items = validItems(await this.ctx.storage.get?.('items'));
     return this.items;
   }
@@ -56,17 +72,20 @@ export class Room {
   async saveItems() { await this.ctx.storage.put?.('items', this.items, {allowUnconfirmed: true}); }
   // paint marks change often; write them at most every few seconds
   async loadMarks() {
+    await this.sceneReady();
     if (!this.marks) this.marks = validMarks(await this.ctx.storage.get?.('marks'));
     return this.marks;
   }
   // the lap timer's state (survives the room sleeping)
   async loadRace() {
+    await this.sceneReady();
     if (!this.race) { const r = await this.ctx.storage.get?.('race'); this.race = r && typeof r.state === 'string' ? r : freshRace(); }
     return this.race;
   }
   async saveRace() { await this.ctx.storage.put?.('race', this.race); }
   // king of the hill (survives the room sleeping too)
   async loadKoth() {
+    await this.sceneReady();
     if (!this.koth) { const k = await this.ctx.storage.get?.('koth'); this.koth = k && typeof k.state === 'string' && k.times ? k : freshKoth(); }
     return this.koth;
   }

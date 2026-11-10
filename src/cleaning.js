@@ -224,6 +224,17 @@ export function createCleaning({level, scene, hits}) {
       if (!hidden.has(id)) collapse(id, true);
       if (glowKey === `baked|${id}`) clearGlow();
     },
+    // exactly these of the level's own pieces scrubbed off: any others scrubbed before come back (the room
+    // starting over puts back what was scrubbed)
+    setErased(ids) {
+      const keep = new Set(ids);
+      for (const id of [...erased]) {
+        if (keep.has(id)) continue;
+        erased.delete(id);
+        if (!hidden.has(id) && baked.has(id)) collapse(id, false);
+      }
+      for (const id of keep) this.eraseBaked(id);
+    },
     // take every placed copy of these pieces off the walls (and put back any no longer listed)
     setHidden(names) {
       for (const [id, entry] of baked) {

@@ -666,3 +666,43 @@ test('client errors: logged by kind with a count, a few per player, read at /err
   const res = await room.fetch(new Request('https://room/errors'));
   assert.deepEqual(await res.json(), []);
 });
+
+test('a new SCENE starts the room over once: items home, no tags or paint, nothing scrubbed; the review stays', async () => {
+  const {SCENE} = await import('../worker.js');
+  const {freshItems} = await import('../room.js');
+  const store = s => {
+    const m = new Map(Object.entries(s));
+    return {alarm: null, setAlarm(t) { this.alarm = t; }, getAlarm() { return this.alarm; },
+      async get(k) { return structuredClone(m.get(k)); },
+      async put(k, v) { if (typeof k === 'object') for (const [a, b] of Object.entries(k)) m.set(a, structuredClone(b)); else m.set(k, structuredClone(v)); },
+      async delete(k) { m.delete(k); }, m};
+  };
+  const lived = () => {
+    const items = freshItems(); items.pt1 = {...items.pt1, x: 1, y: .03, z: 2, tilt: -1.571, hung: false};
+    return {items, review: {hidden: ['some_piece']},
+      marks: {splats: [], sprays: [{p: [1, 1, 1], n: [0, 0, 1], up: [0, 1, 0], piece: 'tag_111k_big', size: 1}], erased: ['baked_1']}};
+  };
+  const room = (storage) => {
+    const sockets = [];
+    const ctx = {getWebSockets: () => sockets.filter(s => !s.closed), acceptWebSocket: ws => sockets.push(ws), setWebSocketAutoResponse() {}, storage};
+    return {room: new Room(ctx), sockets};
+  };
+  // an older scene: starts over
+  const old = store({...lived(), scene: SCENE - 1});
+  let r = room(old);
+  await join(r.room, S1);
+  let msgs = r.sockets[0].messages();
+  const snap = msgs.find(m => m.type === 'state'), marks = msgs.find(m => m.type === 'marks');
+  const pt1 = (snap.items || []).find(i => i.id === 'pt1');
+  assert.deepEqual([pt1.x, pt1.y], [freshItems().pt1.x, freshItems().pt1.y], 'the painting back where it started');
+  assert.deepEqual([marks.sprays.length, marks.splats.length, marks.erased.length], [0, 0, 0], 'no tags, no paint, nothing scrubbed');
+  assert.equal(old.m.get('scene'), SCENE);
+  assert.deepEqual(old.m.get('review'), {hidden: ['some_piece']}, 'the graffiti review stays');
+  // the current scene: left as it is
+  const now = store({...lived(), scene: SCENE});
+  r = room(now);
+  await join(r.room, S2);
+  msgs = r.sockets[0].messages();
+  assert.equal(msgs.find(m => m.type === 'state').items.find(i => i.id === 'pt1').x, 1);
+  assert.equal(msgs.find(m => m.type === 'marks').sprays.length, 1);
+});

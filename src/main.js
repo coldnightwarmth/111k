@@ -524,7 +524,7 @@ async function start() {
     cleaning.forget(kind, id);
   }
   function resetMarks(list) {
-    for (const id of list.erased || []) cleaning.eraseBaked(id);
+    cleaning.setErased(list.erased || []);
     splats.clear(); splatMarks.length = 0;
     for (const d of doorBatches.values()) d.batch.clear();
     for (const b of paintingBatches.values()) b.clear();
