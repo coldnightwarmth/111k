@@ -21,7 +21,7 @@ jobs:
   # walk, pick something up and put it down with no errors). Anything failing stops the deploy.
   deploy:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
@@ -43,3 +43,5 @@ jobs:
           path: _site
       - id: deployment
         uses: actions/deploy-pages@v4
+        with:
+          timeout: 1200000      # GitHub's side is sometimes slow to take the files (its default gives up after 10 minutes)
