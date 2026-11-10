@@ -22,11 +22,34 @@ export function createTTS({onSpeech, onState}) {
         return;
       }
       set('ready');
-      if (data.pcm && job && !job.cancelled) onSpeech(loud(data.pcm), job);
+      if (data.pcm && job && !job.cancelled) onSpeech(loud(trim(data.pcm)), job);
       if (data.done) jobs.delete(data.id);
     };
     worker.onerror = e => { console.warn('tts worker', e.message || e); worker?.terminate(); worker = null; jobs.clear(); set('error'); };
     return worker;
+  }
+  // Every sentence the model says starts with ~.35 s of silence and a breath in, then a moment's quiet before
+  // the words: start just after that quiet (taking a soft first sound like the h of "hey" along), and end
+  // 150 ms after the last of the voice.
+  function trim(pcm) {
+    const W = 240, n = Math.floor(pcm.length / W);             // 10 ms frames
+    if (n < 10) return pcm;
+    const db = new Float32Array(n);
+    for (let f = 0; f < n; f++) {
+      let s = 0; for (let i = f * W; i < (f + 1) * W; i++) s += pcm[i] * pcm[i];
+      db[f] = 10 * Math.log10(s / W + 1e-18);
+    }
+    const top = Math.max(...db);
+    const onset = db.findIndex(v => v >= top - 25);           // the words
+    let gap = onset;
+    while (gap > 0 && db[gap - 1] > top - 52) gap--;           // back through anything soft they start with
+    // (no quiet between breath and words: start just before the words)
+    const start = (onset - gap > 25 ? Math.max(0, onset - 6) : Math.max(0, gap - 1)) * W;
+    let last = n - 1; while (last > onset && db[last] < top - 50) last--;
+    const end = Math.min(pcm.length, (last + 15) * W);
+    const out = pcm.slice(start, end);
+    for (let i = 0; i < Math.min(240, out.length); i++) out[i] *= i / 240;   // (no click as it starts)
+    return out;
   }
   // every voice comes out at about the same loudness
   function loud(pcm) {

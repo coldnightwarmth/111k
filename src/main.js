@@ -1464,7 +1464,7 @@ async function start() {
   voice.attach(m => network.send(m), () => network.id || '');
   if (voice.wantsMic && !voice.hasMic) voice.setMicOn(true);      // mic on from last time (or just switched on at the door)
   const bubbleLayer = $('bubbles'), micBtn = $('micBtn'), voiceDock = $('voiceDock');
-  voiceDock.append(voicePanel(voice, {kind: () => mine.look.character}));
+  voiceDock.append(voicePanel(voice, {kind: () => mine.look.character, preview: false}));
   // the mic icon shows and hides the voice box (M, or the button in the box, turns the mic on and off)
   micBtn.addEventListener('click', () => {
     const open = voiceDock.classList.toggle('open');

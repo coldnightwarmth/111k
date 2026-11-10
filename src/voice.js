@@ -131,10 +131,21 @@ export function createVoice() {
     for (const src of [...playing]) if (pred(src.job)) { try { src.stop(); } catch {} playing.delete(src); src.disconnect(); }
     speechEnd = Math.max(0, ...[...playing].map(src => src.end));
   }
+  // The previews ("hi, this is how i sound.") are made already (assets/tts/preview-*.mp3, a few KB each), so
+  // they play the moment you choose a voice, without waiting on the model.
+  const clips = {};
+  function loadPreviews() {
+    for (const v of ['hugo', 'bruno', 'kiki', 'rosie']) clips[v] ||= fetch(new URL(`../assets/tts/preview-${v}.mp3`, import.meta.url))
+      .then(r => { if (!r.ok) throw new Error(r.status); return r.arrayBuffer(); })
+      .then(b => new OfflineAudioContext(1, 1, RATE).decodeAudioData(b))
+      .then(buf => (clips[v] = buf))
+      .catch(() => (clips[v] = null));          // (then it's made on the spot)
+  }
   function preview(kind) {
     hush(job => !job.send);                    // a new preview cuts off the last
-    const v = voiceFor(kind);
-    tts.say('hi, this is how i sound.', v, {send: false});
+    const v = voiceFor(kind), clip = clips[v];
+    if (clip instanceof AudioBuffer) play(clip.getChannelData(0), {send: false});
+    else tts.say('hi, this is how i sound.', v, {send: false});
   }
 
   // ---------------------------------------------------------------- links
@@ -231,16 +242,17 @@ export function createVoice() {
     get ttsOn() { return prefs.tts; },
     get ttsPitch() { return prefs.ttsPitch; },
     get ttsState() { return tts.state; },      // idle, loading, ready or error
-    // kind: whose voice the preview's in (drifella or drilady)
+    // kind: whose voice to play a short preview in (drifella or drilady), or none for no preview
     setTTS(on, kind) {
       prefs.tts = !!on;
       audio(); api.unlock?.(); ctx.resume();
-      if (on) { tts.warm(); preview(kind); } else hush(() => true);
+      if (on) { tts.warm(); if (kind) preview(kind); } else hush(() => true);
       retrack(); changed();
     },
+    loadPreviews,
     setTTSPitch(pitch, kind) {
       prefs.ttsPitch = pitch === 'higher' ? 'higher' : 'lower';
-      if (prefs.tts) preview(kind);
+      if (prefs.tts && kind) preview(kind);
       changed();
     },
     // read a chat message out (if text-to-speech is on) in that kind of avatar's voice
@@ -319,8 +331,9 @@ export function createVoice() {
 // The same small panel on the start screen and the Esc screen: you always hear people near
 // you; your mic and text-to-speech are up to you.
 // kind: which avatar's voices to offer (drifella or drilady), asked whenever they're needed
+// preview: choosing a voice plays a line in it, just for you (the start screen; in the game it'd talk over things)
 let panels = 0;
-export function voicePanel(voice, {kind = () => 'drifella'} = {}) {
+export function voicePanel(voice, {kind = () => 'drifella', preview = true} = {}) {
   const el = document.createElement('section');
   el.className = 'voice-panel';
   const group = `tts-pitch-${++panels}`;
@@ -368,8 +381,10 @@ export function voicePanel(voice, {kind = () => 'drifella'} = {}) {
     note.hidden = !note.textContent;
   }
   on.addEventListener('click', async () => { await voice.setMicOn(!voice.micOn); fillDevices(); });
-  ttsOn.addEventListener('click', () => voice.setTTS(!voice.ttsOn, kind()));
-  for (const r of pitches) r.addEventListener('change', () => { if (r.checked) voice.setTTSPitch(r.value, kind()); });
+  ttsOn.addEventListener('click', () => voice.setTTS(!voice.ttsOn, preview && kind()));
+  // (click, not change: choosing the voice you already have plays it again)
+  for (const r of pitches) r.addEventListener('click', () => voice.setTTSPitch(r.value, preview && kind()));
+  if (preview) voice.loadPreviews();
   el.addEventListener('pointerenter', names); el.addEventListener('focusin', names);
   mic.addEventListener('change', () => voice.setDevice(mic.value));
   vol.addEventListener('input', () => voice.setVolume(Number(vol.value)));
