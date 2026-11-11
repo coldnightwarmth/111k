@@ -75,6 +75,16 @@ export function createControls({canvas, isTouch, onToggleView, onJump, onChat, o
 
   // ------------------------------------------------------------- touch
   const stick = document.getElementById('stick'), thumb = stick.querySelector('i');
+  // the stick and the buttons sized to the screen (styles.css --ts): as big as fits without them meeting, from a
+  // small phone held upright to a tablet. Upright the cluster's a column 180 wide by 330 high beside the stick
+  // (140); sideways it's 270 square, opposite the stick
+  function fitTouch() {
+    const w = innerWidth, h = innerHeight, upright = h > w;
+    const s = upright ? Math.min((w - 60) / 320, h * .5 / 330) : Math.min((w - 60) / 410, h * .62 / 270);
+    document.documentElement.style.setProperty('--ts', Math.max(.68, Math.min(1.25, s)).toFixed(3));
+  }
+  fitTouch();
+  addEventListener('resize', fitTouch); addEventListener('orientationchange', () => setTimeout(fitTouch, 120));
   let stickId = null, lookId = null, lastX = 0, lastY = 0;
   const stickMove = {x: 0, y: 0};
   function stickAt(e) {

@@ -124,20 +124,19 @@ body.touch #chat .log { pointer-events: auto; touch-action: pan-y; }
 #touch { display: none; }
 body.touch #touch { display: block; }
 body.touch #hint { display: none; }
-#stick { position: fixed; left: max(22px, env(safe-area-inset-left)); bottom: max(26px, env(safe-area-inset-bottom));
-  width: 140px; height: 140px; border-radius: 50%; border: 1px solid var(--line); background: rgba(10, 10, 11, .3); touch-action: none; }
-#stick i { position: absolute; left: 50%; top: 50%; width: 56px; height: 56px; margin: -28px; border-radius: 50%;
+/* Sized to the screen: --ts (set by src/controls.js from the screen's size and which way up it is) scales the stick
+   and the button cluster so they never meet, from a small phone held upright to a tablet. Upright, the cluster is
+   taller and narrower (a column beside the stick) rather than fanned out sideways. */
+:root { --ts: 1; }
+#stick { position: fixed; left: max(calc(22px * var(--ts)), env(safe-area-inset-left)); bottom: max(calc(26px * var(--ts)), env(safe-area-inset-bottom));
+  width: calc(140px * var(--ts)); height: calc(140px * var(--ts)); border-radius: 50%; border: 1px solid var(--line); background: rgba(10, 10, 11, .3); touch-action: none; }
+#stick i { position: absolute; left: 50%; top: 50%; width: calc(56px * var(--ts)); height: calc(56px * var(--ts)); margin: calc(-28px * var(--ts)); border-radius: 50%;
   background: rgba(233, 230, 220, .22); border: 1px solid rgba(233, 230, 220, .4); }
 #stick.active i { background: rgba(233, 230, 220, .38); }
-/* tablets: a bigger stick, further in from the edge */
-@media (min-width: 700px) and (min-height: 500px) {
-  #stick { width: 200px; height: 200px; left: max(36px, env(safe-area-inset-left)); bottom: max(36px, env(safe-area-inset-bottom)); }
-  #stick i { width: 76px; height: 76px; margin: -38px; }
-}
 /* the action cluster: a big main button in the corner, jump beside it, the rest fanned round it
    (--x/--y: centre measured left and up from the cluster's bottom-right corner) */
 #buttons { position: fixed; right: max(14px, env(safe-area-inset-right)); bottom: max(14px, env(safe-area-inset-bottom));
-  width: 270px; height: 270px; pointer-events: none; }
+  width: 270px; height: 270px; pointer-events: none; transform: scale(var(--ts)); transform-origin: bottom right; }
 #buttons button { position: absolute; right: calc(var(--x) - var(--s) / 2); bottom: calc(var(--y) - var(--s) / 2);
   width: var(--s); height: var(--s); border-radius: 50%; padding: 0 calc(var(--s) * .07); pointer-events: auto; box-sizing: border-box;
   border: 1px solid var(--line); background: rgba(10, 10, 11, .45); color: inherit; touch-action: none; overflow: hidden;
@@ -154,22 +153,31 @@ body.touch #hint { display: none; }
 #btnGallery { --x: 226px; --y: 196px; --s: 48px; }
 #btnEmote { --x: 98px; --y: 184px; --s: 50px; }
 #btnChat { --x: 40px; --y: 246px; --s: 44px; }
-@media (min-width: 700px) and (min-height: 500px) {
-  #buttons { transform: scale(1.18); transform-origin: bottom right; }
-}
-@media (max-height: 420px) {
-  #buttons { transform: scale(.86); transform-origin: bottom right; }
+/* upright: a column 180 wide, jump and the main button stacked by the thumb, the rest beside and above */
+@media (orientation: portrait) {
+  #buttons { width: 180px; height: 330px; }
+  #btnJump { --x: 52px; --y: 52px; --s: 88px; }
+  #btnAct { --x: 58px; --y: 150px; --s: 80px; }
+  #btnCrouch { --x: 140px; --y: 34px; --s: 50px; }
+  #btnView { --x: 148px; --y: 100px; --s: 46px; }
+  #btnEmote { --x: 146px; --y: 164px; --s: 46px; }
+  #btnDrop { --x: 136px; --y: 230px; --s: 52px; }
+  #btnGallery { --x: 60px; --y: 236px; --s: 50px; }
+  #btnChat { --x: 66px; --y: 304px; --s: 44px; }
 }
 #btnDrop, #btnGallery { display: none !important; }
 body.holding-spray #btnGallery, body.holding-paint #btnGallery { display: grid !important; }
 body.holding #btnDrop { display: grid !important; }
 body.can-grab #btnAct::after { content: ''; }
-/* touch: the chat sits above the stick (never over it) */
-body.touch #chat { bottom: calc(max(26px, env(safe-area-inset-bottom)) + 154px); width: min(300px, calc(100vw - 330px), 42vw); min-width: 180px; }
+/* touch: the chat sits above the stick and clear of the buttons; the tag label above the buttons */
+body.touch #chat { bottom: calc(max(26px, env(safe-area-inset-bottom)) + 154px * var(--ts) + 12px);
+  width: max(160px, min(300px, calc(100vw - 300px * var(--ts) - 40px), 42vw)); }
 body.touch #chat .log { max-height: min(30vh, calc(100vh - 260px)); }
-@media (min-width: 700px) and (min-height: 500px) {
-  body.touch #chat { bottom: calc(max(36px, env(safe-area-inset-bottom)) + 216px); }
+@media (orientation: portrait) {
+  body.touch #chat { width: max(150px, min(300px, calc(100vw - 210px * var(--ts) - 36px))); }
 }
+body.touch #tagLabel { bottom: calc(max(14px, env(safe-area-inset-bottom)) + 280px * var(--ts)); }
+@media (orientation: portrait) { body.touch #tagLabel { bottom: calc(max(14px, env(safe-area-inset-bottom)) + 340px * var(--ts)); } }
 
 /* ---- loading ---- */
 /* black until the space is really there; "going down…" only once you've picked who you are */
