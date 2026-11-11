@@ -950,3 +950,24 @@ test('the radio: a YouTube or SoundCloud link, only while quiet, five minutes at
   send(b, {type: 'radio', id: 'rd1', url: 'https://soundcloud.com/artist/track'});
   assert.equal(r.play.u, 'https://soundcloud.com/artist/track');
 });
+
+test('someone gone quiet (no word, not even a ping, for 20 s) is let go: everyone sees them leave', async () => {
+  const {room, sockets, ctx} = makeRoom();
+  await join(room, S1); await join(room, S2);
+  const [a, b] = sockets;
+  const pings = new Map([[a, Date.now()], [b, Date.now()]]);
+  ctx.getWebSocketAutoResponseTimestamp = ws => new Date(pings.get(ws));
+  const idB = b.deserializeAttachment().id;
+  await room.alarm();
+  assert.equal(room.players().length, 2, 'both still here');
+  // b's phone goes to sleep: no pings, nothing, for 21 s (a's page keeps pinging)
+  pings.set(b, Date.now() - 21000);
+  for (const ws of [b]) { const p = ws.deserializeAttachment(); p.lastActive -= 21000; p.heard = 0; ws.serializeAttachment(p); }
+  await room.alarm();
+  assert.deepEqual(room.players().map(p => p.id), [a.deserializeAttachment().id]);
+  assert.ok(a.messages().some(m => m.type === 'leave' && m.id === idB));
+  // and when its close comes in afterwards, nothing more happens
+  const before = a.messages().length;
+  await room.webSocketClose(b);
+  assert.equal(a.messages().filter(m => m.type === 'leave').length, a.messages().slice(0, before).filter(m => m.type === 'leave').length);
+});

@@ -2,7 +2,7 @@
 // sending. Ported from the cards.art showroom client.
 const POSE_BUFFER_LIMIT = 64 * 1024;
 const POSE_RETRY_MS = 100;
-const HEARTBEAT_MS = 25000;
+const HEARTBEAT_MS = 6000;      // (the server lets a page go after 20 s without a word: server/worker.js)
 const PONG_TIMEOUT_MS = 15000;
 
 export function connectRoom({url, onState, onPose, onLeave, onChat, onStatus, onItem, onPunch, onMessage}) {

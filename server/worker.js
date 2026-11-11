@@ -2,6 +2,7 @@
 // One Durable Object instance ("public-v1") holds every socket. Hibernating
 // WebSockets plus automatic ping/pong mean an idle room costs nothing.
 import {INACTIVE_MS, IDLE_RESET_MS, MAX_PLAYERS} from '../src/protocol.js';
+const QUIET_MS = 20000, QUIET_CHECK_MS = 7000;     // let go after this long without a word (pages ping every 6 s)
 import {cleanEmoteConfig} from '../src/emotes.js';
 import {cleanReview, hiddenPieces} from '../src/review.js';
 import {freshRace, publicRace} from '../src/race.js';
@@ -104,13 +105,15 @@ export class Room {
     if (this.marksTimer) return;
     this.marksTimer = setTimeout(() => { this.marksTimer = null; this.ctx.storage.put?.('marks', this.marks, {allowUnconfirmed: true}); }, 4000);
   }
-  sockets() { return this.ctx.getWebSockets(); }
+  // (not one that's been let go for going quiet: it can linger in the list a moment while it closes)
+  sockets() { return this.ctx.getWebSockets().filter(ws => !ws.deserializeAttachment()?.gone); }
   players() { return this.sockets().map(ws => ws.deserializeAttachment()).filter(Boolean); }
   send(ws, msg) { try { ws.send(typeof msg === 'string' ? msg : JSON.stringify(msg)); } catch {} }
   broadcast(msg) { const data = JSON.stringify(msg); for (const ws of this.sockets()) this.send(ws, data); }
   async scheduleAlarm() {
     const everyone = this.players(), live = everyone.filter(p => !p.inactive);
     const times = [];
+    if (everyone.length) times.push(Date.now() + QUIET_CHECK_MS);     // (who's gone quiet: alarm)
     if (live.length) times.push(Math.min(...live.map(p => p.lastActive)) + INACTIVE_MS + 1000);
     // items out of place: put them back once the room has been idle long enough
     if (everyone.length && !itemsAtSpawn(await this.loadItems())) times.push(Math.max(...everyone.map(p => p.lastActive)) + IDLE_RESET_MS + 500);
@@ -193,7 +196,9 @@ export class Room {
     this.converter ||= {entry: '', busyUntil: 0, id: null};     // (the keypad: kept while the room's awake)
     const result = handleMessage(player, data, now, {items, marks, race, koth, converter: this.converter, players: () => this.players()});
     if (result.close) { ws.close(1009, result.close); return; }
-    if (result.changed) ws.serializeAttachment(player);
+    const quiet = now - (player.heard || 0) > 4000;            // (heard from: kept now and then, not every message)
+    if (quiet) player.heard = now;
+    if (result.changed || quiet) ws.serializeAttachment(player);
     for (const {to, msg} of result.out) {
       if (to === 'all') this.broadcast(msg);
       else if (to === 'self') this.send(ws, msg);
@@ -211,6 +216,20 @@ export class Room {
   async alarm() {
     const now = Date.now();
     if (await this.closeIfEmpty()) return;
+    // gone quiet: a phone asleep or out of signal can leave its connection half open, and they'd stand there
+    // frozen (unpunchable: a punch's knockback is their own game's to do) for minutes. Nothing from them (not
+    // even the pings their page sends every few seconds, answered without waking us) for QUIET_MS: let go,
+    // as if they'd closed it. (A page that's still there reconnects as the same player.)
+    for (const ws of this.ctx.getWebSocketAutoResponseTimestamp ? this.sockets() : []) {
+      const p = ws.deserializeAttachment();
+      if (!p) continue;
+      const ping = this.ctx.getWebSocketAutoResponseTimestamp(ws);
+      const heard = Math.max(ping ? +ping : 0, p.lastActive || 0, p.joinedAt || 0, p.heard || 0);
+      if (now - heard < QUIET_MS) continue;
+      await this.depart(ws);
+      p.gone = true; try { ws.serializeAttachment(p); } catch {}
+      try { ws.close(4000, 'Gone quiet'); } catch {}
+    }
     await this.releaseOrphans();
     for (const ws of this.sockets()) {
       const p = ws.deserializeAttachment();
@@ -239,7 +258,7 @@ export class Room {
   async webSocketError(ws) { try { ws.close(1011, 'Connection interrupted'); } catch {} await this.depart(ws); }
   async depart(ws) {
     const p = ws.deserializeAttachment();
-    if (!p?.id || this.sockets().some(o => o !== ws && o.deserializeAttachment()?.id === p.id)) return;
+    if (!p?.id || p.gone || this.sockets().some(o => o !== ws && o.deserializeAttachment()?.id === p.id)) return;   // (gone: done already)
     this.broadcast({type: 'leave', id: p.id});
     const items = await this.loadItems(), alone = !this.sockets().some(o => o !== ws);
     // the crown never waits for anyone: it comes off now (on the floor where they were if anyone else is

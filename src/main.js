@@ -1664,7 +1664,7 @@ async function start() {
       updateCount();   // (with no one else here, nothing else would ever replace the "…")
       roomArrived(Promise.allSettled(coming));   // the first time: who's here, so they're in before the fade
     },
-    onPose: m => applyPose(m.id, m.pose, m.time),
+    onPose: m => { applyPose(m.id, m.pose, m.time); const p = peers.get(m.id); if (p) p.poseAt = performance.now(); },
     onLeave: id => removePeer(id),
     onItem: (it, fall, path, refused, msg) => {
       // the converter's done its work on a painting: the shutter comes down, then the new picture goes on
@@ -1697,6 +1697,13 @@ async function start() {
         // knocked back, a little hop, and the screen jolts
         player.kx += m.dir[0] * 7.5; player.kz += m.dir[1] * 7.5;
         vertical.bump(); shake = 1;
+      } else {
+        // someone whose game has gone quiet (it would knock them back): seen knocked back anyway, here
+        const p = peers.get(m.target), now = performance.now();
+        if (p && now - (p.poseAt || 0) > 1000 && Array.isArray(m.dir)) {
+          const s = p.motion.sample(now);
+          if (s) { applyPose(m.target, {...s, x: s.x + m.dir[0] * 1.2, z: s.z + m.dir[1] * 1.2}, network.now() + 250); }
+        }
       }
     },
     onChat: m => {
