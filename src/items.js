@@ -769,9 +769,53 @@ export const ITEM_MODELS = MODELS;   // for previews
 // A dropped item's fall through the level: gravity, a couple of soft bounces, a skid to a stop.
 // Pure and fixed-step, so every client works out the same path from the same start.
 const FALL_DT = 1 / 60;
-// a painting in someone's hands as everyone else sees it (and you, in third person): where its back's middle is
-// from their feet (ahead, to the right, up) and how it's turned from the way they face
-const HELD_PAINTING = {ahead: .32, right: .07, up: .92, turn: -.68, tilt: .08, roll: .02};
+// a painting in someone's hands as everyone else sees it (and you, in third person): held out in front in both
+// hands, one on each side edge. Where its back's middle is from their chest (ahead, to the right), how high the
+// hands are from the chest, how it's turned from the way they face, and where the hands are on it (down the side
+// edges from its middle, as a share of its height). Their arms are short (about half a metre from the shoulder:
+// src/avatar.js), so it's close in and at chest height for both hands to reach.
+const HELD_PAINTING = {ahead: .35, right: .02, up: .02, turn: -.1, tilt: .08, roll: .01, grip: .06};
+// the arms reached to where the hands hold it, after the body's animation has posed them: a two-bone reach
+// (shoulder to elbow to wrist), the elbow bent down and out to the side
+const reachV = [new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3()];
+const reachQ = [new THREE.Quaternion(), new THREE.Quaternion(), new THREE.Quaternion()];
+function turnBoneToward(bone, from, to) {
+  // turn `bone` (in the world) so the direction `from` becomes `to` (both unit vectors)
+  const [q, w, p] = reachQ;
+  q.setFromUnitVectors(from, to);
+  bone.getWorldQuaternion(w); w.premultiply(q);
+  bone.parent.getWorldQuaternion(p).invert();
+  bone.quaternion.copy(p.multiply(w));
+  bone.updateMatrixWorld(true);
+}
+function reachArm(upper, fore, hand, target, pole) {
+  const [S, E, H, dir, bend, t] = reachV;
+  upper.getWorldPosition(S); fore.getWorldPosition(E); hand.getWorldPosition(H);
+  const a = S.distanceTo(E), b = E.distanceTo(H);
+  if (a < 1e-4 || b < 1e-4) return;
+  dir.subVectors(target, S); const d = THREE.MathUtils.clamp(dir.length(), Math.abs(a - b) + 1e-3, a + b - 1e-3); dir.normalize();
+  const cosA = THREE.MathUtils.clamp((a * a + d * d - b * b) / (2 * a * d), -1, 1), sinA = Math.sqrt(1 - cosA * cosA);
+  bend.copy(pole).addScaledVector(dir, -pole.dot(dir)).normalize();
+  // the elbow where it has to be, then the upper arm turned to it, then the forearm to the hand's place
+  t.copy(S).addScaledVector(dir, a * cosA).addScaledVector(bend, a * sinA);
+  turnBoneToward(upper, E.sub(S).normalize(), t.sub(S).normalize());
+  fore.getWorldPosition(E); hand.getWorldPosition(H);
+  turnBoneToward(fore, H.sub(E).normalize(), t.subVectors(target, E).normalize());
+}
+// both hands on a held painting `m` (u: its userData) of `avatar`, facing yaw
+const gripV = [new THREE.Vector3(), new THREE.Vector3()];
+function holdPainting(avatar, m, u, yaw) {
+  const arms = avatar.arms ||= ['R', 'L'].map(s => ({side: s === 'R' ? 1 : -1,
+    upper: avatar.model.getObjectByName('UpperArm' + s), fore: avatar.model.getObjectByName('Forearm' + s), hand: avatar.model.getObjectByName('Hand' + s)}));
+  const [target, pole] = gripV, rx = Math.cos(yaw), rz = -Math.sin(yaw), fx = -Math.sin(yaw), fz = -Math.cos(yaw);
+  for (const arm of arms) {
+    if (!arm.upper || !arm.fore || !arm.hand) continue;
+    // the wrist just outside the side edge (the fist closes round it), a little toward the holder
+    m.localToWorld(target.set(arm.side * (u.w / 2 + .035), -u.h * HELD_PAINTING.grip, u.d * .6));
+    pole.set(rx * arm.side * .7 - fx * .25, -1, rz * arm.side * .7 - fz * .25);
+    reachArm(arm.upper, arm.fore, arm.hand, target, pole);
+  }
+}
 const PREDICT_MS = 3000;       // how long something you picked up or put down is shown so before the server's had its say
 export const PATH_HZ = 15;     // a painting's recorded tumble (src/settle.js); played back smoothed between frames
 export function simulateFall(hits, start, velocity) {
@@ -1446,13 +1490,17 @@ export function createItems({scene, camera, hits, shadows = null, onImpact = nul
           else m.rotation.set(pitch + reTip * .4, yaw, reTip * .9 + rattle, 'YXZ');
           if (u.painting) showBack(m, u, true);
           if (s.type === 'painting' && avatar?.root) {
-            // held up in front as it's shown in your own hands in first person: across the chest, a little to the
-            // right, the picture turned toward its holder and its back out (it's a shield: src/main.js trace)
+            // held out in front in both hands, the picture turned toward its holder and its back out (it's a
+            // shield: src/main.js trace); it goes with their chest (crouching, the walk's bob)
             const R = HELD_PAINTING, fx = -Math.sin(yaw), fz = -Math.cos(yaw), rx = Math.cos(yaw), rz = -Math.sin(yaw);
-            m.position.copy(avatar.root.position);
-            m.position.x += fx * R.ahead + rx * R.right; m.position.z += fz * R.ahead + rz * R.right; m.position.y += R.up;
+            avatar.root.updateMatrixWorld(true);
+            const chest = avatar.chest ||= avatar.model.getObjectByName('Chest') || avatar.root;
+            chest.getWorldPosition(m.position);
+            m.position.x = avatar.root.position.x + fx * R.ahead + rx * R.right; m.position.z = avatar.root.position.z + fz * R.ahead + rz * R.right;
+            m.position.y += R.up + R.grip * u.h;
             m.rotation.set(R.tilt + pitch * .25, yaw + R.turn, R.roll, 'YXZ');
             m.visible = avatar.root.visible && avatar.model.visible !== false;
+            if (m.visible) { m.updateMatrixWorld(); holdPainting(avatar, m, u, yaw); }
           } else if (s.type === 'bucket' && avatar?.handL && socket) {
             m.scale.setScalar(1);
             avatar.handL.getWorldPosition(m.position); m.position.y -= .4;      // the bail's grip in the fist
