@@ -12,6 +12,8 @@ import {ART, ART_IDS, PREVIEW, artFile, artOriginal, paintingSize, paintingMatri
 import {mergeVertices, mergeGeometries} from '../vendor/three/BufferGeometryUtils.js';
 import {GLTFLoader} from '../vendor/three/GLTFLoader.js';
 import {eggModel} from './eggs.js';
+import {MONS, squareAt, BOARD_ROOM} from './pieces.js';
+import {roomFrame, DOOR_X} from './room-frame.js';
 
 const BEAM_COLOR = new THREE.Color(1, .93, .8);
 export const ITEM_NAMES = {flashlight: 'flashlight', paintball: 'paintball gun', spray: 'spray can', bucket: 'bucket and sponge', crown: 'golden crown', painting: 'painting', marker: 'marker', piece: 'piece'};
@@ -609,6 +611,8 @@ function showBack(model, u, on) {
 // its own colour; their shapes arrive with the file (an empty stand-in till then, filled in place, so the
 // outline that shares it fills in too). The mana, supermana, bombs and potions are made here.
 const PIECES_URL = new URL('../assets/mons/pieces.glb', import.meta.url).href;
+const shared = new Map();       // piece id -> where it's nudged to, sharing its square
+const PAIR_AXIS = (() => { const f = roomFrame(BOARD_ROOM, DOOR_X[BOARD_ROOM]), a = f.toWorld(0, 0), b = f.toWorld(1, 0); return new THREE.Vector3(b.x - a.x, 0, b.z - a.z).normalize(); })();
 const monGeos = new Map();
 let piecesLoading = null;
 function monGeometry(name) {
@@ -629,14 +633,19 @@ function monGeometry(name) {
   }).catch(err => console.warn('pieces:', err));
   return g;
 }
-// glazes, as on the ceramic mons: soft pastels, a couple of dark ones, cream
-const GLAZES = [0x9fc6e8, 0xa8e0cf, 0xf1e9dc, 0x2a2a30, 0xf3b9cc, 0xc9b6e6, 0xe8d28a, 0x8fa8c8, 0xd9ddd8, 0xf0c7a0, 0x6b7fa8, 0xe4a7a0,
-  0xbfe3f0, 0xd8c3a5, 0x9db89a, 0xf5f0f6];
+// glazes, as on the ceramic mons: every one its own, round the colour wheel (the golden angle apart), some deep,
+// some pale, a few near black or white
+const glazeOf = k => {
+  const c = new THREE.Color();
+  if (k % 9 === 4) return c.setHSL((k * .618) % 1, .12, .1).getHex();           // near black, a tint of colour
+  if (k % 9 === 7) return c.setHSL((k * .618) % 1, .25, .9).getHex();           // near white
+  return c.setHSL((k * .618034) % 1, [.75, .55, .9][k % 3], [.55, .42, .68, .5][k % 4]).getHex();
+};
 const glaze = color => new THREE.MeshStandardMaterial({color, roughness: .2, metalness: 0, emissive: color, emissiveIntensity: .12});
 function monModel(id) {
-  const name = id.slice(4), n = [...name].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 11);
+  const name = id.slice(4), k = MONS.indexOf(name);
   const g = new THREE.Group();
-  g.add(new THREE.Mesh(monGeometry(name), glaze(GLAZES[n % GLAZES.length])));
+  g.add(new THREE.Mesh(monGeometry(name), glaze(glazeOf(k < 0 ? [...name].length : k))));
   g.userData = {tip: new THREE.Vector3(0, .12, 0), ground: 0, standing: true, piece: true};
   return g;
 }
@@ -1173,6 +1182,23 @@ export function createItems({scene, camera, hits, shadows = null, onImpact = nul
         const k = Math.min(t, ART_AHEAD_MAX / sp);
         ahead[aheadN++].set(_eye.x + vel[0] * k, _eye.y, _eye.z + vel[1] * k);
       }
+      // a mon and the mana, supermana or bomb it's carrying on one square of the board: side by side
+      shared.clear();
+      {
+        const sq = new Map();
+        for (const it of items.values()) {
+          const s = it.state;
+          if (s.type !== 'piece' || s.holder || s.id.startsWith('egg-') || it.fall || it.path) continue;
+          const q = squareAt(s.x, s.z);
+          if (q) { const k = q.i * 11 + q.j; (sq.get(k) || sq.set(k, []).get(k)).push(s.id); }
+        }
+        for (const ids of sq.values()) {
+          if (ids.length !== 2) continue;
+          const mon = ids.find(id => id.startsWith('mon-')), other = ids.find(id => /^(mana-|smana|bomb-)/.test(id));
+          if (!mon || !other) continue;
+          shared.set(mon, PAIR_AXIS.clone().multiplyScalar(-.06)); shared.set(other, PAIR_AXIS.clone().multiplyScalar(.075));
+        }
+      }
       for (const it of items.values()) {
         // shown picked up or put down, and the server never said so (or it got lost): back as the server has it
         if (it.pending && clock > it.pending.until && !it.busy) { it.state = it.server || it.state; it.pending = it.server = null; it.path = it.fall = it.fly = null; it.busy = false; }
@@ -1222,6 +1248,7 @@ export function createItems({scene, camera, hits, shadows = null, onImpact = nul
           m.rotation.set(0, s.yaw, u.groundRoll, 'YXZ');
           if (u.upright) { m.rotation.set(Math.PI / 2, s.yaw, 0, 'YXZ'); m.position.y = s.y + u.ground; }
           if (u.standing) { m.rotation.set(0, s.yaw, 0); m.position.y = s.y; }
+          if (u.piece && shared.has(s.id)) m.position.add(shared.get(s.id));
           if (u.painting) {                   // hung, leant or laid as placed
             m.rotation.set(s.tilt || 0, s.yaw, s.roll || 0, 'YXZ'); m.position.set(s.x, s.y, s.z);
             showBack(m, u, !(typeof s.hung === 'boolean' ? s.hung : Math.abs(s.tilt || 0) < .3 && s.y > .5) || !!(it.path || it.fall || it.fly));

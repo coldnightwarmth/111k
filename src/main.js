@@ -10,7 +10,7 @@ import {connectRoom} from './net.js';
 import {createChatUI, createBubble} from './chat.js';
 import {createControls} from './controls.js';
 import {createItems, ITEM_NAMES, simulateFall} from './items.js';
-import {snapPiece, pieceName} from './pieces.js';
+import {snapPiece, pieceName, squareAt} from './pieces.js';
 import {createMachine} from './machine.js';
 import {createConverter} from './converter.js';
 import {createCinema, ROOM as CINEMA_ROOM} from './cinema.js';
@@ -1144,9 +1144,18 @@ async function start() {
       const f = simulateFall(hits, start.toArray(), vel.toArray());
       Object.assign(msg, {x: r3(f.rest.x), y: r3(f.rest.y), z: r3(f.rest.z), fall: {p: start.toArray().map(r3), v: vel.toArray().map(r3)}});
     }
-    // a Mons piece put down on the board: stood in the middle of its square, squared up (src/pieces.js)
-    const snap = h.state.type === 'piece' && !h.state.id.startsWith('egg-') && snapPiece(msg.x, msg.z, yaw);
-    if (snap) { Object.assign(msg, {x: r3(snap.x), y: 0, z: r3(snap.z), yaw: r3(snap.yaw)}); delete msg.fall; start = null; }
+    // a Mons piece put down on the board: stood in the middle of its square, facing the way you're looking (to the
+    // nearest quarter turn: its front is its +z, so yours turned round); src/pieces.js
+    const snap = h.state.type === 'piece' && !h.state.id.startsWith('egg-') && snapPiece(msg.x, msg.z, yaw + Math.PI);
+    if (snap) {
+      // one piece to a square, but for a mon with the mana, supermana or bomb it's carrying (they stand side by side)
+      const here = [...items.items.values()].filter(o => o.state.type === 'piece' && !o.state.holder && o.state.id !== h.state.id
+        && !o.state.id.startsWith('egg-') && (q => q && q.i === snap.i && q.j === snap.j)(squareAt(o.state.x, o.state.z)));
+      const mon = id => id.startsWith('mon-'), carried = id => /^(mana-|smana|bomb-)/.test(id);
+      const ok = !here.length || (here.length === 1 && (mon(h.state.id) ? carried(here[0].state.id) : carried(h.state.id) && mon(here[0].state.id)));
+      if (!ok) { sfx.play('doorBump', {gain: .4, rate: 1.4}); return; }     // that square's taken: keep hold of it
+      Object.assign(msg, {x: r3(snap.x), y: 0, z: r3(snap.z), yaw: r3(snap.yaw)}); delete msg.fall; start = null;
+    }
     if (!network.send(msg)) return;
     if (!start) sfx.play('place', {at: msg});
     // down (or on its way down) this frame, the server's say-so to follow
