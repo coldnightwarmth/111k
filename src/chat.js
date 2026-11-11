@@ -36,18 +36,19 @@ export function createChatUI({onSend, onOpenChange}) {
   input.maxLength = CHAT_MAX;
   let open = false;
   for (const type of ['keydown', 'keyup', 'pointerdown']) form.addEventListener(type, e => e.stopPropagation());
-  function setOpen(value) {
+  // closed without sending (Esc, Tab, clicking away), whatever was typed goes; keep: it couldn't be sent
+  // (not connected yet), so it's still there to try again
+  function setOpen(value, keep = false) {
     if (open === value) return;
     open = value; root.classList.toggle('open', open); form.hidden = !open;
     if (open) { input.focus({preventScroll: true}); log.scrollTop = log.scrollHeight; }
-    else { input.blur(); }
+    else { input.blur(); if (!keep) input.value = ''; }
     onOpenChange?.(open);
   }
   form.addEventListener('submit', e => {
     e.preventDefault();
     const text = input.value.trim();
-    if (text && onSend(text) !== false) input.value = '';
-    setOpen(false);
+    setOpen(false, !!text && onSend(text) === false);
   });
   input.addEventListener('keydown', e => { if (e.key === 'Escape' || e.key === 'Tab') { e.preventDefault(); setOpen(false); } });
   return {
