@@ -633,15 +633,19 @@ function monGeometry(name) {
   }).catch(err => console.warn('pieces:', err));
   return g;
 }
-// glazes, as on the ceramic mons: every one its own, round the colour wheel (the golden angle apart), some deep,
-// some pale, a few near black or white
-const glazeOf = k => {
-  const c = new THREE.Color();
-  if (k % 9 === 4) return c.setHSL((k * .618) % 1, .12, .1).getHex();           // near black, a tint of colour
-  if (k % 9 === 7) return c.setHSL((k * .618) % 1, .25, .9).getHex();           // near white
-  return c.setHSL((k * .618034) % 1, [.75, .55, .9][k % 3], [.55, .42, .68, .5][k % 4]).getHex();
-};
-const glaze = color => new THREE.MeshStandardMaterial({color, roughness: .2, metalness: 0, emissive: color, emissiveIntensity: .12});
+// glazes: the "Daydreaming" pastels (thirty of them, red round to pink), each mon given one at random (the same
+// shuffle everywhere, so everyone sees the same colours)
+const PASTELS = [0xffbdbc, 0xfaaa9e, 0xffbfa3, 0xfebf90, 0xffce92, 0xffdb91, 0xfee590, 0xfff097, 0xebed8d, 0xdceb8f,
+  0xd4ed9c, 0xc0e78f, 0xb3e698, 0xa1edbc, 0xa5edd9, 0xb0f2f3, 0xa2dbf5, 0xb8d8f4, 0xa7c3f5, 0xa5b4f3,
+  0xb5aef4, 0xc0abf4, 0xcaa3f7, 0xe1afff, 0xf2b9fe, 0xfec0fc, 0xfeb7e6, 0xfeb4cb, 0xffb1b7, 0xffc7c5];
+const PASTEL_ORDER = (() => {
+  const o = PASTELS.map((_, i) => i);
+  let r = 1111;
+  for (let i = o.length - 1; i > 0; i--) { r = (r * 16807) % 2147483647; const j = r % (i + 1); [o[i], o[j]] = [o[j], o[i]]; }
+  return o;
+})();
+const glazeOf = k => PASTELS[PASTEL_ORDER[k % PASTELS.length]];
+const glaze = color => new THREE.MeshStandardMaterial({color, roughness: .22, metalness: 0, emissive: color, emissiveIntensity: .1});
 function monModel(id) {
   const name = id.slice(4), k = MONS.indexOf(name);
   const g = new THREE.Group();
