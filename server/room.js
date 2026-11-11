@@ -272,13 +272,16 @@ function handle(player, data, now, room) {
     if (!id || !h || c === null || !pts) return {out, changed: false};
     if (h === 'w' && pts.some(q => Math.hypot(q[0] - player.pose.x, q[2] - player.pose.z) > 4)) return {out, changed: false};
     if (h[0] === 'p' && items[h.slice(1)]?.type !== 'painting') return {out, changed: false};
+    const ink = room.marks.ink ||= [];
+    let stroke = ink.find(s => s.id === id);
+    // a stroke that's done (nothing added for a while) doesn't take more: that's a page from before the stroke ids
+    // were made unique reusing one after a refresh (it'd be drawn joined on with a long line)
+    if (stroke && h !== stroke.h || stroke && !(now - (stroke.at || 0) < 10000)) return {out, changed: false};
     player.lastActive = now;
     out.push({to: 'all', msg: {type: 'ink', id, h, c, p: pts, by: player.id}});
     if (h[0] === 'a') return {out, changed: true};
-    const ink = room.marks.ink ||= [];
-    let stroke = ink.find(s => s.id === id);
     if (!stroke) { stroke = {id, h, c, pts: []}; ink.push(stroke); }
-    if (stroke.h !== h) return {out: [], changed: true};
+    stroke.at = now;
     stroke.pts.push(...pts.slice(0, Math.max(0, MAX_STROKE_PTS - stroke.pts.length)));
     // too much ink: the oldest strokes go (everyone's told)
     let total = ink.reduce((t, s) => t + s.pts.length, 0);

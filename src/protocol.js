@@ -21,7 +21,7 @@ export const SPRAY_RANGE = 3.2;        // metres from a player to the wall they 
 export const SPLAT_LIFE_MS = 180000;   // paint fades away after three minutes
 export const MAX_SPLATS = 700;         // paint marks the room remembers (oldest go first; they last 3 minutes now)
 export const MAX_SPRAYS = 150;
-export const ITEM_TYPES = ['flashlight', 'paintball', 'spray', 'bucket', 'crown', 'painting', 'marker'];
+export const ITEM_TYPES = ['flashlight', 'paintball', 'spray', 'bucket', 'crown', 'painting', 'marker', 'piece'];
 
 // Emotes: every id the game knows (src/emotes.js); which clip plays is the settings' choice.
 export const EMOTES = Object.freeze(EMOTE_LIST.map(e => Object.freeze({id: e.id, label: e.label})));

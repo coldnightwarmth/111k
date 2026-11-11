@@ -3,6 +3,8 @@
 // Shared by the server (where the stock starts) and the client (which builds the shelves).
 // (SHELF_ITEMS also carries what's scattered about the tunnel and rooms: src/scatter.js.)
 import {SCATTERED} from './scatter.js';
+import {PIECE_ITEMS} from './pieces.js';
+import {EGG_ITEMS} from './egg-items.js';
 const RL = 38, XF = Math.sqrt(3.3 ** 2 - 2 ** 2), VD = XF + 1.15, ROOM_C = VD + 3.2;
 const ROOM = 1, DOOR_X = 1.6;                 // the level builder's room 1 and its door offset
 const A = 2 * Math.PI * ROOM / 20;
@@ -70,7 +72,7 @@ export const SHELF_ITEMS = (() => {
     const yaw = type === 'bucket' ? dirYaw + i : Math.atan2(-Math.cos(dirYaw), Math.sin(dirYaw)) + (i % 2 ? Math.PI : 0) + jitter;
     return {id: `${PREFIX[type]}${count[type]}`, type, x: Math.round(w.x * 1000) / 1000, y: SHELF_LEVELS[level] + .02,
       z: Math.round(w.z * 1000) / 1000, yaw: Math.round(yaw * 1000) / 1000};
-  }).concat(SCATTERED);
+  }).concat(SCATTERED, PIECE_ITEMS, EGG_ITEMS);
 })();
 // where the work lantern sits (top of the first unit)
 export const LANTERN = (() => { const p = onUnit(UNITS[0], .55, 0); return {...roomToWorld(p.x, p.z), y: SHELF_LEVELS[4] + .02}; })();

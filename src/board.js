@@ -80,10 +80,11 @@ function manaSquares() { return [[3, 4], [3, 6], [4, 3], [4, 5], [4, 7], [7, 4],
 const isMana = (i, j) => manaSquares().some(([a, b]) => a === i && b === j);
 
 export function createBoard(level, hits, scene) {
-  const f = roomFrame(ROOM, DOOR_X[ROOM]), c = f.toWorld(0, 0), back = f.toWorld(0, 1);
+  const f = roomFrame(ROOM, DOOR_X[ROOM]), c = f.toWorld(0, 0), back = f.toWorld(-1, 0);
   const tex = new THREE.CanvasTexture(drawBoard());
   tex.colorSpace = THREE.SRGBColorSpace; tex.anisotropy = 8;
-  const up = new THREE.Vector3(back.x - c.x, 0, back.z - c.z).normalize();       // its top to the back wall
+  // its top (the black side, row 0) to the right as you come in the door: the room's -x (src/pieces.js)
+  const up = new THREE.Vector3(back.x - c.x, 0, back.z - c.z).normalize();
   const w = SIZE * PX / (N * CELL);                                                // (the canvas has a margin for the overspray)
   const verts = cutDecal(hits, {point: new THREE.Vector3(c.x, 0, c.z), normal: new THREE.Vector3(0, 1, 0), up, width: w, height: w,
     dir: new THREE.Vector3(0, -1, 0), front: .12, back: .05});

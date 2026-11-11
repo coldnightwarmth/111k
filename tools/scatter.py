@@ -701,18 +701,32 @@ def write_spawns(path, items):
 # The scattered paintings come in batches, each with its own pictures (the next ones in ART's order,
 # after art 1 which hangs in the party room) and seed, so adding a batch leaves the earlier ones where
 # they are: (count, seed, paintings to a room on the first pass, spacing).
-PAINTING_BATCHES = [(29, 1111, 1, 3.0), (70, 2222, 2, 2.0)]
+PAINTING_BATCHES = [(29, 1111, 1, 3.0), (70, 2222, 2, 2.0), (33, 3333, 2, 2.0)]
+# ART's pictures run out after the first two batches: the third's are pieces from anywhere in the collection
+# (src/collection.js), picked at random once (seeded) with their pixel sizes: [art, w, h]
+COLLECTION_PICKS = [[14696, 932, 1006], [30931, 932, 1006], [33359, 960, 960], [10414, 932, 1006], [41139, 1254, 1254],
+                    [31915, 932, 1006], [7786, 1864, 2012], [33664, 960, 960], [55603, 1200, 1295], [6665, 1864, 2012],
+                    [15478, 932, 1006], [39765, 932, 1006], [31989, 932, 1006], [22091, 932, 1111], [2068, 1864, 2012],
+                    [27971, 932, 1006], [23796, 932, 1006], [34003, 960, 960], [22188, 932, 1111], [2948, 1864, 2012],
+                    [3380, 1864, 2012], [10975, 932, 1006], [20192, 932, 1006], [13502, 932, 1006], [15827, 932, 1006],
+                    [6589, 1864, 2012], [26234, 932, 1006], [4551, 1864, 2012], [28535, 932, 1006], [44280, 932, 1006],
+                    [40797, 1254, 1254], [19562, 932, 1006], [19471, 932, 1006]]
 
 
 def add_paintings(here, items, meta, log=None):
     """The scattered paintings, placed against the built level (assets/env/world.glb must be there)."""
     mesh = LevelMesh(os.path.join(here, '..', 'assets', 'env', 'world.glb'))
     art = read_art(os.path.join(here, '..', 'src', 'paintings.js'))
-    order = list(art)[1:]
+    order = list(art)[1:] + [n for n, _, _ in COLLECTION_PICKS]
+    art.update({n: (w, h) for n, w, h in COLLECTION_PICKS})
     paintings, report = [], []
-    for count, seed, per_room, spacing in PAINTING_BATCHES:
+    # the crates (tools/crates.py, placed after the first two batches) are in the way of the batches after them
+    crates_js = os.path.join(here, '..', 'src', 'crates-placed.js')
+    m = re.search(r'CRATE_COLLIDERS = (\[.*?\]);', open(crates_js).read(), re.S) if os.path.exists(crates_js) else None
+    with_crates = {**meta, 'colliders': meta['colliders'] + (json.loads(m.group(1)) if m else [])}
+    for k, (count, seed, per_room, spacing) in enumerate(PAINTING_BATCHES):
         pool, order = order[:count], order[count:]
-        got, rep = scatter_paintings(meta, mesh, items + paintings, art, count=count, seed=seed, log=log, pool=pool,
+        got, rep = scatter_paintings(meta if k < 2 else with_crates, mesh, items + paintings, art, count=count, seed=seed, log=log, pool=pool,
                                      per_room=per_room, spacing=spacing, avoid=paintings)
         paintings += got
         report += rep

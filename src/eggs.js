@@ -1,17 +1,14 @@
-// B-20's eggs: one big painted egg in most of the open crates (stood up, lying down or leant against a wall) round the converter room (the crates are
-// tools/crates.py's EGG_CRATES: keep these in step). Each its own colours: a deep ground, spots, stars, dots.
+// B-20's eggs: one big painted egg in most of the open crates round the converter room, each its own colours (a
+// deep ground, spots, stars, dots). The eggs are items (src/egg-items.js: picked up, carried, put down): in its
+// crate as it started an egg sits as posed here (stood up, lying down or leant against a wall); anywhere else it
+// lies on its side. The straw in the crates is just scenery (createEggs).
 import * as THREE from 'three';
 import {roomFrame, DOOR_X} from './room-frame.js';
-
-const ROOM = 19;
-// [x, z, turn] as in tools/crates.py, and which of them have an egg (the last stands empty)
-const CRATES = [[2.6, 2.25, .25], [2.85, .6, Math.PI / 2 + .1], [-2.85, .55, Math.PI / 2 - .08], [-2.65, -1.05, 1.9],
-  [1.75, .95, -.35], [-1.0, -1.75, .5]];
-const FILLED = [0, 1, 2, 3, 4];
+import {EGG_ROOM, EGG_CRATES, EGG_COUNT, eggHome} from './egg-items.js';
 const FLOOR = .11;                                    // the crate's deck
 const STRAW = FLOOR + .2;                             // the top of the straw
 const INSIDE_X = .445, INSIDE_Z = .305;               // the crate's inside walls (end, side), from its middle
-const EGG_H = .7, EGG_R = .21;
+const EGG_H = .58, EGG_R = .21;
 // how each sits: tilt (rad) toward the crate's end wall (z) or side wall (x), turned in the crate, spun on its own
 // axis, and pushed up against a wall ('x' an end, 'z' a side) or not. Upright, lying along the crate, leaning
 // into a corner of it.
@@ -94,33 +91,54 @@ function eggGeometry() {
   return new THREE.LatheGeometry(pts, 40);
 }
 
+let geo = null, strawMat = null;
+const box = new THREE.Box3();
+// how a posed egg sits: its transform in its crate's frame (x along it, z across, y up from the floor)
+function placed(egg, pose) {
+  egg.quaternion.setFromEuler(new THREE.Euler(0, pose.yaw, 0))
+    .multiply(new THREE.Quaternion().setFromEuler(new THREE.Euler(pose.tx, 0, pose.tz)))
+    .multiply(new THREE.Quaternion().setFromEuler(new THREE.Euler(0, pose.spin, 0)));
+  // where it sits, from its shape as posed: its lowest point a little down into the straw (or on the ground),
+  // centred (lying) or against the wall it's leaning on
+  egg.position.set(0, 0, 0); egg.updateMatrix();
+  box.copy(geo.boundingBox).applyMatrix4(egg.matrix);
+  const mid = box.getCenter(new THREE.Vector3());
+  if (pose.loose) { egg.position.set(-mid.x, -box.min.y, -mid.z); return; }
+  const sink = Math.abs(pose.tz) > 1 ? .05 : .07;
+  egg.position.set(
+    pose.lean === 'x' ? INSIDE_X - box.max.x : -mid.x,
+    STRAW - sink - box.min.y,
+    pose.lean === 'z' ? INSIDE_Z - box.max.z : -mid.z + (pose.dz || 0));
+}
+const LOOSE = {tz: Math.PI / 2, tx: 0, yaw: 0, spin: 0, loose: true};   // on its side, on whatever it's put down on
+// an egg item ('egg-1'..): its origin is on the floor at the middle of its crate, turned as the crate is
+export function eggModel(id) {
+  if (!geo) { geo = eggGeometry(); geo.computeBoundingBox(); }
+  const i = Math.max(0, (parseInt(id.slice(4), 10) || 1) - 1);
+  const map = eggTexture(LOOKS[i % LOOKS.length], 911 + i * 77);
+  const mat = new THREE.MeshStandardMaterial({map, roughness: .32, metalness: 0, emissiveMap: map, emissive: 0xffffff, emissiveIntensity: .14});
+  const g = new THREE.Group(), egg = new THREE.Mesh(geo, mat), home = eggHome(id), pose = POSES[i % POSES.length];
+  g.add(egg);
+  let shown = null;
+  // sat in its crate as it started, or loose
+  const sit = s => {
+    const atHome = !!home && !s.holder && Math.hypot(s.x - home.x, s.z - home.z) < .02 && Math.abs(s.y - home.y) < .02;
+    if (atHome === shown) return;
+    shown = atHome; placed(egg, atHome ? pose : LOOSE);
+  };
+  sit({x: 1e9, y: 0, z: 0});
+  g.userData = {tip: new THREE.Vector3(0, .3, 0), ground: 0, standing: true, piece: true, egg: sit, handScale: .5};
+  return g;
+}
+
+// the straw in the egg crates
 export function createEggs(scene) {
-  const f = roomFrame(ROOM, DOOR_X[ROOM]), geo = eggGeometry(), root = new THREE.Group(); root.name = 'eggs';
-  const strawGeo = new THREE.BoxGeometry(.9, .2, .56), strawMat = new THREE.MeshStandardMaterial({map: strawTexture(), roughness: 1, color: 0xd8b768});
-  const box = new THREE.Box3(), probe = new THREE.Mesh(geo);
-  FILLED.forEach((k, i) => {
-    const [x, z, turn] = CRATES[k], p = f.toWorld(x, z), pose = POSES[i % POSES.length];
-    const map = eggTexture(LOOKS[i % LOOKS.length], 911 + i * 77);
-    const mat = new THREE.MeshStandardMaterial({map, roughness: .32, metalness: 0, emissiveMap: map, emissive: 0xffffff, emissiveIntensity: .14});
-    // the crate's own frame (x along it, z across, y up from the floor)
-    const crate = new THREE.Group(); crate.position.set(p.x, 0, p.z); crate.rotation.y = f.yaw + turn; root.add(crate);
-    const egg = new THREE.Mesh(geo, mat);
-    egg.quaternion.setFromEuler(new THREE.Euler(0, pose.yaw, 0))
-      .multiply(new THREE.Quaternion().setFromEuler(new THREE.Euler(pose.tx, 0, pose.tz)))
-      .multiply(new THREE.Quaternion().setFromEuler(new THREE.Euler(0, pose.spin, 0)));
-    // where it sits, from its shape as posed: its lowest point a little down into the straw, centred in the
-    // crate (lying) or against the wall it's leaning on
-    probe.quaternion.copy(egg.quaternion); probe.updateMatrixWorld(true); box.setFromObject(probe, true);
-    const mid = box.getCenter(new THREE.Vector3());
-    const sink = Math.abs(pose.tz) > 1 ? .05 : .07;
-    egg.position.set(
-      pose.lean === 'x' ? INSIDE_X - box.max.x : -mid.x,
-      STRAW - sink - box.min.y,
-      pose.lean === 'z' ? INSIDE_Z - box.max.z : -mid.z + (pose.dz || 0));
-    crate.add(egg);
-    // a bed of straw filling the crate's floor
-    const bed = new THREE.Mesh(strawGeo, strawMat);
-    bed.position.y = FLOOR + .1; crate.add(bed);
+  const f = roomFrame(EGG_ROOM, DOOR_X[EGG_ROOM]), root = new THREE.Group(); root.name = 'egg-straw';
+  const strawGeo = new THREE.BoxGeometry(.9, .2, .56);
+  strawMat ||= new THREE.MeshStandardMaterial({map: strawTexture(), roughness: 1, color: 0xd8b768});
+  EGG_CRATES.slice(0, EGG_COUNT).forEach(([x, z, turn]) => {
+    const p = f.toWorld(x, z), bed = new THREE.Mesh(strawGeo, strawMat);
+    bed.position.set(p.x, FLOOR + .1, p.z); bed.rotation.y = f.yaw + turn; root.add(bed);
   });
   root.traverse(o => { if (o.isMesh) { o.matrixAutoUpdate = false; o.updateMatrix(); } });
   scene.add(root);

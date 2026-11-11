@@ -10,9 +10,11 @@ import {MAG_SIZE, RELOAD_MS} from './protocol.js';
 import {PAINT_COLORS, RANDOM_PAINT} from './decals.js';
 import {ART, ART_IDS, PREVIEW, artFile, artOriginal, paintingSize, paintingMatrix} from './paintings.js';
 import {mergeVertices, mergeGeometries} from '../vendor/three/BufferGeometryUtils.js';
+import {GLTFLoader} from '../vendor/three/GLTFLoader.js';
+import {eggModel} from './eggs.js';
 
 const BEAM_COLOR = new THREE.Color(1, .93, .8);
-export const ITEM_NAMES = {flashlight: 'flashlight', paintball: 'paintball gun', spray: 'spray can', bucket: 'bucket and sponge', crown: 'golden crown', painting: 'painting', marker: 'marker'};
+export const ITEM_NAMES = {flashlight: 'flashlight', paintball: 'paintball gun', spray: 'spray can', bucket: 'bucket and sponge', crown: 'golden crown', painting: 'painting', marker: 'marker', piece: 'piece'};
 
 const std = (color, roughness = .55, metalness = .2, extra = {}) => new THREE.MeshStandardMaterial({color, roughness, metalness, ...extra});
 function part(g, geo, mat, [x, y, z] = [0, 0, 0], [rx, ry, rz] = [0, 0, 0]) {
@@ -601,7 +603,88 @@ function showBack(model, u, on) {
   u.backOn = on;
 }
 
-const MODELS = {flashlight: flashlightModel, paintball: paintballModel, spray: sprayModel, bucket: bucketModel, crown: crownModel, painting: paintingModel, marker: markerModel};
+
+// --------------------------------------------------------------- Super Metal Mons pieces (src/pieces.js)
+// The mons are the figures in assets/mons/pieces.glb (tools/mons_pieces.py), glazed like the ceramic ones, each
+// its own colour; their shapes arrive with the file (an empty stand-in till then, filled in place, so the
+// outline that shares it fills in too). The mana, supermana, bombs and potions are made here.
+const PIECES_URL = new URL('../assets/mons/pieces.glb', import.meta.url).href;
+const monGeos = new Map();
+let piecesLoading = null;
+function monGeometry(name) {
+  let g = monGeos.get(name);
+  if (!g) {
+    g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(new Float32Array(9), 3)); g.setIndex([0, 1, 2]);
+    monGeos.set(name, g);
+  }
+  piecesLoading ||= new GLTFLoader().loadAsync(PIECES_URL).then(gltf => {
+    gltf.scene.traverse(o => {
+      if (!o.isMesh) return;
+      const n = o.name.replace(/^mon-/, ''), src = o.geometry;
+      const geo = monGeos.get(n) || monGeos.set(n, new THREE.BufferGeometry()).get(n);
+      geo.setAttribute('position', src.attributes.position); geo.setIndex(src.index);
+      geo.computeVertexNormals(); geo.computeBoundingBox(); geo.computeBoundingSphere();
+    });
+  }).catch(err => console.warn('pieces:', err));
+  return g;
+}
+// glazes, as on the ceramic mons: soft pastels, a couple of dark ones, cream
+const GLAZES = [0x9fc6e8, 0xa8e0cf, 0xf1e9dc, 0x2a2a30, 0xf3b9cc, 0xc9b6e6, 0xe8d28a, 0x8fa8c8, 0xd9ddd8, 0xf0c7a0, 0x6b7fa8, 0xe4a7a0,
+  0xbfe3f0, 0xd8c3a5, 0x9db89a, 0xf5f0f6];
+const glaze = color => new THREE.MeshStandardMaterial({color, roughness: .2, metalness: 0, emissive: color, emissiveIntensity: .12});
+function monModel(id) {
+  const name = id.slice(4), n = [...name].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 11);
+  const g = new THREE.Group();
+  g.add(new THREE.Mesh(monGeometry(name), glaze(GLAZES[n % GLAZES.length])));
+  g.userData = {tip: new THREE.Vector3(0, .12, 0), ground: 0, standing: true, piece: true};
+  return g;
+}
+// a mana drop: round at the bottom, drawn up to a point
+function manaModel(id) {
+  const white = id.startsWith('mana-w'), g = new THREE.Group(), pts = [];
+  // the classic teardrop, x = sin t sin(t/2)^m, y = cos t: round at t = pi (the bottom), a point at t = 0 (the top)
+  for (let k = 0; k <= 32; k++) {
+    const t = Math.PI * (1 - k / 32);
+    pts.push(new THREE.Vector2(Math.max(.07 * Math.sin(t) * Math.pow(Math.sin(t / 2), 1.3), 1e-4), .055 * (1 + Math.cos(t))));
+  }
+  part(g, new THREE.LatheGeometry(pts, 28), new THREE.MeshStandardMaterial({color: white ? 0xf4f2ec : 0x16161b, roughness: .16, metalness: white ? 0 : .1, emissive: white ? 0x3a3936 : 0}));
+  g.userData = {tip: new THREE.Vector3(0, .1, 0), ground: 0, standing: true, piece: true};
+  return g;
+}
+// the supermana: a little white cat of a thing, round, with ears and dark eyes
+function supermanaModel() {
+  const g = new THREE.Group(), white = glaze(0xf3f5f8), dark = new THREE.MeshStandardMaterial({color: 0x1c2230, roughness: .15});
+  const body = part(g, new THREE.SphereGeometry(.058, 28, 20), white, [0, .056, 0]); body.scale.set(1.1, .95, 1);
+  part(g, new THREE.SphereGeometry(.05, 24, 16), white, [0, .118, .004]);                    // head
+  for (const s of [-1, 1]) {
+    part(g, new THREE.ConeGeometry(.02, .042, 16), white, [s * .03, .165, 0], [0, 0, -s * .38]);   // ears
+    const eye = part(g, new THREE.SphereGeometry(.0105, 12, 8), dark, [s * .019, .122, .045]); eye.scale.set(1, 1.3, .6);
+  }
+  g.userData = {tip: new THREE.Vector3(0, .12, 0), ground: 0, standing: true, piece: true};
+  return g;
+}
+// a bomb (black, a fuse cap on top) or a potion (pink, a white stopper)
+function orbModel(id) {
+  const bomb = id.startsWith('bomb'), g = new THREE.Group();
+  const body = new THREE.MeshStandardMaterial({color: bomb ? 0x111114 : 0xf2a9c4, roughness: .14, metalness: bomb ? .15 : 0});
+  const cap = new THREE.MeshStandardMaterial({color: bomb ? 0x2a2a2e : 0xf6f1ea, roughness: .25});
+  part(g, new THREE.SphereGeometry(.048, 28, 20), body, [0, .048, 0]);
+  part(g, new THREE.CylinderGeometry(.012, .016, .02, 16), bomb ? cap : body, [0, .1, 0]);
+  part(g, new THREE.SphereGeometry(.012, 14, 10), cap, [0, .114, 0]);
+  if (bomb) for (const s of [-1, 1]) part(g, new THREE.SphereGeometry(.006, 10, 8), new THREE.MeshBasicMaterial({color: 0xe0302a}), [s * .016, .058, .044]);
+  g.userData = {tip: new THREE.Vector3(0, .1, 0), ground: 0, standing: true, piece: true};
+  return g;
+}
+function pieceModel(id) {
+  if (id.startsWith('egg-')) return eggModel(id);
+  if (id.startsWith('mon-')) return monModel(id);
+  if (id.startsWith('mana-')) return manaModel(id);
+  if (id === 'smana') return supermanaModel();
+  return orbModel(id);
+}
+
+const MODELS = {flashlight: flashlightModel, paintball: paintballModel, spray: sprayModel, bucket: bucketModel, crown: crownModel, painting: paintingModel, marker: markerModel, piece: pieceModel};
 export const ITEM_MODELS = MODELS;   // for previews
 
 // ------------------------------------------------------------------- falling
@@ -1094,6 +1177,7 @@ export function createItems({scene, camera, hits, shadows = null, onImpact = nul
         // shown picked up or put down, and the server never said so (or it got lost): back as the server has it
         if (it.pending && clock > it.pending.until && !it.busy) { it.state = it.server || it.state; it.pending = it.server = null; it.path = it.fall = it.fly = null; it.busy = false; }
         const s = it.state, m = it.model, u = m.userData;
+        u.egg?.(s);                         // an egg: sat in its crate as it started, or on its side
         if (u.artAt) {
           // how far it is from you, or from where you'll be in a moment at this speed, whichever's nearer
           let near = s.holder ? 0 : Math.hypot(s.x - _eye.x, s.y - _eye.y, s.z - _eye.z), far = near;
@@ -1217,6 +1301,10 @@ export function createItems({scene, camera, hits, shadows = null, onImpact = nul
             const press = it.drawing ? .012 : 0;
             m.position.set(.06, -.085 + bob - press, -.05 - press);
             m.rotation.set(.32, -.22, .1);
+          } else if (s.type === 'piece') {
+            m.scale.setScalar(u.handScale || 1);
+            m.position.set(.13, -.2 + bob, -.34);
+            m.rotation.set(.25, -.45, 0);
           } else if (s.type === 'crown') {
             m.scale.setScalar(.62);
             m.position.set(-.07, -.02 + bob, -.15);
@@ -1248,7 +1336,7 @@ export function createItems({scene, camera, hits, shadows = null, onImpact = nul
           dir = new THREE.Vector3(-Math.sin(yaw) * Math.cos(pitch), Math.sin(pitch), -Math.cos(yaw) * Math.cos(pitch));
           // gripped in the right hand, aimed where its holder is looking
           if (s.type === 'spray') m.rotation.set(-.35 + pitch * .5, yaw, 0, 'YXZ');
-          else if (s.type === 'bucket' || s.type === 'crown') m.rotation.set(0, yaw, 0);
+          else if (s.type === 'bucket' || s.type === 'crown' || s.type === 'piece') m.rotation.set(0, yaw, 0);
           else m.rotation.set(pitch + reTip * .4, yaw, reTip * .9 + rattle, 'YXZ');
           if (u.painting) showBack(m, u, true);
           if (s.type === 'painting' && avatar?.root) {
@@ -1275,6 +1363,7 @@ export function createItems({scene, camera, hits, shadows = null, onImpact = nul
             else if (s.type === 'marker') m.position.addScaledVector(dir, .05);
             else if (s.type === 'spray') m.position.y -= .07 * CAN_SCALE;
             else if (s.type === 'crown') m.position.addScaledVector(dir, .1).y -= .1;   // held by the band, out in front
+            else if (s.type === 'piece') m.position.addScaledVector(dir, .07).y -= .1;
             else if (avatar.hand) {
               // a torch in a fist: the middle of the barrel sits in the closed hand, just ahead of the wrist
               avatar.hand.getWorldPosition(m.position);

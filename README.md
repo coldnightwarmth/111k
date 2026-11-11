@@ -46,11 +46,14 @@ Three rooms do something of their own:
   real light carrying the film, so whoever walks into the beam gets it across them and throws a shadow on
   the screen; the beam, the glow round the screen and the light back into the room follow the film's colour,
   and its sound plays softly from the screen (`src/cinema.js`).
-- **B-10:** a Super Metal Mons board, 11 x 11, just its squares (no pieces), sprayed on the floor (`src/board.js`).
+- **B-10:** a Super Metal Mons board, 11 x 11, sprayed on the floor (`src/board.js`), with its pieces as items you
+  can pick up and put down (`src/pieces.js`): the mons (the ceramic figures' 3D-print STLs, cut down to 4,500
+  triangles each by `tools/mons_pieces.py` into `assets/mons/pieces.glb`), five white and five black mana, the
+  supermana, two bombs and two potions. Put down on the board, a piece stands in the middle of its square.
 - **B-20, the converter:** stand a painting in its chamber, type a piece number (1 to 111,111) on the keypad
   and hit CONVERT: a shutter comes down and the canvas comes back as that piece of the collection
   (`src/converter.js`; the server does it, `server/room.js`). Open crates round the room hold big painted eggs, stood up, lying down or leant on a wall
-  (`src/eggs.js`). The numbering across the CDN's folders is `src/collection.js` (paintings, then 3D,
+  (`src/eggs.js`); they're items too (`src/egg-items.js`), on their side wherever they're put down. The numbering across the CDN's folders is `src/collection.js` (paintings, then 3D,
   animated and eggs), with every painting's proportions in `src/collection-dims.js`
   (`tools/collection_dims.py`).
 

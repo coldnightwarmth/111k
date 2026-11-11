@@ -380,7 +380,8 @@ def crate_body(r, open_=False):
     for sx in (-1, 1):
         for sz in (-1, 1):
             x, z = sx * (hw - 0.03), sz * (hd - 0.015)
-            box(m, (x - 0.035, BASE, z - 0.035), (x + 0.035, H, z + 0.035), r, {'+y': 'grain', '-y': False})
+            # (a few mm proud of the walls' tops, which they overlap: level with them, the two tops fight and flicker)
+            box(m, (x - 0.035, BASE, z - 0.035), (x + 0.035, H + 0.004, z + 0.035), r, {'+y': 'grain', '-y': False})
     for y0, y1 in ((BASE, BASE + 0.055), (H - 0.055, H)):
         box(m, (-hw + 0.065, y0, hd), (hw - 0.065, y1, hd + 0.016), r, {'-z': False})
         box(m, (-hw + 0.065, y0, -hd - 0.016), (hw - 0.065, y1, -hd), r, {'+z': False})

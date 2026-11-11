@@ -10,6 +10,7 @@ import {connectRoom} from './net.js';
 import {createChatUI, createBubble} from './chat.js';
 import {createControls} from './controls.js';
 import {createItems, ITEM_NAMES, simulateFall} from './items.js';
+import {snapPiece, pieceName} from './pieces.js';
 import {createMachine} from './machine.js';
 import {createConverter} from './converter.js';
 import {createCinema, ROOM as CINEMA_ROOM} from './cinema.js';
@@ -816,7 +817,8 @@ async function start() {
     }
     if (h?.state.type === 'flashlight') { network.send({type: 'toggle', id: h.state.id, on: !h.state.on}); sfx.play('flashlight', {rate: h.state.on ? .92 : 1}); learn('flashlight'); return; }
     if (h?.state.type === 'paintball') { shoot(); return; }
-    if (h?.state.type === 'marker') { learn('draw'); return; }   // (it draws while the button's held: drawInk, each frame)
+    if (h?.state.type === 'marker') { learn('draw'); return; }
+    if (h?.state.type === 'piece') { dropItem(h); learn('place:piece'); return; }   // (on the board: onto a square)   // (it draws while the button's held: drawInk, each frame)
     if (h?.state.type === 'spray') { spray(); return; }
     if (h?.state.type === 'crown') { if (!kothActive(koth)) network.send({type: 'koth'}); learn('koth'); return; }
     if (h?.state.type === 'painting') { const plan = planPlace(h); if (plan) placePainting(h, plan); return; }
@@ -1119,6 +1121,9 @@ async function start() {
       const f = simulateFall(hits, start.toArray(), vel.toArray());
       Object.assign(msg, {x: r3(f.rest.x), y: r3(f.rest.y), z: r3(f.rest.z), fall: {p: start.toArray().map(r3), v: vel.toArray().map(r3)}});
     }
+    // a Mons piece put down on the board: stood in the middle of its square, squared up (src/pieces.js)
+    const snap = h.state.type === 'piece' && !h.state.id.startsWith('egg-') && snapPiece(msg.x, msg.z, yaw);
+    if (snap) { Object.assign(msg, {x: r3(snap.x), y: 0, z: r3(snap.z), yaw: r3(snap.yaw)}); delete msg.fall; start = null; }
     if (!network.send(msg)) return;
     if (!start) sfx.play('place', {at: msg});
     // down (or on its way down) this frame, the server's say-so to follow
@@ -1157,6 +1162,10 @@ async function start() {
   // painting, someone), a point every centimetre and a bit; a new stroke when it jumps (off an edge, onto
   // something else). Your own ink goes on straight away; the points go out every 100 ms.
   const INK_REACH = 2.4, INK_STEP = .012, INK_JUMP = .3, INK_SEND_MS = 100;
+  // a stroke's id is yours, this page's and a count: a refresh reconnects as the same player with the count back
+  // at one, and the room still has the strokes from before; under the same ids, new ink would be added on to
+  // them (drawn as a long line from where the old one ended)
+  const inkPage = Math.random().toString(36).slice(2, 7);
   let inkStroke = null, inkSeq = 0, inkRefreshAt = 0;
   const _ip = new THREE.Vector3(), _in = new THREE.Vector3();
   function inkTarget() {
@@ -1211,7 +1220,7 @@ async function start() {
     if (st && (st.h !== t.host || Math.hypot(q[0] - st.last[0], q[1] - st.last[1], q[2] - st.last[2]) > INK_JUMP || st.n >= MAX_STROKE_PTS)) { inkFlush(st, now); st = inkStroke = null; }
     if (!st) {
       const c = chosenPaint === RANDOM_PAINT ? PAINT_COLORS[Math.floor(Math.random() * PAINT_COLORS.length)] : chosenPaint;
-      st = inkStroke = {id: `${network.id}:${(++inkSeq).toString(36)}`, h: t.host, c, last: null, n: 0, buf: [], sentAt: now};
+      st = inkStroke = {id: `${network.id}:${inkPage}${(++inkSeq).toString(36)}`, h: t.host, c, last: null, n: 0, buf: [], sentAt: now};
       items.inked(h.state.id, c);
     }
     if (st.last && Math.hypot(q[0] - st.last[0], q[1] - st.last[1], q[2] - st.last[2]) < INK_STEP) return;
@@ -2173,11 +2182,12 @@ async function start() {
         : type === 'marker' ? [['draw', 'hold click: draw'], ['paints', 'esc or tab: pick a colour'], drop]
         : type === 'bucket' ? [['scrub', cleanTarget ? 'click: scrub it off' : 'aim at paint or graffiti to scrub it'], drop]
         : type === 'crown' ? (kothActive(koth) ? [] : [['koth', 'click: start king of the hill'], drop])
+        : type === 'piece' ? [['place:piece', 'click: put it down (on the board it goes on a square)'], drop]
         : type === 'painting' ? [['place', placePlan ? `click: ${{hang: 'hang it here', lean: 'lean it here', lay: 'lay it down'}[placePlan.how]}` : 'aim at a wall or the floor to put it there'],
           placePlan ? ['reverse', 'right-click: the same, back out'] : drop]
         : [['spray', 'click a wall: spray'], ['pieces', 'esc or tab: pick a piece'], ['tagturn', 'ctrl + scroll: turn'], ['tagsize', 'shift + scroll: size'], drop])
       : t ? (t.state.type === 'crown' && kothActive(koth) ? [['pickup:crown:on', 'click: put on the crown']]
-        : [[`pickup:${t.state.type}`, `click: pick up ${ITEM_NAMES[t.state.type] || 'it'}`]]) : [];
+        : [[`pickup:${t.state.type}`, `click: pick up ${t.state.type === 'piece' ? pieceName(t.state.id) : ITEM_NAMES[t.state.type] || 'it'}`]]) : [];
     const hint = parts.filter(([k]) => !learned.has(k)).map(([, text]) => text).join('  ·  ');
     if (prompt.textContent !== hint) prompt.textContent = hint;
     document.body.classList.toggle('holding', !!h);
@@ -2186,7 +2196,7 @@ async function start() {
     const galleryLabel = type === 'paintball' || type === 'marker' ? 'paint' : 'tags';
     if (btnGallery.textContent !== galleryLabel) btnGallery.textContent = galleryLabel;
     const act = pushable ? 'push' : keyAim ? 'press' : doorAim !== null ? 'close' : h ? (type === 'flashlight' ? (h.state.on ? 'light off' : 'light on')
-      : type === 'paintball' ? 'fire' : type === 'marker' ? 'draw' : type === 'bucket' ? 'scrub' : type === 'crown' ? 'start' : type === 'painting' ? 'place' : 'spray') : t ? 'grab' : 'punch';
+      : type === 'paintball' ? 'fire' : type === 'marker' ? 'draw' : type === 'bucket' ? 'scrub' : type === 'crown' ? 'start' : type === 'painting' || type === 'piece' ? 'place' : 'spray') : t ? 'grab' : 'punch';
     if (btnAct.textContent !== act) btnAct.textContent = act;
     document.body.classList.toggle('can-grab', !!t);
     // first person: say which emote you're doing, since you can't see yourself
