@@ -951,6 +951,37 @@ test('the radio: a YouTube or SoundCloud link, only while quiet, five minutes at
   assert.equal(r.play.u, 'https://soundcloud.com/artist/track');
 });
 
+test('the radio log: every link put on, kept with who and how long, and what the radio remembered from before', async () => {
+  const {room, sockets, ctx} = makeRoom();
+  const store = new Map();
+  ctx.storage.get = async k => (Array.isArray(k) ? new Map(k.map(x => [x, store.get(x)])) : store.get(k));
+  ctx.storage.put = async (k, v) => { if (typeof k === 'object') for (const [kk, vv] of Object.entries(k)) store.set(kk, structuredClone(vv)); else store.set(k, structuredClone(v)); };
+  ctx.storage.delete = async k => { for (const x of [k].flat()) store.delete(x); };
+  ctx.storage.list = async ({prefix = '', reverse = false, limit = Infinity, end} = {}) => {
+    let keys = [...store.keys()].filter(k => k.startsWith(prefix) && (end === undefined || k < end)).sort();
+    if (reverse) keys.reverse();
+    return new Map(keys.slice(0, limit).map(k => [k, structuredClone(store.get(k))]));
+  };
+  await join(room, S1);
+  const [a] = sockets;
+  // a play from before the log began, still on the radio
+  const items = await room.loadItems();
+  items.rd1.play = {u: 'yt:BThCK0HF1Dw', at: Date.now() - 600_000, until: Date.now() - 400_000, by: 'old'};
+  const r = items.rd1;
+  await room.webSocketMessage(a, JSON.stringify({type: 'pose', pose: {...pose, x: r.x + .5, z: r.z, y: 1.45}}));
+  await room.webSocketMessage(a, JSON.stringify({type: 'radio', id: 'rd1', url: 'https://youtu.be/dQw4w9WgXcQ?si=x'}));
+  assert.equal(items.rd1.play.u, 'yt:dQw4w9WgXcQ');
+  await room.webSocketMessage(a, JSON.stringify({type: 'radio-len', id: 'rd1', ms: 61_000}));
+  const res = await room.fetch(new Request('https://x/radio-log'));
+  const log = await res.json();
+  assert.equal(log.length, 2);
+  assert.equal(log[0].u, 'yt:dQw4w9WgXcQ'); assert.equal(log[0].by, a.deserializeAttachment().id); assert.equal(log[0].url, 'https://youtu.be/dQw4w9WgXcQ?si=x'); assert.equal(log[0].ms, 61_000);
+  assert.equal(log[1].u, 'yt:BThCK0HF1Dw');
+  // and older than a time, for paging back
+  const older = await (await room.fetch(new Request(`https://x/radio-log?before=${log[0].at}`))).json();
+  assert.deepEqual(older.map(e => e.u), ['yt:BThCK0HF1Dw']);
+});
+
 test('someone gone quiet (no word, not even a ping, for 20 s) is let go: everyone sees them leave', async () => {
   const {room, sockets, ctx} = makeRoom();
   await join(room, S1); await join(room, S2);

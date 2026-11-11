@@ -24,3 +24,10 @@ export function emotesUrl() {
   u.pathname = '/emotes'; u.search = '';
   return u.href;
 }
+
+// the radio log (GET: every link put on the radio, newest first; the page at /radio shows it)
+export function radioLogUrl() {
+  const u = new URL(serverUrl().replace(/^ws/, 'http'));
+  u.pathname = '/radio-log'; u.search = '';
+  return u.href;
+}

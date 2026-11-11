@@ -22,6 +22,7 @@ const TYPES = {'.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/jav
   '.wasm': 'application/wasm', '.mp3': 'audio/mpeg'};
 
 let emotes = cleanEmoteConfig(null), review = cleanReview(null), errors = [];
+const radioLog = new Map();      // the radio log, as the worker keeps it (here, only while it runs)
 const server = createServer(async (req, res) => {
   // the emote settings, as the worker serves them (GET, and POST from /anim)
   if (new URL(req.url, 'http://x').pathname === '/emotes') {
@@ -35,6 +36,9 @@ const server = createServer(async (req, res) => {
   // the error log, as the worker keeps it
   if (new URL(req.url, 'http://x').pathname === '/errors') {
     res.writeHead(200, {'Content-Type': 'application/json', 'Cache-Control': 'no-store'}); res.end(JSON.stringify(errors)); return;
+  }
+  if (new URL(req.url, 'http://x').pathname === '/radio-log') {
+    res.writeHead(200, {'Content-Type': 'application/json', 'Cache-Control': 'no-store'}); res.end(JSON.stringify([...radioLog.values()].sort((a, b) => b.at - a.at))); return;
   }
   // the graffiti review, the same way (GET, and POST from /graffiti)
   if (new URL(req.url, 'http://x').pathname === '/graffiti') {
@@ -141,6 +145,7 @@ function onText(c, text) {
   const now = Date.now();
   const result = handleMessage(c.player, text, now, {items, marks, race, koth, converter, players});
   if (result.report) errors = logError(errors, result.report);
+  if (result.radioLog) { const {at, set, patch} = result.radioLog; const e = set || (radioLog.has(at) && {...radioLog.get(at), ...patch}); if (e) radioLog.set(at, e); }
   if (result.close) { close(c); return; }
   for (const {to, msg} of result.out) {
     if (to === 'all') broadcast(msg);

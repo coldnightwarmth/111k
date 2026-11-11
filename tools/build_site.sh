@@ -10,7 +10,7 @@
 set -euo pipefail
 V="${1:?usage: build_site.sh <version>}"
 rm -rf _site && mkdir _site
-cp -r index.html 404.html styles.css favicon.svg src vendor assets anim graffiti sfx _site/
+cp -r index.html 404.html styles.css favicon.svg src vendor assets anim graffiti sfx radio _site/
 [ -f CNAME ] && cp CNAME _site/
 touch _site/.nojekyll
 
@@ -40,6 +40,8 @@ sed -i -E "s#src=\"\.\./src/graffiti-page\.js\"#src=\"../src/graffiti-page.js?v=
 grep -q "graffiti-page.js?v=$V" _site/graffiti/index.html
 sed -i -E "s#src=\"\.\./src/sfx-page\.js\"#src=\"../src/sfx-page.js?v=$V\"#; s#href=\"sfx\.css\"#href=\"sfx.css?v=$V\"#" _site/sfx/index.html
 grep -q "sfx-page.js?v=$V" _site/sfx/index.html
+sed -i -E "s#src=\"\.\./src/radio-page\.js\"#src=\"../src/radio-page.js?v=$V\"#; s#href=\"radio\.css\"#href=\"radio.css?v=$V\"#" _site/radio/index.html
+grep -q "radio-page.js?v=$V" _site/radio/index.html
 
 # how long browsers may keep things (Cloudflare Pages reads this; GitHub Pages ignores it): the code and the
 # level are asked for by version, so they keep; pictures and avatars a day (then checked again); pages never
@@ -55,6 +57,8 @@ cat > _site/_headers <<'EOF'
 /graffiti/
   Cache-Control: no-cache
 /sfx/
+  Cache-Control: no-cache
+/radio/
   Cache-Control: no-cache
 /src/*
   Cache-Control: public, max-age=604800, immutable

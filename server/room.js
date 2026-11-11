@@ -29,6 +29,19 @@ export function logError(list, e) {
   return list;
 }
 
+// the radio log (GET /radio-log): every link put on, kept for good, one stored record each (server/worker.js)
+export const RADIO_LOG_PREFIX = 'radio:';
+export const radioLogKey = at => RADIO_LOG_PREFIX + String(at).padStart(15, '0');
+export function radioEntry(item, player, url) {
+  const p = item.play;
+  return {at: p.at, u: p.u, url: typeof url === 'string' ? url.trim().slice(0, 400) : '', radio: item.id, by: p.by, name: player?.name || ''};
+}
+// a log record brought up to date (how long the track was, whether it was called off)
+export function patchRadioEntry(entry, patch) {
+  if (!entry) return null;
+  return {...entry, ...patch};
+}
+
 export function newPlayer(id, now) {
   return {id, pose: null, lastPose: 0, lastChat: 0, lastActive: now, lastPunch: 0, lastShot: 0, lastSpray: 0,
     inactive: false, look: null, name: ''};
@@ -543,7 +556,7 @@ function handle(player, data, now, room) {
     item.play = {u: radioKey(link), at: now + 1500, until: now + 1500 + RADIO_MAX_MS, by: player.id};
     player.lastActive = now;
     out.push({to: 'all', msg: {type: 'item', item: cleanItem(item)}});
-    return {out, changed: true, itemsChanged: true};
+    return {out, changed: true, itemsChanged: true, radioLog: {at: item.play.at, set: radioEntry(item, player, m.url)}};
   }
   // a track that won't play (an error, or nothing coming out for half a minute): off, so another can go on. Said
   // by whoever put it on, or (if they've gone) anyone, or else by two different people
@@ -554,13 +567,13 @@ function handle(player, data, now, room) {
     if (player.id !== play.by && setterHere && play.dead.length < 2) return {out, changed: true, itemsChanged: true};
     play.until = now;
     out.push({to: 'all', msg: {type: 'item', item: cleanItem(item)}});
-    return {out, changed: true, itemsChanged: true};
+    return {out, changed: true, itemsChanged: true, radioLog: {at: play.at, patch: {dead: true, ended: now}}};
   }
   if (m.type === 'radio-len') {
     if (!item || item.type !== 'radio' || !item.play || item.play.by !== player.id || !Number.isFinite(m.ms) || m.ms < 1000) return refuse();
     item.play.until = Math.min(item.play.until, item.play.at + Math.round(m.ms) + 500);
     out.push({to: 'all', msg: {type: 'item', item: cleanItem(item)}});
-    return {out, changed: true, itemsChanged: true};
+    return {out, changed: true, itemsChanged: true, radioLog: {at: item.play.at, patch: {ms: Math.round(m.ms)}}};
   }
   if (m.type === 'drop') {
     if (!item || item.holder !== player.id || !player.pose) return refuse();

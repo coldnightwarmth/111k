@@ -8,7 +8,7 @@ import {cleanEmoteConfig} from '../src/emotes.js';
 import {cleanReview, hiddenPieces} from '../src/review.js';
 import {freshRace, publicRace} from '../src/race.js';
 import {handleMessage, newPlayer, snapshot, freshItems, freshMarks, validItems, releaseItems, letGo, validMarks, marksMessage, marksMessages, joinInk, itemsAtSpawn,
-  kothTick, kothNext, freshKoth, publicKoth, logError} from './room.js';
+  kothTick, kothNext, freshKoth, publicKoth, logError, RADIO_LOG_PREFIX, radioLogKey, patchRadioEntry} from './room.js';
 
 // The scene: everything players have done to the space (items moved, pieces sprayed, paint, the level's own
 // graffiti scrubbed off, the lap timer, king of the hill). When this changes, the room starts over once with
@@ -31,7 +31,7 @@ export default {
     if (!allowedOrigins(env).includes(origin)) return new Response('Forbidden', {status: 403});
     // the emote settings (changed from /anim) and the graffiti review (made at /graffiti): read by anyone
     // on the site, handled by the room itself
-    if (url.pathname === '/emotes' || url.pathname === '/graffiti' || url.pathname === '/errors') {
+    if (url.pathname === '/emotes' || url.pathname === '/graffiti' || url.pathname === '/errors' || url.pathname === '/radio-log') {
       const cors = {'Access-Control-Allow-Origin': origin, 'Vary': 'Origin', 'Access-Control-Allow-Methods': 'GET, POST',
         'Access-Control-Allow-Headers': 'Content-Type, X-Emotes-Key'};
       if (request.method === 'OPTIONS') return new Response(null, {status: 204, headers: cors});
@@ -183,12 +183,43 @@ export class Room {
     return Response.json(await this.loadReview(), {headers: {'Cache-Control': 'no-store'}});
   }
 
+  // the radio log: one stored record per link put on (kept through scene resets). It started on 11 Nov 2026;
+  // the plays the radios still remember from before then go in once, the first time it's looked at or added to
+  async radioLogReady() {
+    return this.radioSeeded ||= (async () => {
+      if (await this.ctx.storage.get?.('radioLogSeeded')) return;
+      const items = await this.loadItems(), seed = {};
+      for (const it of Object.values(items)) {
+        const p = it.type === 'radio' && it.play;
+        if (p && Number.isFinite(p.at)) seed[radioLogKey(p.at)] = {at: p.at, u: p.u, url: '', radio: it.id, by: p.by, name: '',
+          ...(p.until < p.at + 299000 ? {ended: p.until} : {}), ...(p.dead ? {dead: true} : {})};
+      }
+      await this.ctx.storage.put?.({...seed, radioLogSeeded: Date.now()});
+    })();
+  }
+  async logRadio({at, set, patch}) {
+    await this.radioLogReady();
+    const key = radioLogKey(at);
+    const entry = set || patchRadioEntry(await this.ctx.storage.get?.(key), patch);
+    if (entry) await this.ctx.storage.put?.(key, entry);
+  }
+  async radioLogRequest(request) {
+    await this.radioLogReady();
+    const before = Number(new URL(request.url).searchParams.get('before'));
+    const opts = {prefix: RADIO_LOG_PREFIX, reverse: true, limit: 500};
+    if (Number.isFinite(before) && before > 0) opts.end = radioLogKey(before);
+    const list = this.ctx.storage.list ? [...(await this.ctx.storage.list(opts)).values()] : [];
+    return Response.json(list, {headers: {'Cache-Control': 'no-store'}});
+  }
+
   async fetch(request) {
     if (new URL(request.url).pathname === '/emotes') return this.emotesRequest(request);
     if (new URL(request.url).pathname === '/graffiti') return this.reviewRequest(request);
     // GET /errors: what's gone wrong in visitors' browsers lately (src/errors.js)
     if (new URL(request.url).pathname === '/errors')
       return Response.json((await this.ctx.storage.get?.('errors')) || [], {headers: {'Cache-Control': 'no-store'}});
+    // GET /radio-log: every link put on the radio, newest first (?before=<at> for older ones)
+    if (new URL(request.url).pathname === '/radio-log') return this.radioLogRequest(request);
     // Public player IDs must not expose the session token that can resume a socket.
     const session = new URL(request.url).searchParams.get('session');
     const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(session));
@@ -217,6 +248,7 @@ export class Room {
     if (!player) return;
     const now = Date.now();
     const items = await this.loadItems(), marks = await this.loadMarks();
+    await this.radioLogReady();           // (before anything's put on over what the radio last played)
     const race = await this.loadRace(), koth = await this.loadKoth();
     this.converter ||= {entry: '', busyUntil: 0, id: null};     // (the keypad: kept while the room's awake)
     const result = handleMessage(player, data, now, {items, marks, race, koth, converter: this.converter, players: () => this.players()});
@@ -229,6 +261,7 @@ export class Room {
       else if (to === 'self') this.send(ws, msg);
       else for (const other of this.sockets()) if (other.deserializeAttachment()?.id === to) this.send(other, msg);
     }
+    if (result.radioLog) await this.logRadio(result.radioLog);
     if (result.report) await this.ctx.storage.put?.('errors', logError((await this.ctx.storage.get?.('errors')) || [], result.report), {allowUnconfirmed: true});
     if (result.itemsChanged) { await this.saveItems(); await this.scheduleAlarm(); }
     if (result.marksChanged) this.saveMarksSoon();
