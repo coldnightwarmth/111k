@@ -13,6 +13,9 @@ import {jumpHeight} from './motion.js';
 import {ghostMaterial} from './level.js';
 
 export const AVATAR_SCALE = .66;
+// your own body in first person, hidden but still casting the projector's shadow (src/cinema.js): its own layer, which
+// only the projector's shadow pass sees (not layer 2: that's what blocks flashlight beams, src/beamshadows.js)
+export const SELF_SHADOW_LAYER = 4;
 const ROOT = new URL('../assets/avatars/', import.meta.url).href;
 const loader = new GLTFLoader().setMeshoptDecoder(MeshoptDecoder);
 const cache = new Map();
@@ -333,11 +336,11 @@ export async function createAvatar(look, {waitForEmotes = false} = {}) {
   return {
     root, model, socket, hand: model.getObjectByName('HandR') || model.getObjectByName('Hand.R'),
     handL: model.getObjectByName('HandL') || model.getObjectByName('Hand.L'), look, scale: AVATAR_SCALE, eye: 1.45, pitch: 0,
-    // hidden (first person) can still leave a shadow: drawn only for the lights that cast them (layer 2)
+    // hidden (first person) can still leave a shadow: drawn only in the projector's shadow pass (SELF_SHADOW_LAYER)
     setVisible(v, shadow = false) {
       const mode = v ? 1 : shadow ? 2 : 0;
       if (mode === shownMode) return;
-      if ((mode === 2) !== (shownMode === 2)) model.traverse(o => o.layers.set(mode === 2 ? 2 : 0));
+      if ((mode === 2) !== (shownMode === 2)) model.traverse(o => o.layers.set(mode === 2 ? SELF_SHADOW_LAYER : 0));
       shownMode = mode; model.visible = mode > 0;
     },
     head,

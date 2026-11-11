@@ -168,6 +168,8 @@ function paintballModel() {
 
 // A fat paint marker, its nib down its local -z: the band and the nib show the paint it's loaded with.
 const MARKER_SCALE = 1.4;
+// a marker nobody's used yet: a colour of its own (from its id), not the cycling 'random'
+const restingPaint = id => PAINT_COLORS[[...id].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7) % PAINT_COLORS.length];
 function markerModel() {
   const g = new THREE.Group(), m = new THREE.Group(); m.scale.setScalar(MARKER_SCALE); g.add(m);
   const Z = [Math.PI / 2, 0, 0], NZ = [-Math.PI / 2, 0, 0];
@@ -182,8 +184,9 @@ function markerModel() {
   let shown = null;
   const setPaint = (color, palette) => {
     const c = color < 0 ? palette[(Math.floor(performance.now() / 700)) % palette.length] : color;   // (random: it cycles)
-    if (c === shown) return;
+    if (c === shown) return c;
     shown = c; nib.color.setHex(c); band.color.setHex(c);
+    return c;
   };
   g.userData = {tip: new THREE.Vector3(0, 0, -.085 * MARKER_SCALE), ground: .0135 * MARKER_SCALE, groundRoll: Math.PI / 2, setPaint};
   return g;
@@ -984,6 +987,8 @@ export function createItems({scene, camera, hits, shadows = null, onImpact = nul
     reloading(id) { return !!items.get(id)?.reload; },
     // a marker bearing down (drawing): your view model's
     drawing(id, on) { const it = items.get(id); if (it) it.drawing = on; },
+    // a marker's stroke went down in this colour: it keeps it when it's put down
+    inked(id, color) { const it = items.get(id); if (it) it.lastPaint = it.inkPaint = color; },
     // a shot gone from its hopper
     spend(id) { const it = items.get(id); if (it && it.state.type === 'paintball') it.state.ammo = Math.max(0, (it.state.ammo ?? MAG_SIZE) - 1); },
     // recoil / shake for your own view model
@@ -1098,8 +1103,16 @@ export function createItems({scene, camera, hits, shadows = null, onImpact = nul
           }
           u.artAt(near, far);
         }
-        // the hopper shows what's loaded: yours, the holder's choice, or a mix lying on the floor
-        if (u.setPaint) u.setPaint(s.holder === myId ? myPaint : s.holder ? (poseOf(s.holder)?.pc ?? RANDOM_PAINT) : RANDOM_PAINT, PAINT_COLORS);
+        // the hopper shows what's loaded: yours, the holder's choice, or a mix lying on the floor. A marker shows
+        // its holder's paint, and put down keeps the colour it last drew with (or showed): it doesn't cycle
+        if (u.setPaint) {
+          const loaded = s.holder === myId ? myPaint : s.holder ? (poseOf(s.holder)?.pc ?? RANDOM_PAINT) : null;
+          if (s.type === 'marker') {
+            const shown = u.setPaint(loaded ?? it.lastPaint ?? restingPaint(s.id), PAINT_COLORS);
+            if (loaded !== null && it.inkPaint === undefined) it.lastPaint = shown;
+            if (loaded === null) it.inkPaint = undefined;
+          } else u.setPaint(loaded ?? RANDOM_PAINT, PAINT_COLORS);
+        }
         // the hopper: what's left in it, filling back up through a reload
         let reload = 0;
         if (it.reload) {

@@ -124,11 +124,7 @@ def build(ctx, door_x):
             continue
         P.debris(r, x, z, ['can', 'flyer', 'cup', 'chips', 'butts', 'caps'][i % 6])
 
-    # extension cord from the door to a power strip by the boombox
-    path = [(door_x - 0.3, Z0 + 0.05), (door_x - 0.6, Z0 + 0.7), (-0.6, -1.7), (-1.9, -1.2), (-2.1, -1.05)]
-    for (ax, az), (bx_, bz_) in zip(path[:-1], path[1:]):
-        dx, dz = bx_ - ax, bz_ - az
-        pbox(((ax + bx_) / 2, 0.006, (az + bz_) / 2), (math.hypot(dx, dz), 0.012, 0.022), 'orange', yaw=math.atan2(-dz, dx))
+    # a power strip by the boombox (its cord in from the door is gone: taken out on 11 Nov)
     pbox((-2.15, 0.02, -1.15), (0.3, 0.04, 0.07), 'black', yaw=0.5)
 
     # ------------------------------------------------- desk, chair, CRT

@@ -1213,6 +1213,13 @@ def shade_and_light(S, mesh):
             v = ao * dark
             L[k], C[k] = uv, (v, v, v)
             cache[key] = (L[k].copy(), C[k].copy())
+        # every corner should borrow light from about the same bit of floor: one that found some other surface
+        # (a doorway's step, a wall: another island of the lightmap) would smear that island across its faces,
+        # so those take the light of the floor under the middle of the piece instead
+        mid = mesh.light_uv(np.array([centre[0], 0.05, centre[2]]), np.array([0.0, -1.0, 0.0]), 0.6)
+        if mid is None:
+            mid = np.median(L, axis=0)
+        L[np.linalg.norm(L - mid, axis=1) > 0.04] = mid
         g = (int(centre[0] // 6), int(centre[2] // 6))
         o = out.setdefault(g, {'pos': [], 'nor': [], 'uv0': [], 'uv1': [], 'col': []})
         o['pos'].append(Pw); o['nor'].append(Nw); o['uv0'].append(UV); o['uv1'].append(L); o['col'].append(C)

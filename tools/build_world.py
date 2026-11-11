@@ -449,11 +449,6 @@ def at(a, x, y=0.0):
 
 
 with W.using('props', density=1.0):
-    # a cord out of the party room, running off under the crate by the door (the crate is tools/crates.py's)
-    ga = party_a + 0.045
-    cord = [at(ga - 0.006, 1.95, 0.01), at(party_a + 0.02, 2.0, 0.01), at(party_a + 0.004, 2.8, 0.01), at(party_a, VD, 0.01)]
-    for p, q in zip(cord[:-1], cord[1:]):
-        Pr.tube(p, q, 0.011, 'orange', sides=4)
     Pr.camp_chair(*at(party_a - 0.05, 1.5)[[0, 2]], party_a + 1.2, 'navy')
     Pr.camp_chair(*at(party_a - 0.075, 0.9)[[0, 2]], party_a + 2.3, 'green')
     Pr.camp_chair(*at(party_a + 0.08, -1.6)[[0, 2]], party_a - 1.3, 'red')

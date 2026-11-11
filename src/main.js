@@ -1199,7 +1199,7 @@ async function start() {
     st.sentAt = now;
   }
   function drawInk(now) {
-    const h = held(), on = h?.state.type === 'marker' && controls.state.firing && !chat.open && emoteMenu.hidden && gallery.hidden;
+    const h = held(), on = h?.state.type === 'marker' && controls.state.firing && !fireLatch && !chat.open && emoteMenu.hidden && gallery.hidden;   // (not the click that picked it up)
     if (h?.state.type === 'marker') items.drawing(h.state.id, on);
     if (!on) { if (inkStroke) { inkFlush(inkStroke, now); inkStroke = null; } return; }
     const t = inkTarget();
@@ -1212,6 +1212,7 @@ async function start() {
     if (!st) {
       const c = chosenPaint === RANDOM_PAINT ? PAINT_COLORS[Math.floor(Math.random() * PAINT_COLORS.length)] : chosenPaint;
       st = inkStroke = {id: `${network.id}:${(++inkSeq).toString(36)}`, h: t.host, c, last: null, n: 0, buf: [], sentAt: now};
+      items.inked(h.state.id, c);
     }
     if (st.last && Math.hypot(q[0] - st.last[0], q[1] - st.last[1], q[2] - st.last[2]) < INK_STEP) return;
     st.last = q; st.n++; st.buf.push(q);
@@ -2194,7 +2195,7 @@ async function start() {
 
     avatarLights.update(camera.position.x, camera.position.z);
     updateLights(now);
-    cinema.update(dt, camera.position, inB04(camera.position));
+    cinema.update(dt, camera, inB04(camera.position));
     renderer.render(scene, camera);
   };
   // A thrown error mustn't stop the loop for good (that freezes the game): report it (once per kind)

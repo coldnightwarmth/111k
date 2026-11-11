@@ -322,9 +322,10 @@ class Props:
         self.hull(pts, color, mat)
 
     # left out (built and thrown away, so every other piece stays where it was): carrier bags, which
-    # read as face masks, and one pizza box standing open in the tunnel
+    # read as face masks, one pizza box standing open in the tunnel, and a folded box poking up through the
+    # supply room's bottom shelf (B-02's back wall; the shelving's added at runtime). (kind, x, z[, how near])
     SKIP_KINDS = {'bag'}
-    SKIP_AT = [('pizza', 32.395, 19.881)]
+    SKIP_AT = [('pizza', 32.395, 19.881), ('cardboard', 46.39, -11.45, 0.3)]
 
     def _debris(self, r, x, z, kind=None, y=0.0):
         names = list(self.DEBRIS)
@@ -333,7 +334,7 @@ class Props:
         w = self.W.T(np.array([[x, y, z]], float))[0]
         if os.environ.get('DEBRIS_LOG'):
             print(f'DEBRIS {kind} {w[0]:.3f} {w[1]:.3f} {w[2]:.3f}')
-        drop = kind in self.SKIP_KINDS or any(k == kind and math.hypot(w[0] - sx, w[2] - sz) < 0.05 for k, sx, sz in self.SKIP_AT)
+        drop = kind in self.SKIP_KINDS or any(k == kind and math.hypot(w[0] - at[0], w[2] - at[1]) < (at[2] if len(at) > 2 else 0.05) for k, *at in self.SKIP_AT)
         with (self.W.discard() if drop else contextlib.nullcontext()):
             self._debris_piece(r, x, z, kind, y)
 

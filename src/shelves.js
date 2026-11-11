@@ -56,6 +56,8 @@ const STOCK = [
   [4, 2, -.5, 'spray'], [4, 2, -.15, 'spray'], [4, 2, .2, 'spray'], [4, 2, .55, 'spray'],
   [4, 3, -.4, 'marker'], [4, 3, 0, 'marker'], [4, 3, .4, 'marker'],
   [4, 0, 0, 'flashlight'],
+  // more buckets: the bottom shelves of the two units on the back wall (last, so nothing above changes its id)
+  [0, 0, -.45, 'bucket'], [0, 0, .45, 'bucket'], [1, 0, -.45, 'bucket'], [1, 0, .45, 'bucket'],
 ];
 const PREFIX = {flashlight: 'fls', paintball: 'pbs', spray: 'sps', bucket: 'bks', marker: 'mks'};
 export const SHELF_ITEMS = (() => {

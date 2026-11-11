@@ -9,6 +9,7 @@
 import * as THREE from 'three';
 import {roomFrame, DOOR_X} from './room-frame.js';
 import {FILMS} from './cinema-films.js';
+import {SELF_SHADOW_LAYER} from './avatar.js';
 
 export const ROOM = 3;
 const F = roomFrame(ROOM, DOOR_X[ROOM]);
@@ -146,7 +147,14 @@ export function createCinema(renderer, scene, sfx) {
   light.shadow.camera.near = .25; light.shadow.camera.far = 9;
   light.shadow.bias = -.0004; light.shadow.normalBias = .015;
   light.shadow.radius = 2;
-  light.shadow.camera.layers.enable(2);                 // (your own body in first person: its shadow, not it)
+  // your own body in first person: its shadow, not it. three.js only draws into a shadow what the view's camera can
+  // see, so the camera takes on your body's layer just for this light's shadow pass (which comes after the frame's
+  // list of what to draw is made, so it isn't drawn) and gives it back when the frame's done.
+  const shadowMatrices = light.shadow.updateMatrices.bind(light.shadow);
+  let viewCam = null;
+  light.shadow.updateMatrices = (l, vp) => { viewCam?.layers.enable(SELF_SHADOW_LAYER); shadowMatrices(l, vp); };
+  const afterRender = scene.onAfterRender;
+  scene.onAfterRender = function (...a) { viewCam?.layers.disable(SELF_SHADOW_LAYER); return afterRender.apply(this, a); };
   const pictureRT = new THREE.WebGLRenderTarget(1024, 1024, {colorSpace: THREE.SRGBColorSpace, depthBuffer: false});
   light.map = pictureRT.texture;
   // the film where the screen is, as the lens sees it
@@ -236,8 +244,9 @@ export function createCinema(renderer, scene, sfx) {
     get on() { return on; },
     // within earshot and sight of it (for the shadow pass and first person's shadow)
     near(p) { return on && p.distanceTo(middle) < WAKE; },
-    update(dt, camPos, inRoom) {
-      const d = camPos.distanceTo(middle);
+    update(dt, camera, inRoom) {
+      viewCam = camera; camera.layers.disable(SELF_SHADOW_LAYER);
+      const camPos = camera.position, d = camPos.distanceTo(middle);
       if (!on && d < WAKE) start();
       else if (on && d > SLEEP) stop();
       if (!on) return;
@@ -276,7 +285,7 @@ export function createCinema(renderer, scene, sfx) {
       light.intensity = video.readyState >= 2 ? Math.PI * 1.05 : 0;
       // the picture for the light: the film, from the lens, where the screen is
       light.updateMatrixWorld(); light.target.updateMatrixWorld();
-      light.shadow.updateMatrices(light);
+      shadowMatrices(light);
       const prev = renderer.getRenderTarget();
       renderer.setRenderTarget(pictureRT);
       renderer.render(film, light.shadow.camera);

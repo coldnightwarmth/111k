@@ -7,7 +7,7 @@ import {FRAME, MX, MW, MD, MH, FRONT, CH, CH_X, PANEL_X, DISPLAY_Y, KEYPAD_Y, BU
 import {piece, validArt, ART_MAX} from './collection.js';
 import {glowBox} from './items.js';
 
-const GREEN = '#7dffb0', AMBER = '#ffbe3c', PINK = '#ff5fae', RED = '#ff4a3a';
+const GREEN = '#7dffb0', AMBER = '#ffbe3c', RED = '#ff4a3a';
 
 function canvasTexture(w, h, draw) {
   const c = document.createElement('canvas'); c.width = w; c.height = h;
@@ -17,14 +17,29 @@ function canvasTexture(w, h, draw) {
 }
 let seed = 2020;
 const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
-// deep blue enamel, scuffed, with a little speckle
+// worn brown enamel, the loop trial machine's kind (src/machine.js): mottled, chipped to primer and steel, rust
+// weeping from the seams, grime at the bottom
 function enamel() {
   const t = canvasTexture(512, 512, (g, w, h) => {
-    g.fillStyle = '#1f2a52'; g.fillRect(0, 0, w, h);
-    for (let i = 0; i < 1800; i++) { g.fillStyle = `rgba(${rnd() < .5 ? '8,12,30' : '90,110,170'},${.04 + rnd() * .05})`; g.beginPath(); g.arc(rnd() * w, rnd() * h, 2 + rnd() * 12, 0, 7); g.fill(); }
-    for (let i = 0; i < 60; i++) { g.fillStyle = 'rgba(160,165,175,.5)'; const x = rnd() * w, y = rnd() * h; g.fillRect(x, y, 1 + rnd() * 6, 1 + rnd() * 2); }
-    for (let i = 0; i < 18; i++) { const x = rnd() * w, y = rnd() * h * .6, len = 30 + rnd() * 120; const gr = g.createLinearGradient(x, y, x, y + len);
-      gr.addColorStop(0, 'rgba(10,10,14,.35)'); gr.addColorStop(1, 'rgba(10,10,14,0)'); g.fillStyle = gr; g.fillRect(x, y, 2 + rnd() * 3, len); }
+    g.fillStyle = '#5c4632'; g.fillRect(0, 0, w, h);
+    for (let i = 0; i < 2200; i++) {                       // mottling
+      const v = rnd(); g.fillStyle = `rgba(${v < .5 ? '34,24,16' : '150,124,92'},${.05 + rnd() * .06})`;
+      g.beginPath(); g.arc(rnd() * w, rnd() * h, 2 + rnd() * 14, 0, 7); g.fill();
+    }
+    for (let i = 0; i < 70; i++) {                         // chips: primer red-brown with a steel core
+      const x = rnd() * w, y = rnd() * h, r = 1.5 + rnd() * 5;
+      g.fillStyle = '#7a3f26'; g.beginPath(); g.ellipse(x, y, r * 1.6, r, rnd() * 3, 0, 7); g.fill();
+      g.fillStyle = '#9a9a92'; g.beginPath(); g.ellipse(x, y, r * .7, r * .45, rnd() * 3, 0, 7); g.fill();
+    }
+    for (let i = 0; i < 26; i++) {                         // rust streaks running down
+      const x = rnd() * w, y = rnd() * h * .7, len = 40 + rnd() * 160;
+      const gr = g.createLinearGradient(x, y, x, y + len);
+      gr.addColorStop(0, 'rgba(120,58,22,.55)'); gr.addColorStop(1, 'rgba(120,58,22,0)');
+      g.fillStyle = gr; g.fillRect(x, y, 2 + rnd() * 4, len);
+    }
+    const edge = g.createLinearGradient(0, 0, 0, h);       // grime settles at the bottom
+    edge.addColorStop(0, 'rgba(0,0,0,0)'); edge.addColorStop(.75, 'rgba(0,0,0,0)'); edge.addColorStop(1, 'rgba(20,14,8,.5)');
+    g.fillStyle = edge; g.fillRect(0, 0, w, h);
   });
   t.wrapS = t.wrapT = THREE.RepeatWrapping;
   return t;
@@ -44,18 +59,6 @@ function hazard() {
   return canvasTexture(256, 32, (g, w, h) => {
     g.fillStyle = '#e8b416'; g.fillRect(0, 0, w, h); g.fillStyle = '#16140f';
     for (let x = -h; x < w + h; x += 32) { g.beginPath(); g.moveTo(x, h); g.lineTo(x + 16, h); g.lineTo(x + 16 + h, 0); g.lineTo(x + h, 0); g.fill(); }
-  });
-}
-// the name across the top
-function header() {
-  return canvasTexture(1024, 160, (g, w, h) => {
-    g.fillStyle = '#10142a'; g.fillRect(0, 0, w, h);
-    g.strokeStyle = '#ff5fae'; g.lineWidth = 6; g.strokeRect(10, 10, w - 20, h - 20);
-    g.font = 'bold 84px "Arial Black", Impact, sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle';
-    g.shadowColor = PINK; g.shadowBlur = 18; g.fillStyle = '#ffd6ec';
-    g.fillText('PIECE CONVERTER', w / 2, h / 2 + 4);
-    g.shadowBlur = 0; g.font = 'bold 26px monospace'; g.fillStyle = '#9fb3ff';
-    g.fillText('111K', 70, h / 2); g.fillText('MK.II', w - 70, h / 2);
   });
 }
 // a small stencilled label
@@ -122,10 +125,9 @@ export function createConverter(scene) {
   const cx0 = L(CH.x1), cx1 = L(CH.x0), chD = CH.z1 - FRONT, px = L(PANEL_X);   // the chamber across, its depth; the panel
 
   const enamelMap = enamel();
-  const paint = std(0xffffff, .72, .3, {map: enamelMap, emissiveMap: enamelMap, emissive: 0xffffff, emissiveIntensity: .25});
-  const trim = std(0x2a2f3a, .5, .7), steel = std(0x8a9096, .4, .85), black = std(0x0b0c0e, .55, .4);
-  const lining = std(0x5a6270, .35, .55, {emissive: 0x2a3444});        // (lit from inside by its strip light)
-  const pink = std(0xff5fae, .45, .2, {emissive: 0x5a0f34});
+  const paint = std(0xffffff, .78, .35, {map: enamelMap, emissiveMap: enamelMap, emissive: 0xffffff, emissiveIntensity: .3});
+  const trim = std(0x1c1e20, .6, .6), steel = std(0x8a9096, .4, .85), black = std(0x0b0c0e, .55, .4);
+  const lining = std(0x625c54, .35, .55, {emissive: 0x2e2a24});        // (lit from inside by its strip light)
 
   // ---- the body, round the chamber
   const body = new THREE.Group(); root.add(body);
@@ -143,14 +145,14 @@ export function createConverter(scene) {
   slab(body, lining, cx1 - e, cx1, CH.y0, CH.y1, -chD, 0);
   slab(body, lining, cx0, cx1, CH.y0, CH.y1, -chD, -chD + e);
   // a light strip along the chamber's ceiling, and a glowing frame round its mouth
-  const glowW = new THREE.MeshBasicMaterial({color: 0xdff4ff, toneMapped: false});
+  const glowW = new THREE.MeshBasicMaterial({color: 0xffe2a8, toneMapped: false});
   part(body, new THREE.BoxGeometry(cx1 - cx0 - .12, .012, .05), glowW, [(cx0 + cx1) / 2, CH.y1 - .012, -.12]);
   // the strip's light on the chamber's back wall, brightest under it
   const wash = new THREE.CanvasTexture((() => { const c = document.createElement('canvas'); c.width = 8; c.height = 128; const g = c.getContext('2d');
-    const gr = g.createLinearGradient(0, 0, 0, 128); gr.addColorStop(0, 'rgba(210,235,255,.55)'); gr.addColorStop(1, 'rgba(210,235,255,.06)'); g.fillStyle = gr; g.fillRect(0, 0, 8, 128); return c; })());
+    const gr = g.createLinearGradient(0, 0, 0, 128); gr.addColorStop(0, 'rgba(255,226,170,.55)'); gr.addColorStop(1, 'rgba(255,226,170,.06)'); g.fillStyle = gr; g.fillRect(0, 0, 8, 128); return c; })());
   part(body, new THREE.PlaneGeometry(cx1 - cx0 - .02, CH.y1 - CH.y0 - .02), new THREE.MeshBasicMaterial({map: wash, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false}),
     [(cx0 + cx1) / 2, (CH.y0 + CH.y1) / 2, -chD + e + .002]).userData.noHit = true;
-  const frameGlow = new THREE.MeshBasicMaterial({color: 0x52e6ff, toneMapped: false});
+  const frameGlow = new THREE.MeshBasicMaterial({color: 0xffb020, toneMapped: false});
   for (const [x0, x1, y0, y1] of [[cx0 - .05, cx1 + .05, CH.y1, CH.y1 + .035], [cx0 - .05, cx1 + .05, CH.y0 - .035, CH.y0],
     [cx0 - .05, cx0, CH.y0, CH.y1], [cx1, cx1 + .05, CH.y0, CH.y1]]) slab(body, frameGlow, x0, x1, y0, y1, 0, .012);
   // trim: a plinth, the corners, a cap
@@ -158,12 +160,9 @@ export function createConverter(scene) {
   slab(body, trim, -hx - .02, hx + .02, MH - .05, MH + .02, -MD, .02);
   for (const x of [-hx, hx]) slab(body, trim, x - .02, x + .02, .12, MH - .05, -MD, .02);
   slab(body, trim, cx0 - .1, cx0 - .06, .12, MH - .05, -.02, .015);       // between the panel and the chamber
-  // the name across the top
-  part(body, new THREE.PlaneGeometry(MW - .2, (MW - .2) * 160 / 1024), new THREE.MeshBasicMaterial({map: header(), toneMapped: false, color: 0xd8d8d8}),
-    [0, (CH.y1 + MH) / 2 + .02, .004]);
   // vents low down, rivets, stencils
   for (let i = 0; i < 5; i++) slab(body, black, cx0 + .1, cx1 - .1, .25 + i * .08, .27 + i * .08, -.01, .006);
-  part(body, new THREE.PlaneGeometry(.62, .11), new THREE.MeshBasicMaterial({map: label('CANVAS IN ▼', 512, 90, '#ffd6ec'), transparent: true, toneMapped: false}),
+  part(body, new THREE.PlaneGeometry(.62, .11), new THREE.MeshBasicMaterial({map: label('CANVAS IN ▼', 512, 90, '#ffe2a8'), transparent: true, toneMapped: false}),
     [(cx0 + cx1) / 2, CH.y0 - .1, .004]);
   for (const [x, y] of [[-hx + .06, .2], [-hx + .06, MH - .12], [hx - .06, .2], [hx - .06, MH - .12], [cx0 - .2, .2], [cx0 - .2, MH - .12]])
     part(body, new THREE.CylinderGeometry(.012, .012, .01, 8), steel, [x, y, .006], [Math.PI / 2, 0, 0]);
@@ -206,7 +205,7 @@ export function createConverter(scene) {
   part(panel, new THREE.PlaneGeometry(.62, .62 * 224 / 512), std(0x99aab0, .05, .2, {transparent: true, opacity: .1, depthWrite: false}), [0, DISPLAY_Y, .056]);
   // keypad: on a recessed plate, three across
   slab(panel, black, -.2, .2, KEYPAD_Y - .25, KEYPAD_Y + .25, 0, .02);
-  const keys = new Map(), keyMat = std(0xffffff, .6, .05), keyGlowMat = new THREE.MeshBasicMaterial({color: 0x9fe8ff, toneMapped: false, transparent: true, opacity: .55, depthWrite: false});
+  const keys = new Map(), keyMat = std(0xffffff, .6, .05), keyGlowMat = new THREE.MeshBasicMaterial({color: 0xffd890, toneMapped: false, transparent: true, opacity: .55, depthWrite: false});
   KEYS.forEach((k, i) => {
     const c = i % 3, r = Math.floor(i / 3);
     const g = new THREE.Group(); g.position.set((c - 1) * KEY_PITCH, KEYPAD_Y + (1.5 - r) * KEY_PITCH, .02); panel.add(g);
@@ -229,7 +228,7 @@ export function createConverter(scene) {
     {x: 0, y: 0, r: .136, z0: .07, z1: .1}, {c: [0, 0, .12], r: [.111, .111, .062]});
   buttonGlow.position.set(0, BUTTON_Y, 0); panel.add(buttonGlow);
   noPaint(panel);
-  part(panel, new THREE.PlaneGeometry(.5, .06), new THREE.MeshBasicMaterial({map: label('PIECE No. 1 - 111111', 512, 60, '#9fb3ff'), transparent: true, toneMapped: false}), [0, DISPLAY_Y + .25, .002]);
+  part(panel, new THREE.PlaneGeometry(.5, .06), new THREE.MeshBasicMaterial({map: label('PIECE No. 1 - 111111', 512, 60, '#ffe2a8'), transparent: true, toneMapped: false}), [0, DISPLAY_Y + .25, .002]);
 
   root.updateMatrixWorld(true);
   // the targets the crosshair can be on
@@ -312,7 +311,7 @@ export function createConverter(scene) {
       }
       beaconLamp.visible = !!job && job.phase !== 'open' ? Math.sin(t * 18) > -.3 : false;
       beaconGlass.emissive.setHex(job && job.phase !== 'open' ? 0xb05000 : 0x401800);
-      frameGlow.color.setHex(job && job.phase !== 'open' ? (Math.sin(t * 10) > 0 ? 0xff5fae : 0x52e6ff) : 0x52e6ff);
+      frameGlow.color.setHex(job && job.phase !== 'open' ? (Math.sin(t * 10) > 0 ? 0xff2d1e : 0xffb020) : 0xffb020);
       drawDisplay(now);
     },
     // what happens next, for sounds: the phase the shutter's in

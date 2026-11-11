@@ -1,4 +1,4 @@
-// B-20's eggs: one big painted egg sitting in most of the open crates round the converter room (the crates are
+// B-20's eggs: one big painted egg in most of the open crates (stood up, lying down or leant against a wall) round the converter room (the crates are
 // tools/crates.py's EGG_CRATES: keep these in step). Each its own colours: a deep ground, spots, stars, dots.
 import * as THREE from 'three';
 import {roomFrame, DOOR_X} from './room-frame.js';
@@ -9,7 +9,19 @@ const CRATES = [[2.6, 2.25, .25], [2.85, .6, Math.PI / 2 + .1], [-2.85, .55, Mat
   [1.75, .95, -.35], [-1.0, -1.75, .5]];
 const FILLED = [0, 1, 2, 3, 4];
 const FLOOR = .11;                                    // the crate's deck
+const STRAW = FLOOR + .2;                             // the top of the straw
+const INSIDE_X = .445, INSIDE_Z = .305;               // the crate's inside walls (end, side), from its middle
 const EGG_H = .7, EGG_R = .21;
+// how each sits: tilt (rad) toward the crate's end wall (z) or side wall (x), turned in the crate, spun on its own
+// axis, and pushed up against a wall ('x' an end, 'z' a side) or not. Upright, lying along the crate, leaning
+// into a corner of it.
+const POSES = [
+  {tz: .06, tx: -.08, yaw: 0, spin: 0},                          // stood up in the straw
+  {tz: -Math.PI / 2 + .04, tx: 0, yaw: .14, spin: 1.1},          // lying down along the crate
+  {tz: -.72, tx: .05, yaw: .06, spin: 2.3, lean: 'x'},           // leant over against the end wall
+  {tz: Math.PI / 2 - .05, tx: 0, yaw: -.18, spin: 4.0, dz: -.04}, // lying down the other way
+  {tz: .04, tx: .62, yaw: -.1, spin: .5, lean: 'z'},             // leant against the side
+];
 
 // ground, spots, stars, dots
 const LOOKS = [
@@ -85,18 +97,30 @@ function eggGeometry() {
 export function createEggs(scene) {
   const f = roomFrame(ROOM, DOOR_X[ROOM]), geo = eggGeometry(), root = new THREE.Group(); root.name = 'eggs';
   const strawGeo = new THREE.BoxGeometry(.9, .2, .56), strawMat = new THREE.MeshStandardMaterial({map: strawTexture(), roughness: 1, color: 0xd8b768});
+  const box = new THREE.Box3(), probe = new THREE.Mesh(geo);
   FILLED.forEach((k, i) => {
-    const [x, z, turn] = CRATES[k], p = f.toWorld(x, z);
+    const [x, z, turn] = CRATES[k], p = f.toWorld(x, z), pose = POSES[i % POSES.length];
     const map = eggTexture(LOOKS[i % LOOKS.length], 911 + i * 77);
     const mat = new THREE.MeshStandardMaterial({map, roughness: .32, metalness: 0, emissiveMap: map, emissive: 0xffffff, emissiveIntensity: .14});
+    // the crate's own frame (x along it, z across, y up from the floor)
+    const crate = new THREE.Group(); crate.position.set(p.x, 0, p.z); crate.rotation.y = f.yaw + turn; root.add(crate);
     const egg = new THREE.Mesh(geo, mat);
-    // sat in the straw a little off upright, turned any which way
-    egg.position.set(p.x, FLOOR + .12, p.z);
-    egg.rotation.set((i % 2 ? 1 : -1) * (.08 + .04 * i), f.yaw + turn + i * 1.7, (i % 3 - 1) * .07, 'YXZ');
-    root.add(egg);
+    egg.quaternion.setFromEuler(new THREE.Euler(0, pose.yaw, 0))
+      .multiply(new THREE.Quaternion().setFromEuler(new THREE.Euler(pose.tx, 0, pose.tz)))
+      .multiply(new THREE.Quaternion().setFromEuler(new THREE.Euler(0, pose.spin, 0)));
+    // where it sits, from its shape as posed: its lowest point a little down into the straw, centred in the
+    // crate (lying) or against the wall it's leaning on
+    probe.quaternion.copy(egg.quaternion); probe.updateMatrixWorld(true); box.setFromObject(probe, true);
+    const mid = box.getCenter(new THREE.Vector3());
+    const sink = Math.abs(pose.tz) > 1 ? .05 : .07;
+    egg.position.set(
+      pose.lean === 'x' ? INSIDE_X - box.max.x : -mid.x,
+      STRAW - sink - box.min.y,
+      pose.lean === 'z' ? INSIDE_Z - box.max.z : -mid.z + (pose.dz || 0));
+    crate.add(egg);
     // a bed of straw filling the crate's floor
     const bed = new THREE.Mesh(strawGeo, strawMat);
-    bed.position.set(p.x, FLOOR + .1, p.z); bed.rotation.y = f.yaw + turn; root.add(bed);
+    bed.position.y = FLOOR + .1; crate.add(bed);
   });
   root.traverse(o => { if (o.isMesh) { o.matrixAutoUpdate = false; o.updateMatrix(); } });
   scene.add(root);
