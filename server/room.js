@@ -391,6 +391,12 @@ function handle(player, data, now, room) {
     if (flat(player.pose, item) > PICKUP_RANGE + PICKUP_SLACK) return refuse();
     item.holder = player.id; player.lastActive = now;
     if (crowning) { item.on = true; room.koth.names[player.id] = player.name || ''; }
+    // a Mons mon on the board with the mana, supermana or bomb it's carrying on its square: that goes where it goes
+    if (item.type === 'piece' && item.id.startsWith('mon-')) {
+      const o = Object.values(items).find(q => q.type === 'piece' && !q.holder && /^(mana-|smana|bomb-)/.test(q.id)
+        && Math.abs(q.x - item.x) < .02 && Math.abs(q.z - item.z) < .02 && Math.abs(q.y - item.y) < .05);
+      if (o) item.carrying = o.id; else delete item.carrying;
+    }
     out.push({to: 'all', msg: {type: 'item', item: cleanItem(item)}});
     return {out, changed: true, itemsChanged: true};
   }
@@ -421,6 +427,12 @@ function handle(player, data, now, room) {
     const fall = fp && fv && Math.hypot(fp[0] - player.pose.x, fp[2] - player.pose.z) < 4 && Math.hypot(...fv) < 15
       ? {p: fp.map(v => Math.round(v * 1000) / 1000), v: fv.map(v => Math.round(v * 1000) / 1000)} : undefined;
     out.push({to: 'all', msg: {type: 'item', item: cleanItem(item), ...(path ? {path} : {fall})}});
+    // what the mon was carrying comes along to where it's put (if nobody's taken it meanwhile)
+    if (item.carrying) {
+      const o = items[item.carrying];
+      if (o && !o.holder) { Object.assign(o, {x: item.x, y: item.y, z: item.z, yaw: item.yaw}); out.push({to: 'all', msg: {type: 'item', item: cleanItem(o)}}); }
+      delete item.carrying;
+    }
     return {out, changed: true, itemsChanged: true};
   }
   // Paintings that moved without anyone holding them: knocked by one being put down, or left with nothing

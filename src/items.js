@@ -12,8 +12,7 @@ import {ART, ART_IDS, PREVIEW, artFile, artOriginal, paintingSize, paintingMatri
 import {mergeVertices, mergeGeometries} from '../vendor/three/BufferGeometryUtils.js';
 import {GLTFLoader} from '../vendor/three/GLTFLoader.js';
 import {eggModel} from './eggs.js';
-import {MONS, squareAt, BOARD_ROOM} from './pieces.js';
-import {roomFrame, DOOR_X} from './room-frame.js';
+import {MONS, squareAt} from './pieces.js';
 
 const BEAM_COLOR = new THREE.Color(1, .93, .8);
 export const ITEM_NAMES = {flashlight: 'flashlight', paintball: 'paintball gun', spray: 'spray can', bucket: 'bucket and sponge', crown: 'golden crown', painting: 'painting', marker: 'marker', piece: 'piece'};
@@ -612,7 +611,6 @@ function showBack(model, u, on) {
 // outline that shares it fills in too). The mana, supermana, bombs and potions are made here.
 const PIECES_URL = new URL('../assets/mons/pieces.glb', import.meta.url).href;
 const shared = new Map();       // piece id -> where it's nudged to, sharing its square
-const PAIR_AXIS = (() => { const f = roomFrame(BOARD_ROOM, DOOR_X[BOARD_ROOM]), a = f.toWorld(0, 0), b = f.toWorld(1, 0); return new THREE.Vector3(b.x - a.x, 0, b.z - a.z).normalize(); })();
 const monGeos = new Map();
 let piecesLoading = null;
 function monGeometry(name) {
@@ -1201,7 +1199,10 @@ export function createItems({scene, camera, hits, shadows = null, onImpact = nul
           if (ids.length !== 2) continue;
           const mon = ids.find(id => id.startsWith('mon-')), other = ids.find(id => /^(mana-|smana|bomb-)/.test(id));
           if (!mon || !other) continue;
-          shared.set(mon, PAIR_AXIS.clone().multiplyScalar(-.06)); shared.set(other, PAIR_AXIS.clone().multiplyScalar(.075));
+          // what it carries in front of it (a mon faces its +z), a little off to one side; the mon back a touch
+          const yaw = items.get(mon).state.yaw, fx = Math.sin(yaw), fz = Math.cos(yaw), rx = Math.cos(yaw), rz = -Math.sin(yaw);
+          shared.set(mon, new THREE.Vector3(-fx * .035, 0, -fz * .035));
+          shared.set(other, new THREE.Vector3(fx * .06 + rx * .035, 0, fz * .06 + rz * .035));
         }
       }
       for (const it of items.values()) {

@@ -896,3 +896,21 @@ test('the collection: numbers across the CDN folders, and each piece its own pro
   assert.deepEqual(artDims(20637), {w: 932, h: 1111});
   assert.deepEqual(artDims(70000), {w: 1024, h: 1024});
 });
+
+test('a mon carries the mana on its square along when it is moved', async () => {
+  const {handleMessage, newPlayer, freshMarks} = await import('../room.js');
+  const {ITEM_SPAWNS} = await import('../../src/world-items.js');
+  const items = Object.fromEntries(ITEM_SPAWNS.map(s => [s.id, {...s, holder: null, on: false}]));
+  const mon = items['mon-hatchat'], mana = items['mana-w1'];
+  Object.assign(mana, {x: mon.x, y: mon.y, z: mon.z});
+  const a = newPlayer('aaa', 0); a.pose = {x: mon.x, y: 1.45, z: mon.z + .5, yaw: 0, pitch: 0, g: 0};
+  const room = {items, marks: freshMarks(), race: null, players: () => [a]};
+  let now = 10_000;
+  const send = m => { now += 400; return handleMessage(a, JSON.stringify(m), now, room); };
+  send({type: 'pickup', id: 'mon-hatchat'});
+  assert.equal(mon.holder, 'aaa'); assert.equal(mon.carrying, 'mana-w1');
+  const r = send({type: 'drop', id: 'mon-hatchat', x: mon.x + .5, y: 0, z: mon.z, yaw: 0});
+  assert.ok(Math.abs(mana.x - mon.x) < 1e-9 && Math.abs(mana.z - mon.z) < 1e-9, 'the mana came along');
+  assert.ok(r.out.some(o => o.msg.item?.id === 'mana-w1'));
+  assert.equal(mon.carrying, undefined);
+});
