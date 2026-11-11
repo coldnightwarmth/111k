@@ -185,6 +185,7 @@ export function cleanSplat(s) {
     if (d === null) return null;
     out.d = d;
   }
+  if (Number.isFinite(s.t) && s.t > 0) out.t = Math.round(s.t);     // when the room took it (what goes over what, on a reload)
   return paintingFields(s, out);
 }
 

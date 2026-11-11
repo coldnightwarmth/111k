@@ -34,28 +34,36 @@ function inkTexture() {
 }
 
 // hostOf(h) -> the Object3D that a host's ink hangs on (its own space), or null if it isn't here (yet)
-export function createInk({level, scene, hostOf}) {
+// layerFor(host, box): the layer a new stroke goes on (one over the tags and strokes it overlaps: src/main.js);
+// order(layer): that layer's draw order
+export function createInk({level, scene, hostOf, layerFor = () => 0, order = () => 3.5}) {
   const tex = inkTexture();
   const levelMat = markMaterial(level, tex, 3);
   const ownMat = new THREE.MeshStandardMaterial({map: tex, transparent: true, depthWrite: false, vertexColors: true, roughness: .55, metalness: 0,
     flatShading: true, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -6});
-  const batches = new Map();     // host -> {batch, parent}
+  const batches = new Map();     // host|layer -> {batch, parent, h}
   const strokes = new Map();     // id -> {id, h, c, rgb, pts, marks: [{batch, m, verts}], drawn: number of points drawn}
   const _a = new THREE.Vector3(), _b = new THREE.Vector3(), _n = new THREE.Vector3(), _d = new THREE.Vector3(), _s = new THREE.Vector3();
 
-  function batchFor(h) {
+  function batchFor(h, layer = 0) {
     const parent = h === 'w' ? scene : hostOf(h);
     if (!parent) return null;
-    let e = batches.get(h);
+    const key = `${h}|${layer}`;
+    let e = batches.get(key);
     if (e && e.parent !== parent) { e.batch.mesh.removeFromParent(); e = null; }   // (its host was made again)
     if (!e) {
-      const batch = createBatch(h === 'w' ? levelMat : ownMat, h === 'w' ? 8000 : 1200);
-      batch.mesh.renderOrder = 3.5;            // over the tags (2-3), with the splats
+      const batch = createBatch(h === 'w' ? levelMat : ownMat, h === 'w' && !layer ? 8000 : 1200);
+      batch.mesh.renderOrder = order(layer);   // in among the tags: over the older ones it overlaps, under newer
       parent.add(batch.mesh);
-      e = {batch, parent};
-      batches.set(h, e);
+      e = {batch, parent, h};
+      batches.set(key, e);
     }
     return e.batch;
+  }
+  // a stroke's bounds (for what goes over what), grown as it's drawn
+  function grow(st, pts) {
+    st.box ||= new THREE.Box3();
+    for (const q of pts) st.box.expandByPoint(_s.set(q[0], q[1], q[2]));
   }
   const vert = (p, u, v, uv1) => ({p, u, v, uv1});
   // the geometry for points [from, to) of a stroke, joined on to the one before `from`
@@ -91,7 +99,7 @@ export function createInk({level, scene, hostOf}) {
   }
   function draw(st) {
     if (st.drawn >= st.pts.length) return;
-    const batch = batchFor(st.h);
+    const batch = batchFor(st.h, st.layer);
     if (!batch) return;                         // its host isn't here yet: drawn when it is (refresh)
     const verts = build(st, st.drawn);
     st.drawn = st.pts.length;
@@ -109,8 +117,14 @@ export function createInk({level, scene, hostOf}) {
     // a stroke, or more of one: {id, h, c, p: points}
     add({id, h, c, p}) {
       let st = strokes.get(id);
-      if (!st) { st = {id, h, c, rgb: rgbOf(c), pts: [], marks: [], drawn: 0}; strokes.set(id, st); }
+      if (!st) {
+        st = {id, h, c, rgb: rgbOf(c), pts: [], marks: [], drawn: 0};
+        grow(st, p); st.box.expandByScalar(.02);
+        st.layer = layerFor(h, st.box);       // (decided as it starts: it stays on that layer as it grows)
+        strokes.set(id, st);
+      }
       if (st.h !== h) return;
+      grow(st, p);
       st.pts.push(...p);
       draw(st);
     },
@@ -121,13 +135,22 @@ export function createInk({level, scene, hostOf}) {
       for (const e of batches.values()) e.batch.clear();
       for (const s of list) this.add({id: s.id, h: s.h, c: s.c, p: s.pts});
     },
+    // the highest layer of the strokes on host h that box overlaps (-1: none)
+    overlapLayer(h, box) {
+      let top = -1;
+      for (const st of strokes.values()) if (st.h === h && st.layer > top && st.box?.intersectsBox(box)) top = st.layer;
+      return top;
+    },
     // a host that's come (a player's avatar made, a painting arrived): its waiting ink goes on; gone: its batch goes
     refresh() {
-      for (const [h, e] of batches) if (h !== 'w' && hostOf(h) !== e.parent) { e.batch.mesh.removeFromParent(); batches.delete(h); for (const st of strokes.values()) if (st.h === h) { st.drawn = 0; st.marks = []; } }
+      for (const [key, e] of batches) {
+        const h = e.h;
+        if (h !== 'w' && hostOf(h) !== e.parent) { e.batch.mesh.removeFromParent(); batches.delete(key); for (const st of strokes.values()) if (st.h === h) { st.drawn = 0; st.marks = []; } }
+      }
       for (const st of strokes.values()) if (st.drawn < st.pts.length) draw(st);
     },
     // ink on a player, gone (they left)
-    dropHost(h) { for (const st of [...strokes.values()]) if (st.h === h) remove(st.id); const e = batches.get(h); if (e) { e.batch.mesh.removeFromParent(); batches.delete(h); } },
+    dropHost(h) { for (const st of [...strokes.values()]) if (st.h === h) remove(st.id); for (const [key, e] of batches) if (e.h === h) { e.batch.mesh.removeFromParent(); batches.delete(key); } },
     // the stroke the sponge is aimed at: the ray passing within a few centimetres of one of its points (a line
     // that thin is too fine to hit square on), nearer than `limit`. {kind: 'ink', id, distance, mark} with
     // the whole stroke as one mark (what the sponge's glow outlines), or null

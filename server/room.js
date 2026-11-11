@@ -280,7 +280,7 @@ function handle(player, data, now, room) {
     player.lastActive = now;
     out.push({to: 'all', msg: {type: 'ink', id, h, c, p: pts, by: player.id}});
     if (h[0] === 'a') return {out, changed: true};
-    if (!stroke) { stroke = {id, h, c, pts: []}; ink.push(stroke); }
+    if (!stroke) { stroke = {id, h, c, t: now, pts: []}; ink.push(stroke); }
     stroke.at = now;
     stroke.pts.push(...pts.slice(0, Math.max(0, MAX_STROKE_PTS - stroke.pts.length)));
     // too much ink: the oldest strokes go (everyone's told)
@@ -515,10 +515,12 @@ function handle(player, data, now, room) {
     if (mark.d !== undefined ? Math.hypot(...mark.p) > 3 : Math.hypot(mark.p[0] - player.pose.x, mark.p[2] - player.pose.z) > SPRAY_RANGE + 1)
       return {out, changed: false};
     player.lastSpray = now; player.lastActive = now;
+    delete mark.t;
     const parts = paintingParts(m.parts, cleanSpray, items);
+    for (const q of parts) delete q.t;
     out.push({to: 'all', msg: {type: 'spray', from: player.id, mark, parts, time: now}});
     if (room.marks) {
-      room.marks.sprays.push(mark, ...parts);
+      room.marks.sprays.push(...[mark, ...parts].map(s => ({...s, t: now})));     // (stamped: tags and ink in order on a reload)
       if (room.marks.sprays.length > MAX_SPRAYS) room.marks.sprays.splice(0, room.marks.sprays.length - MAX_SPRAYS);
     }
     return {out, changed: true, marksChanged: !!room.marks};

@@ -226,7 +226,15 @@ async function start() {
   // marker ink (src/ink.js): on the world, a door, a painting or a player, each in its own space
   const ink = createInk({level, scene, hostOf: h => (h[0] === 'd' ? hits.door(Number(h.slice(1)))?.mesh || null
     : h[0] === 'p' ? items.items.get(h.slice(1))?.model || null
-    : h[0] === 'a' ? (h.slice(1) === network.id ? me.root : peers.get(h.slice(1))?.avatar?.root || null) : null)});
+    : h[0] === 'a' ? (h.slice(1) === network.id ? me.root : peers.get(h.slice(1))?.avatar?.root || null) : null),
+    // in among the tags: a stroke goes over the older tags and strokes it overlaps on its surface, and newer tags
+    // go over it (src/ink.js); the same layers as the tags' (addSpray)
+    layerFor: (h, box) => {
+      let top = ink.overlapLayer(h, box);
+      for (const k of sprayMarks) if (k.host === h && k.layer > top && k.box.intersectsBox(box)) top = k.layer;
+      return top + 1;
+    },
+    order: layer => layerOrder(layer) + LAYER_STEP / 2});
   const mimic = createMimic(level, scene);   // the control room's ring board: occupied rooms light up
   let mimicAt = 0;
   const bore = level.meta.bore;
@@ -589,6 +597,7 @@ async function start() {
     box.expandByScalar(.02);
     let layer = 0;
     for (const k of sprayMarks) if (k.host === host && k.layer >= layer && k.box.intersectsBox(box)) layer = k.layer + 1;
+    layer = Math.max(layer, ink.overlapLayer(host, box) + 1);       // and over the marker ink it covers
     const batch = onDoor ? doorPageBatch(s.d, piece.page, layer) : onPainting ? paintingBatch(s.pi, `page${piece.page}`, pageMat(piece.page).map, layer)
       : pageBatch(piece.page, layer);
     const m = batch.add(verts, [255, 255, 255], fresh ? 0 : 1);
@@ -612,14 +621,21 @@ async function start() {
     if (i >= 0) { list[i].batch.remove(list[i].m); list.splice(i, 1); }
     cleaning.forget(kind, id);
   }
-  function resetMarks(list) {
+  function resetMarks(list, inkList = []) {
     cleaning.setErased(list.erased || []);
     splats.clear(); splatMarks.length = 0;
     for (const d of doorBatches.values()) d.batch.clear();
     for (const b of paintingBatches.values()) b.clear();
     clearSprays(); parkedSprays.clear();
     for (const s of list.splats || []) { const c = cleanSplat(s); if (c) addSplat(c, false, Number.isFinite(s.age) ? s.age : 0); }
-    for (const s of list.sprays || []) { const c = cleanSpray(s); if (c) addSpray(c); }
+    // the tags and the ink in the order they went on (each over what it covers): by when the room took them
+    ink.reset([]);
+    const order = [...(list.sprays || []).map((s, i) => ({t: s.t || 0, i, s})), ...inkList.map((k, i) => ({t: k.t || 0, i: 1e6 + i, k}))]
+      .sort((a, b) => a.t - b.t || a.i - b.i);
+    for (const e of order) {
+      if (e.s) { const c = cleanSpray(e.s); if (c) addSpray(c); }
+      else ink.add({id: e.k.id, h: e.k.h, c: e.k.c, p: e.k.pts});
+    }
   }
 
   // a puff of paint where a ball bursts
@@ -1670,7 +1686,7 @@ async function start() {
         return;
       }
       if (m.type === 'look' && m.id !== network.id) setLook(peer(m.id), m.look);
-      else if (m.type === 'marks') { resetMarks(m); ink.reset(m.ink); }
+      else if (m.type === 'marks') resetMarks(m, m.ink || []);
       else if (m.type === 'ink') { if (m.by !== network.id) { ink.add(m); hear('scrub', m.by, {gain: .3, rate: 1.75}); } }
       else if (m.type === 'reload') { if (m.from !== network.id) { items.reload(m.id); hear('rattle', m.from, {rate: .82, gain: 1.2}); } }
       else if (m.type === 'shot') {

@@ -235,7 +235,7 @@ export function createCinema(renderer, scene, sfx) {
     wallGlowMat.color.copy(avg).multiplyScalar(.2);
     floorGlowMat.color.copy(avg).multiplyScalar(.075);
     ceilGlowMat.color.copy(avg).multiplyScalar(.05);
-    beamMat.uniforms.uColor.value.copy(avg).multiplyScalar(.26).addScalar(.025 * Math.min(1, l * 4));
+    beamMat.uniforms.uColor.value.copy(avg).multiplyScalar(.42).addScalar(.04 * Math.min(1, l * 4));
     bounce.color.copy(avg); bounce.intensity = on ? 1.5 + l * 5 : 0;
     lensMat.color.setRGB(.15 + avg.r * .85, .15 + avg.g * .85, .15 + avg.b * .85);
   }
