@@ -913,6 +913,13 @@ test('a mon carries the mana on its square along when it is moved', async () => 
   assert.ok(Math.abs(mana.x - mon.x) < 1e-9 && Math.abs(mana.z - mon.z) < 1e-9, 'the mana came along');
   assert.ok(r.out.some(o => o.msg.item?.id === 'mana-w1'));
   assert.equal(mon.carrying, undefined);
+  // carried onto another mana: that's the one it has now, and the first stays put
+  const other = items['mana-w2'], was = {x: mana.x, z: mana.z};
+  send({type: 'pickup', id: 'mon-hatchat'});
+  assert.equal(mon.carrying, 'mana-w1');
+  send({type: 'drop', id: 'mon-hatchat', x: other.x, y: other.y, z: other.z, yaw: 0});
+  assert.ok(Math.abs(mon.x - other.x) < 1e-6 && Math.abs(mon.z - other.z) < 1e-6);
+  assert.deepEqual({x: mana.x, z: mana.z}, was, 'the old mana stays');
 });
 
 test('the radio: a YouTube or SoundCloud link, only while quiet, five minutes at most, cut to the track', async () => {

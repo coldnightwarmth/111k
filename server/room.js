@@ -447,9 +447,12 @@ function handle(player, data, now, room) {
       ? {p: fp.map(v => Math.round(v * 1000) / 1000), v: fv.map(v => Math.round(v * 1000) / 1000)} : undefined;
     out.push({to: 'all', msg: {type: 'item', item: cleanItem(item), ...(path ? {path} : {fall})}});
     // what the mon was carrying comes along to where it's put (if nobody's taken it meanwhile)
+    // (unless it's put down with another one: then that's what it has, and the old one stays where it was)
     if (item.carrying) {
       const o = items[item.carrying];
-      if (o && !o.holder) { Object.assign(o, {x: item.x, y: item.y, z: item.z, yaw: item.yaw}); out.push({to: 'all', msg: {type: 'item', item: cleanItem(o)}}); }
+      const taken = Object.values(items).some(q => q !== o && q.type === 'piece' && !q.holder && /^(mana-|smana|bomb-)/.test(q.id)
+        && Math.abs(q.x - item.x) < .02 && Math.abs(q.z - item.z) < .02);
+      if (o && !o.holder && !taken) { Object.assign(o, {x: item.x, y: item.y, z: item.z, yaw: item.yaw}); out.push({to: 'all', msg: {type: 'item', item: cleanItem(o)}}); }
       delete item.carrying;
     }
     return {out, changed: true, itemsChanged: true};
