@@ -11,7 +11,8 @@ export const INACTIVE_MS = 5 * 60 * 1000;
 export const IDLE_RESET_MS = 3 * 60 * 1000;   // nobody's done anything for this long: every item goes back where it started
 export const ROOMS = ['office'];
 export const PICKUP_RANGE = 2.6;     // metres from a player's feet to an item they can grab
-export const PUNCH_RANGE = 2.4;      // server-side check (clients aim at 1.95)
+export const PUNCH_RANGE = 3.2;      // server-side check (clients reach PUNCH_REACH, up to PUNCH_REACH_FAST more at speed)
+export const PUNCH_REACH = 2.2, PUNCH_REACH_FAST = .55;
 export const PUNCH_COOLDOWN_MS = 290;
 export const PUNCH_DURATION = .5;
 export const PUNCH_COMBO_MS = 800;   // punch again within this and the other hand throws

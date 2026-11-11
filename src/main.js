@@ -36,7 +36,7 @@ import {createSfx} from './sfx.js';
 import {randomLook, cleanLook} from './looks.js';
 import {cleanEmoteConfig, offeredEmotes} from './emotes.js';
 import {EMOTES, EMOTE_DURATION, PUNCH_COOLDOWN_MS, PUNCH_DURATION, PUNCH_COMBO_MS, SHOT_INTERVAL_MS, SPRAY_INTERVAL_MS, SPRAY_RANGE,
-  MAX_SPLATS, MAX_SPRAYS, SPLAT_LIFE_MS, SETTLE_BYTES, SETTLE_MAX, MAG_SIZE, INK_PTS, MAX_STROKE_PTS, sanitizePose, sanitizeName, cleanSplat, cleanSpray, splatId, sprayId} from './protocol.js';
+  MAX_SPLATS, MAX_SPRAYS, SPLAT_LIFE_MS, SETTLE_BYTES, SETTLE_MAX, MAG_SIZE, INK_PTS, MAX_STROKE_PTS, sanitizePose, sanitizeName, PUNCH_REACH, PUNCH_REACH_FAST, cleanSplat, cleanSpray, splatId, sprayId} from './protocol.js';
 import {paintingSize, paintingMatrix, paintingTris} from './paintings.js';
 import {settle as settlePaintings, warmPhysics, reversed} from './settle.js';
 
@@ -260,22 +260,29 @@ async function start() {
   // b: this body's own record; key: who (null: you)
   function footfalls(b, x, z, g, lift, crouch, dt, key) {
     const h = g + lift, now = performance.now();
-    if (b.h === undefined || dt <= 0) { Object.assign(b, {h, x, z, air: false, d: 0, landAt: -1e9, fall: 0, chain: 0}); return; }
-    const vy = (h - b.h) / dt, hs = Math.hypot(x - b.x, z - b.z) / dt;
-    b.h = h; b.x = x; b.z = z;
+    if (b.h === undefined || dt <= 0) { Object.assign(b, {h, x, z, air: false, d: 0, landAt: -1e9, jumpAt: -1e9, fall: 0, chain: 0, vy: 0}); return; }
+    const vy = (h - b.h) / dt, hs = Math.hypot(x - b.x, z - b.z) / dt, wasVy = b.vy;
+    b.h = h; b.x = x; b.z = z; b.vy = vy;
     if (hs > 40) return;                                       // (a jump across the map: they've just come back)
     const at = key ? {x, y: g + .05, z} : null, air = lift > .02 || vy < -2.5;
-    if (air) b.fall = Math.min(b.fall, vy);
-    if (air && !b.air) {                                      // off the ground
-      if (lift > .02) {
-        b.chain = now - b.landAt < 220 ? b.chain + 1 : 0;      // straight back up: a hop (sounds like any jump)
-        sfx.play('jump', {at, key});
-      }
-      b.fall = 0;
-    } else if (!air && b.air) {                               // down again
+    const land = () => {
       const hard = Math.min(1.5, Math.max(.35, -b.fall / 4));
       sfx.play('land', {at, key, gain: hard, rate: 1.08 - hard * .1});
       b.landAt = now; b.d = 0;
+    };
+    const jump = () => {
+      b.chain = now - b.landAt < 220 ? b.chain + 1 : 0;        // straight back up: a hop (sounds like any jump)
+      sfx.play('jump', {at, key}); b.jumpAt = now;
+    };
+    if (air) b.fall = Math.min(b.fall, vy);
+    if (air && !b.air) {                                      // off the ground
+      if (lift > .02) jump();
+      b.fall = 0;
+    } else if (!air && b.air) {                               // down again
+      land();
+    } else if (air && b.air && wasVy < -.4 && vy > .4 && lift < .35 && now - b.jumpAt > 150) {
+      // a bunnyhop timed so well it never had a frame on the ground: down and straight back up between two frames
+      land(); jump(); b.fall = 0;
     } else if (!air) {
       if (hs < .4) b.d = Math.min(b.d, .35);                  // standing: the first step comes soon after setting off
       else {
@@ -1140,7 +1147,9 @@ async function start() {
     sfx.play('swing', {rate: player.punchHand ? 1.08 : 1});
     // whoever is closest in front of you, within reach
     const yaw = controls.state.yaw, fx = -Math.sin(yaw), fz = -Math.cos(yaw);
-    let best = null, bestD = 1.95;
+    // a little further than arm's length, and further still the faster you're going (bunnyhopping up past a run)
+    const reach = PUNCH_REACH + PUNCH_REACH_FAST * Math.min(1, Math.max(0, (speedNow - 5) / 9));
+    let best = null, bestD = reach;
     for (const p of peers.values()) {
       const s = p.motion.sample(now); if (!s) continue;
       const dx = s.x - player.x, dz = s.z - player.z, d = Math.hypot(dx, dz);
