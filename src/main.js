@@ -1214,7 +1214,7 @@ async function start() {
     for (const ph of [items.paintingHit(o, d, reach), items.shieldHit(o, d, reach, network.id)]) {
       if (ph && (!best || ph.distance < best.d)) best = {d: ph.distance, host: 'p' + ph.painting.state.id, p: ph.local.point, n: ph.local.normal};
     }
-    // someone standing there: on them, in their own space (it goes where they go)
+    // someone standing in the way: no drawing on people (nor through them onto what's behind)
     for (const p of peers.values()) {
       const a = p.avatar;
       if (!a || !p.last) continue;
@@ -1223,11 +1223,7 @@ async function start() {
       for (let t = 0; t < reach && (!best || t < best.d); t += .02) {
         const q = o.clone().addScaledVector(d, t);
         if (q.y < base || q.y > top || Math.hypot(q.x - c.x, q.z - c.z) > .28) continue;
-        const n = _in.set(q.x - c.x, 0, q.z - c.z).normalize();
-        a.root.updateMatrixWorld();
-        const inv = a.root.matrixWorld.clone().invert();
-        best = {d: t, host: 'a' + p.id, p: q.applyMatrix4(inv), n: n.clone().transformDirection(inv)};
-        break;
+        return null;
       }
     }
     if (best?.light) {
@@ -2193,7 +2189,9 @@ async function start() {
     const keyAim = !frozen && !pushable ? converterKey() : null;
     converter.highlight(keyAim);
     converter.update(dt);
-    if (converter.phase !== convPhase) {                 // the shutter going back up, and a chime when it's done
+    if (converter.phase !== convPhase) {                 // the shutter rolling down and shutting, back up, a chime when it's done
+      if (converter.phase === 'down') sfx.play('doorOpen', {at: CONVERTER_AT, rate: .62, gain: .75});
+      if (converter.phase === 'wait') sfx.play('doorShut', {at: CONVERTER_AT, rate: .8, gain: .55});
       if (converter.phase === 'up') sfx.play('doorOpen', {at: CONVERTER_AT, rate: .75, gain: .7});
       if (converter.phase === 'open') sfx.play('lap', {at: CONVERTER_AT, gain: .6});
       convPhase = converter.phase;

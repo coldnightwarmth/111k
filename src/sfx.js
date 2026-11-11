@@ -23,7 +23,7 @@ export function picks() {
 
 // how loud each is, how much echo it gets, how far it carries (metres)
 export const MIX = {
-  step: [.2, .2, 18], jump: [.28, .2, 18], land: [.5, .25, 24], hop: [.42, .25, 24],
+  step: [.13, .2, 18], jump: [.28, .2, 18], land: [.5, .25, 24], hop: [.42, .25, 24],
   swing: [.32, .15, 14], hit: [.85, .3, 30],
   rattle: [.35, .15, 14], spray: [.42, .3, 22], fire: [.6, .4, 40], splat: [.5, .3, 30], splatBody: [.6, .3, 30], scrub: [.38, .2, 14],
   flashlight: [.4, .1, 10], grab: [.32, .1, 10], thunkWood: [.6, .3, 26], thunkMetal: [.5, .35, 26], thunkCan: [.5, .3, 24],

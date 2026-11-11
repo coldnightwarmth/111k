@@ -80,21 +80,35 @@ export function createInk({level, scene, hostOf, layerFor = () => 0, order = () 
       const v00 = q(-1, -1, .5, 0), v10 = q(1, -1, 1, 0), v11 = q(1, 1, 1, 1), v01 = q(-1, 1, .5, 1);
       out.push(v00, v10, v11, v00, v11, v01);
     };
+    // each point's sideways offset, across the line as it runs through that point (the way in and the way out
+    // averaged), so neighbouring pieces meet edge to edge: worked out per piece, they overlapped on the inside of
+    // every bend (the curved tunnel bends them all) and the overlap showed as dark nicks across the line
+    const dirTo = (i, j) => new THREE.Vector3(pts[j][0] - pts[i][0], pts[j][1] - pts[i][1], pts[j][2] - pts[i][2]).normalize();
+    const side = i => {
+      const t = new THREE.Vector3();
+      if (i > 0) t.add(dirTo(i - 1, i));
+      if (i + 1 < pts.length) t.add(dirTo(i, i + 1));
+      if (t.lengthSq() < 1e-8) t.copy(dirTo(Math.max(0, i - 1), Math.min(pts.length - 1, Math.max(1, i))));
+      return N(i).cross(t.normalize()).normalize().multiplyScalar(w);
+    };
     const start = Math.max(1, from);
     if (from === 0) dot(0);
+    let prevSide = from > 0 && st.endSide ? st.endSide : null;    // (where the last lot ended: carried on from exactly)
     for (let i = start; i < pts.length; i++) {
       const p0 = lifted(i - 1), p1 = lifted(i), seg = _d.copy(p1).sub(p0), len = seg.length();
       if (len < 1e-5) continue;
       seg.divideScalar(len);
-      const s0 = _s.copy(N(i - 1)).cross(seg).normalize().multiplyScalar(w).clone(), s1 = N(i).cross(seg).normalize().multiplyScalar(w);
+      const s0 = prevSide || side(i - 1), s1 = side(i);
+      prevSide = s1;
       const u0 = L(i - 1), u1 = L(i);
       const a = vert(p0.clone().add(s0), .25, 1, u0), b = vert(p0.clone().sub(s0), .25, 0, u0);
       const c = vert(p1.clone().add(s1), .25, 1, u1), d = vert(p1.clone().sub(s1), .25, 0, u1);
       out.push(a, b, c, b, d, c);
-      // a dot where it turns sharply (and at its end, for now: the next points draw on over it)
+      // a dot where it turns sharply (not at the end of each lot as it comes in: the next lot drew on over it)
       const next = i + 1 < pts.length ? _b.set(pts[i + 1][0] - pts[i][0], pts[i + 1][1] - pts[i][1], pts[i + 1][2] - pts[i][2]).normalize() : null;
-      if (!next || next.dot(seg) < BEND) dot(i);
+      if (next && next.dot(seg) < BEND) dot(i);
     }
+    st.endSide = prevSide;
     return out;
   }
   function draw(st) {

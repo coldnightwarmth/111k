@@ -62,6 +62,9 @@ const STOCK = [
   [0, 0, -.45, 'bucket'], [0, 0, .45, 'bucket'], [1, 0, -.45, 'bucket'], [1, 0, .45, 'bucket'],
 ];
 const PREFIX = {flashlight: 'fls', paintball: 'pbs', spray: 'sps', bucket: 'bks', marker: 'mks'};
+// a few more about the place (felt for against the built level): paintball guns on the shelving in B-10 and the
+// storage room (B-15), and spray cans, markers and buckets on the bathroom floor (B-05)
+const MORE = [{"id": "pbr1", "type": "paintball", "x": -40.994, "y": 0.72, "z": -16.853, "yaw": -1.885}, {"id": "pbr2", "type": "paintball", "x": -40.994, "y": 0.12, "z": -16.853, "yaw": 1.257}, {"id": "pbr3", "type": "paintball", "x": -45.636, "y": 0.72, "z": -13.503, "yaw": -0.314}, {"id": "pbr4", "type": "paintball", "x": -17.221, "y": 0.72, "z": 39.991, "yaw": -0.314}, {"id": "pbr5", "type": "paintball", "x": -17.715, "y": 1.32, "z": 41.512, "yaw": 2.827}, {"id": "pbr6", "type": "paintball", "x": -17.715, "y": 0.12, "z": 41.512, "yaw": -0.314}, {"id": "spw1", "type": "spray", "x": 16.556, "y": 0.03, "z": -41.707, "yaw": 1.911}, {"id": "spw2", "type": "spray", "x": 15.399, "y": 0.03, "z": -41.844, "yaw": 2.381}, {"id": "spw3", "type": "spray", "x": 16.893, "y": 0.03, "z": -39.839, "yaw": 1.227}, {"id": "spw4", "type": "spray", "x": 14.634, "y": 0.03, "z": -44.445, "yaw": 3.636}, {"id": "mkw1", "type": "marker", "x": 15.671, "y": 0.03, "z": -40.554, "yaw": 2.446}, {"id": "mkw2", "type": "marker", "x": 17.674, "y": 0.03, "z": -43.78, "yaw": 4.018}, {"id": "mkw3", "type": "marker", "x": 16.686, "y": 0.03, "z": -43.253, "yaw": 2.789}, {"id": "bkw1", "type": "bucket", "x": 14.811, "y": 0, "z": -40.885, "yaw": 4.031}, {"id": "bkw2", "type": "bucket", "x": 17.151, "y": 0, "z": -40.978, "yaw": 4.401}];
 export const SHELF_ITEMS = (() => {
   const count = {};
   return STOCK.map(([k, level, along, type], i) => {
@@ -72,7 +75,7 @@ export const SHELF_ITEMS = (() => {
     const yaw = type === 'bucket' ? dirYaw + i : Math.atan2(-Math.cos(dirYaw), Math.sin(dirYaw)) + (i % 2 ? Math.PI : 0) + jitter;
     return {id: `${PREFIX[type]}${count[type]}`, type, x: Math.round(w.x * 1000) / 1000, y: SHELF_LEVELS[level] + .02,
       z: Math.round(w.z * 1000) / 1000, yaw: Math.round(yaw * 1000) / 1000};
-  }).concat(SCATTERED, PIECE_ITEMS, EGG_ITEMS);
+  }).concat(SCATTERED, MORE, PIECE_ITEMS, EGG_ITEMS);
 })();
 // where the work lantern sits (top of the first unit)
 export const LANTERN = (() => { const p = onUnit(UNITS[0], .55, 0); return {...roomToWorld(p.x, p.z), y: SHELF_LEVELS[4] + .02}; })();

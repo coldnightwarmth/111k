@@ -801,7 +801,7 @@ test('items: a stored set from an older version keeps where things were, adds wh
   assert.equal(v[fresh.id].type, 'marker'); assert.equal(v[fresh.id].x, Math.round(fresh.x * 1000) / 1000);
 });
 
-test('marker ink: kept as it is drawn, only with a marker, the oldest go, scrubbed off with the sponge, on players passed on but not kept', async () => {
+test('marker ink: kept as it is drawn, only with a marker, the oldest go, scrubbed off with the sponge, never on players', async () => {
   const {handleMessage, newPlayer, freshMarks, marksMessage} = await import('../room.js');
   const {ITEM_SPAWNS} = await import('../../src/world-items.js');
   const {MAX_INK_STROKES} = await import('../../src/protocol.js');
@@ -825,9 +825,9 @@ test('marker ink: kept as it is drawn, only with a marker, the oldest go, scrubb
   assert.equal(send({type: 'ink', id: 'ffffffffffffffff:1', h: 'w', c: 1, p: pts(2)}).out.length, 0);
   assert.equal(send({type: 'ink', id: id + ':2', h: 'w', c: 1, p: [[marker.x + 50, 1, marker.z, 0, 0, 1, 0, 0]]}).out.length, 0);
   assert.equal(send({type: 'ink', id: id + ':2', h: 'zz', c: 1, p: pts(2)}).out.length, 0);
-  // on a player: passed on, not kept
+  // on a player: not at all (neither passed on nor kept)
   r = send({type: 'ink', id: id + ':3', h: 'a' + 'aaaaaaaaaaaaaaaa', c: 1, p: [[0, 1, .2, 0, 0, 1, 0, 0]]});
-  assert.equal(r.out[0].msg.h, 'aaaaaaaaaaaaaaaaa'.replace(/^a/, 'a')); assert.equal(room.marks.ink.length, 1);
+  assert.equal(r.out.length, 0); assert.equal(room.marks.ink.length, 1);
   // too many strokes: the oldest go, and everyone's told
   let erased = 0;
   for (let k = 0; k < MAX_INK_STROKES + 3; k++) { now += 1000; erased += send({type: 'ink', id: `${id}:s${k}`, h: 'w', c: 1, p: pts(1)}).out.filter(o => o.msg.type === 'erase').length; }

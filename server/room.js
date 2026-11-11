@@ -269,7 +269,7 @@ function handle(player, data, now, room) {
     const h = typeof m.h === 'string' && INK_HOST.test(m.h) ? m.h : null;
     const c = Number.isInteger(m.c) && m.c >= 0 && m.c <= 0xffffff ? m.c : null;
     const pts = h ? cleanInkPoints(m.p, h !== 'w') : null;
-    if (!id || !h || c === null || !pts) return {out, changed: false};
+    if (!id || !h || c === null || !pts || h[0] === 'a') return {out, changed: false};     // (not on people)
     if (h === 'w' && pts.some(q => Math.hypot(q[0] - player.pose.x, q[2] - player.pose.z) > 4)) return {out, changed: false};
     if (h[0] === 'p' && items[h.slice(1)]?.type !== 'painting') return {out, changed: false};
     const ink = room.marks.ink ||= [];
