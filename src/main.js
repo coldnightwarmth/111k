@@ -16,6 +16,7 @@ import {createMachine} from './machine.js';
 import {createConverter} from './converter.js';
 import {createCinema, ROOM as CINEMA_ROOM} from './cinema.js';
 import {createEggs} from './eggs.js';
+import {createWetSign} from './wetsign.js';
 import {createBoard} from './board.js';
 import {roomFrame, DOOR_X} from './room-frame.js';
 import {CONVERTER_COLLIDER, PANEL as CONVERTER_PANEL, USE_RANGE as CONVERTER_RANGE, FRAME as B20, MX as B20_MX, FRONT as B20_FRONT, inChamber} from './converter-spec.js';
@@ -186,6 +187,7 @@ async function start() {
   const converter = createConverter(scene);
   const cinema = createCinema(renderer, scene, sfx);
   createEggs(scene);
+  createWetSign(scene);
   try { createBoard(level, hits, scene); } catch (e) { console.warn('board:', e); reportError(e, 'board'); }
   const B04 = roomFrame(CINEMA_ROOM, DOOR_X[CINEMA_ROOM]);
   const inB04 = p => { const q = B04.toRoom(p.x, p.z); return Math.abs(q.x) < 3.5 && q.z > -3.05 && q.z < 3; };

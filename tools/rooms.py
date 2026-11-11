@@ -240,10 +240,7 @@ def bathroom(C, door_x, r, group=None):
            M['mirror'], uv=[(0, 1), (2.4, 1), (2.4, 0), (0, 0)])
     P.rbox((P.X0 + 0.12, 1.4, 1.1), (0.22, 0.36, 0.3), 'steel', ch=0.03)     # paper towels
     P.rbox((P.X0 + 0.12, 1.2, 1.7), (0.2, 0.26, 0.3), 'white', ch=0.06)      # hand dryer
-    # wet floor sign, rolls and broken tile
-    with W.frame((0.2, 0, -0.6), 0.6):
-        P.box((0, 0.32, -0.12), (0.3, 0.64, 0.015), 'yellow', pitch=0.22)
-        P.box((0, 0.32, 0.12), (0.3, 0.64, 0.015), 'yellow', pitch=-0.22)
+    # rolls and broken tile (the wet floor sign at (0.2, -0.6), turned 0.6, is src/wetsign.js now)
     for _ in range(4):
         P.cyl((r.uniform(-1.5, 1.2), 0.06, r.uniform(-1.5, 2.2)), 0.06, 0.1, 'white', axis='x', yaw=r.uniform(0, 6), sides=8)
     for _ in range(8):
