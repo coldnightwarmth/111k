@@ -3,7 +3,7 @@ name: Deploy multiplayer server (Cloudflare)
 on:
   push:
     branches: [main]
-    paths: ['server/**', 'src/protocol.js', 'src/world-items.js', 'src/shelves.js', 'src/race.js', 'src/koth.js', 'src/emotes.js', 'src/emote-clips.js', 'src/review.js', '.github/workflows/worker.yml']
+    paths: ['server/**', 'src/protocol.js', 'src/world-items.js', 'src/shelves.js', 'src/scatter.js', 'src/race.js', 'src/koth.js', 'src/emotes.js', 'src/emote-clips.js', 'src/review.js', '.github/workflows/worker.yml']
   workflow_dispatch:
 
 jobs:
