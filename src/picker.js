@@ -1,5 +1,6 @@
 // The door before the tunnel: pick a name (optional) and one of twelve random
 // avatars (six Drifellas, six Driladies), or keep the one from last time.
+import {navigateWithPad} from './padnav.js';
 import * as THREE from 'three';
 import {createAvatar, preloadLook} from './avatar.js';
 import {randomLook} from './looks.js';
@@ -114,7 +115,7 @@ export function pickAvatar({previous = null, name = '', extra = null} = {}) {
       ${previous ? `<div class="previous"><button type="button" class="card" data-id="previous"><canvas width="${W}" height="${H}"></canvas></button><p>last time</p></div>` : ''}
       <div class="grid"></div>
       <div class="extra"></div>
-      <div class="foot"><button type="button" class="go" disabled>enter the tunnel ${LADDER}</button></div>
+      <div class="foot"><button type="button" class="go" data-pad-end disabled>enter the tunnel ${LADDER}</button></div>
     </div>`;
   root.hidden = false;
   if (extra) root.querySelector('.extra').append(extra);
@@ -237,6 +238,7 @@ export function pickAvatar({previous = null, name = '', extra = null} = {}) {
   queue.then(() => Promise.all(looks[other].map(preloadLook))).catch(() => {});
 
   return new Promise(resolve => {
+    navigateWithPad(root, () => root.hidden);   // (a gamepad gets about it too: d-pad, A)
     const finish = () => {
       if (!chosen) return;
       const look = chosen === 'previous' ? previous : looks[chosen.split(':')[0]][Number(chosen.split(':')[1])];

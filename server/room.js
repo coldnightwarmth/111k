@@ -3,15 +3,15 @@
 // hibernation "attachment" in Cloudflare), so the room survives the Durable
 // Object being evicted between messages. The only shared state is the held
 // items, which the caller keeps (Durable Object storage in production).
-import {CHAT_INTERVAL_MS, CHAT_TTL_MS, POSE_INTERVAL_MS, PICKUP_RANGE, PUNCH_RANGE, PUNCH_COOLDOWN_MS,
+import {INK_HOST, INK_PER_S, MAX_INK_STROKES, MAX_STROKE_PTS, MAX_INK_PTS, cleanInkPoints, SETTLE_BYTES, SETTLE_MAX, SETTLE_PER_S, MAG_SIZE, RELOAD_MS, CROWN_HITS, CROWN_HIT_WINDOW_MS, CHAT_INTERVAL_MS, CHAT_TTL_MS, POSE_INTERVAL_MS, PICKUP_RANGE, PUNCH_RANGE, PUNCH_COOLDOWN_MS,
   SHOT_INTERVAL_MS, SPRAY_INTERVAL_MS, SPRAY_RANGE, MAX_SPLATS, MAX_SPRAYS, SPLAT_LIFE_MS,
   sanitizeChat, sanitizePose, samePose, cleanItem, cleanPath, sanitizeLook, sanitizeName, cleanSplat, cleanSpray, splatId, sprayId} from '../src/protocol.js';
 import {ITEM_SPAWNS} from '../src/world-items.js';
-import {RACE_LAPS, RACE_TIMEOUT_MS, BUTTON, BUTTON_RANGE, MACHINE_ANGLE, loopAngle, freshRace, publicRace} from '../src/race.js';
+import {RACE_LAPS, RACE_TIMEOUT_MS, BUTTON, BUTTON_RANGE, MACHINE_ANGLE, LAP_LINE, BUTTON_LAP, loopAngle, freshRace, publicRace} from '../src/race.js';
 import {KOTH_GRACE_MS, KOTH_WIN_MS, KOTH_UNCLAIMED_MS, freshKoth, publicKoth, kothActive, kothTime} from '../src/koth.js';
 
-// paintings settling on their own (a 'settle' message): how many at once, and how far from the player who sends it
-const SETTLE_MAX = 16, SETTLE_RANGE = 6;
+// paintings settling on their own (a 'settle' message): how far from the player who sends it, and how far each can move
+const SETTLE_RANGE = 8, SETTLE_MOVE = 6;
 // a pickup's checked against where the server last had the player, which can trail where they were when they clicked
 const PICKUP_SLACK = .4;
 const ERRORS_PER_PLAYER = 12;
@@ -42,10 +42,14 @@ export function itemsAtSpawn(items) {
   const fresh = freshItems();
   return Object.keys(fresh).every(id => JSON.stringify(items[id]) === JSON.stringify(fresh[id]));
 }
+// A stored set from an older version keeps what it has (paintings where people left them, guns half empty);
+// anything new starts where the level puts it, anything gone goes.
 export function validItems(stored) {
   if (!stored || typeof stored !== 'object') return freshItems();
-  const ids = Object.keys(stored).sort().join(), want = ITEM_SPAWNS.map(s => s.id).sort().join();
-  return ids === want ? stored : freshItems();
+  return Object.fromEntries(ITEM_SPAWNS.map(s => {
+    const old = stored[s.id];
+    return [s.id, old && typeof old === 'object' && old.type === s.type ? old : cleanItem({...s, holder: null, on: s.on === true})];
+  }));
 }
 
 export function snapshot(players, now, items = {}) {
@@ -57,13 +61,14 @@ export function snapshot(players, now, items = {}) {
 const MAX_ERASED = 600;   // pieces of the level's own graffiti scrubbed off
 // how clients name a mark when asking to scrub it
 export {sprayId, splatId};
-export function freshMarks() { return {splats: [], sprays: [], erased: []}; }
+export function freshMarks() { return {splats: [], sprays: [], erased: [], ink: []}; }
 export function validMarks(stored) {
   if (!stored || !Array.isArray(stored.splats) || !Array.isArray(stored.sprays)) return freshMarks();
   const splats = stored.splats.map(s => { const c = cleanSplat(s); return c && Number.isFinite(s.at) ? {...c, at: s.at} : null; });
   return {splats: splats.filter(Boolean).slice(-MAX_SPLATS),
     sprays: stored.sprays.map(cleanSpray).filter(Boolean).slice(-MAX_SPRAYS),
-    erased: Array.isArray(stored.erased) ? stored.erased.filter(id => typeof id === 'string' && id.length <= 80).slice(-MAX_ERASED) : []};
+    erased: Array.isArray(stored.erased) ? stored.erased.filter(id => typeof id === 'string' && id.length <= 80).slice(-MAX_ERASED) : [],
+    ink: Array.isArray(stored.ink) ? stored.ink.filter(s => s && typeof s.id === 'string' && INK_HOST.test(s.h) && Array.isArray(s.pts)).slice(-MAX_INK_STROKES) : []};
 }
 // paint lasts a minute; sprayed pieces stay
 export function pruneSplats(marks, now) {
@@ -73,7 +78,7 @@ export function pruneSplats(marks, now) {
 }
 export const marksMessage = (marks, now = Date.now()) => ({type: 'marks',
   splats: marks.splats.filter(s => now - s.at < SPLAT_LIFE_MS).map(({at, ...s}) => ({...s, age: Math.max(0, now - at)})),
-  sprays: marks.sprays, erased: marks.erased || []});
+  sprays: marks.sprays, erased: marks.erased || [], ink: marks.ink || []});
 
 const flat = (a, b) => Math.hypot(a.x - b.x, a.z - b.z);
 
@@ -90,13 +95,14 @@ const worn = it => it.type === 'crown' && it.on;
 const handsFull = (items, id) => Object.values(items).some(it => it.holder === id && !worn(it));
 
 // The runner's way round the loop: how far round they've gone since the start (unwrapped angle), measured
-// from a finish line straight across the tunnel at the machine. A lap is done the moment they cross that line
-// a whole turn on: wherever across the tunnel, however fast (not just near the machine, where a quick pass
-// or one along the far wall could slip between two poses and leave the lap to be counted a lap late). The
-// split is when they crossed it, between the two poses either side. The first lap can go either way, later
-// ones must keep to it.
+// from the machine. A lap is done the moment they cross a line straight across the tunnel just before the
+// machine (LAP_LINE short of it, on whichever side they're coming from): wherever across the tunnel, however
+// fast (a quick pass, or one along the far wall, can't slip between two poses). The split is when they crossed
+// it, between the two poses either side. Pushing the button counts it too (slack BUTTON_LAP, from anywhere it
+// can be reached), so coming round to the button always finishes the run, never calls it off. The first lap
+// can go either way, later ones must keep to it.
 const wrap = d => Math.atan2(Math.sin(d), Math.cos(d));
-function trackRunner(r, player, now, out) {
+function trackRunner(r, player, now, out, slack = LAP_LINE) {
   if (r.state !== 'running' || player.id !== r.runner || r.laps <= 0) return false;
   const a = loopAngle(player.pose.x, player.pose.z);
   r.from ??= wrap(a - MACHINE_ANGLE);                         // where they started, from the line (set at the start)
@@ -106,11 +112,11 @@ function trackRunner(r, player, now, out) {
   r.lastA = a; r.lastT = now;
   const at = r.from + (r.progress || 0);
   const done = RACE_LAPS - r.laps;
-  // the line this lap ends on: a whole turn on (either way, for the first)
-  const dir = done === 0 ? Math.sign(at) || 1 : r.dir, line = dir * 2 * Math.PI * (done + 1);
-  if (dir * at < dir * line - 1e-4 || at === was) return false;   // (on the line counts, to a few mm)
+  // the line this lap ends on: a whole turn on, less the slack (either way, for the first)
+  const dir = done === 0 ? Math.sign(at) || 1 : r.dir, line = dir * (2 * Math.PI * (done + 1) - slack);
+  if (dir * at < dir * line - 1e-4 || (at === was && slack === LAP_LINE)) return false;   // (on the line counts, to a few mm)
   if (done === 0) r.dir = dir;
-  const when = then + (now - then) * Math.min(1, Math.max(0, (line - was) / (at - was)));
+  const when = at === was ? now : then + (now - then) * Math.min(1, Math.max(0, (line - was) / (at - was)));
   r.laps--;
   r.splits = [...(r.splits || []), Math.round(when - r.startedAt)];
   out.push({to: 'all', msg: {type: 'race', race: publicRace(r, now), event: 'lap', by: player.id, byName: player.name || ''}});
@@ -174,7 +180,13 @@ function handle(player, data, now, room) {
   const out = [];
   // voice connection offers carry a session description, so they get more room than everything else
   if (typeof data !== 'string' || data.length > 16384) return {out, changed: false, close: 'Message too large'};
-  if (data.length > 4096 && !data.startsWith('{"type":"rtc"')) return {out, changed: false, close: 'Message too large'};
+  // (paintings coming down carry how they tumbled: up to SETTLE_BYTES, and only so many a second)
+  const bulky = data.startsWith('{"type":"settle"') || data.startsWith('{"type":"drop"');
+  if (data.length > (bulky ? SETTLE_BYTES + 512 : 4096) && !data.startsWith('{"type":"rtc"')) return {out, changed: false, close: 'Message too large'};
+  if (bulky) {
+    if (now - (player.settleAt || 0) >= 1000) { player.settleAt = now; player.settles = 0; }
+    if (++player.settles > SETTLE_PER_S) return {out, changed: true};
+  }
   let m;
   try { m = JSON.parse(data); } catch { return {out, changed: false}; }
   if (!m || typeof m !== 'object') return {out, changed: false};
@@ -244,14 +256,47 @@ function handle(player, data, now, room) {
     return {out, changed: true};
   }
 
+  // ------------------------------------------------- marker ink
+  // A stroke as it's drawn: its first points start it, the rest add on. Only by whoever's holding a marker,
+  // only near them (or on something they can reach), only so fast. Ink on a player is passed on, not kept.
+  if (m.type === 'ink') {
+    const marker = Object.values(items).find(it => it.holder === player.id && it.type === 'marker');
+    if (!marker || !player.pose || player.inactive || !room.marks) return {out, changed: false};
+    if (now - (player.inkAt || 0) >= 1000) { player.inkAt = now; player.inks = 0; }
+    if (++player.inks > INK_PER_S) return {out, changed: false};
+    const id = typeof m.id === 'string' && m.id.length <= 40 && m.id.startsWith(player.id + ':') ? m.id : null;
+    const h = typeof m.h === 'string' && INK_HOST.test(m.h) ? m.h : null;
+    const c = Number.isInteger(m.c) && m.c >= 0 && m.c <= 0xffffff ? m.c : null;
+    const pts = h ? cleanInkPoints(m.p, h !== 'w') : null;
+    if (!id || !h || c === null || !pts) return {out, changed: false};
+    if (h === 'w' && pts.some(q => Math.hypot(q[0] - player.pose.x, q[2] - player.pose.z) > 4)) return {out, changed: false};
+    if (h[0] === 'p' && items[h.slice(1)]?.type !== 'painting') return {out, changed: false};
+    player.lastActive = now;
+    out.push({to: 'all', msg: {type: 'ink', id, h, c, p: pts, by: player.id}});
+    if (h[0] === 'a') return {out, changed: true};
+    const ink = room.marks.ink ||= [];
+    let stroke = ink.find(s => s.id === id);
+    if (!stroke) { stroke = {id, h, c, pts: []}; ink.push(stroke); }
+    if (stroke.h !== h) return {out: [], changed: true};
+    stroke.pts.push(...pts.slice(0, Math.max(0, MAX_STROKE_PTS - stroke.pts.length)));
+    // too much ink: the oldest strokes go (everyone's told)
+    let total = ink.reduce((t, s) => t + s.pts.length, 0);
+    while (ink.length > MAX_INK_STROKES || total > MAX_INK_PTS) {
+      const old = ink.shift(); total -= old.pts.length;
+      out.push({to: 'all', msg: {type: 'erase', kind: 'ink', id: old.id, by: ''}});
+    }
+    return {out, changed: true, marksChanged: true};
+  }
+
   // ------------------------------------------------- scrubbing marks off
   if (m.type === 'erase') {
     const bucket = Object.values(items).find(it => it.holder === player.id && it.type === 'bucket');
     const id = typeof m.id === 'string' && m.id.length <= 80 ? m.id : null;
-    if (!bucket || !id || !['splat', 'spray', 'baked'].includes(m.kind) || !room.marks || now - (player.lastErase || 0) < 150) return {out, changed: false};
+    if (!bucket || !id || !['splat', 'spray', 'baked', 'ink'].includes(m.kind) || !room.marks || now - (player.lastErase || 0) < 150) return {out, changed: false};
     player.lastErase = now; player.lastActive = now;
     const marks = room.marks;
     if (m.kind === 'splat') marks.splats = marks.splats.filter(s => splatId(s) !== id);
+    else if (m.kind === 'ink') marks.ink = (marks.ink || []).filter(s => s.id !== id);
     else if (m.kind === 'spray') marks.sprays = marks.sprays.filter(s => sprayId(s) !== id);
     else if (!(marks.erased ||= []).includes(id)) { marks.erased.push(id); if (marks.erased.length > MAX_ERASED) marks.erased.shift(); }
     out.push({to: 'all', msg: {type: 'erase', kind: m.kind, id, by: player.id}});
@@ -266,6 +311,8 @@ function handle(player, data, now, room) {
     const r = room.race;
     let event = null;
     if (r.state === 'running') {
+      // come round to the button: that lap's done, wherever the line was crossed (the last one finishes the run)
+      if (player.id === r.runner) trackRunner(r, player, now, out, BUTTON_LAP);
       if (player.id === r.runner) event = r.laps <= 0 ? 'finish' : 'cancel';
       else {
         // someone else can only call it off if the runner's gone or it's dragged on too long
@@ -351,7 +398,7 @@ function handle(player, data, now, room) {
       if (!it || it.type !== 'painting' || it.holder) continue;
       const [x, y, z, yaw, tilt, roll] = ['x', 'y', 'z', 'yaw', 'tilt', 'roll'].map(k => Number(s[k]));
       if (![x, y, z, yaw, tilt, roll].every(Number.isFinite) || y < -.5 || y > 4) continue;
-      if (flat(player.pose, it) > SETTLE_RANGE || Math.hypot(x - player.pose.x, z - player.pose.z) > SETTLE_RANGE || Math.hypot(x - it.x, y - it.y, z - it.z) > 3) continue;
+      if (flat(player.pose, it) > SETTLE_RANGE || Math.hypot(x - player.pose.x, z - player.pose.z) > SETTLE_RANGE || Math.hypot(x - it.x, y - it.y, z - it.z) > SETTLE_MOVE) continue;
       Object.assign(it, {x: r3(x), y: r3(y), z: r3(z), yaw: r3(yaw), tilt: r3(Math.max(-Math.PI / 2, Math.min(Math.PI / 2, tilt))), roll: r3(Math.max(-Math.PI, Math.min(Math.PI, roll))), hung: false});
       let path = cleanPath(s.path);
       if (path && Math.hypot(path[path.length - 1][0] - it.x, path[path.length - 1][1] - it.y, path[path.length - 1][2] - it.z) > .05) path = undefined;
@@ -378,13 +425,24 @@ function handle(player, data, now, room) {
     out.push(...dropped);
     return {out, changed: true, itemsChanged: dropped.length > 0};
   }
+  // the hopper filled again (it takes RELOAD_MS, everyone sees it done)
+  if (m.type === 'reload') {
+    const gun = Object.values(items).find(it => it.holder === player.id && it.type === 'paintball');
+    if (!gun || now < (gun.reloadUntil || 0) || (Number.isInteger(gun.ammo) ? gun.ammo : MAG_SIZE) >= MAG_SIZE) return {out, changed: false};
+    gun.ammo = MAG_SIZE; gun.reloadUntil = now + RELOAD_MS; player.lastActive = now;
+    out.push({to: 'all', msg: {type: 'reload', id: gun.id, from: player.id, time: now}});
+    return {out, changed: true, itemsChanged: true};
+  }
   if (m.type === 'shoot') {
     const gun = Object.values(items).find(it => it.holder === player.id && it.type === 'paintball');
     if (!gun || !player.pose || now - player.lastShot < SHOT_INTERVAL_MS) return {out, changed: false};
+    // nothing left in the hopper, or still reloading it
+    if (!Number.isInteger(gun.ammo)) gun.ammo = MAG_SIZE;
+    if (gun.ammo <= 0 || now < (gun.reloadUntil || 0)) return {out, changed: false};
     const o = cleanSplat({p: m.o, n: [0, 1, 0], c: 0, s: 0})?.p, v = Array.isArray(m.v) && m.v.length === 3 && m.v.every(Number.isFinite) ? m.v.map(x => Math.round(x * 100) / 100) : null;
     const c = Number.isInteger(m.c) && m.c >= 0 && m.c <= 0xffffff ? m.c : null, s = Number.isInteger(m.s) && m.s >= 0 && m.s <= 0xffffff ? m.s : 0;
     if (!o || !v || c === null || Math.hypot(o[0] - player.pose.x, o[2] - player.pose.z) > 3 || Math.hypot(...v) > 80) return {out, changed: false};
-    player.lastShot = now; player.lastActive = now;
+    player.lastShot = now; player.lastActive = now; gun.ammo--;
     const hit = m.hit ? cleanSplat({...m.hit, c, s}) : null;
     let target = null, local = null;
     if (typeof m.target === 'string' && m.target !== player.id) {
@@ -464,6 +522,11 @@ export function kothTick(room, now) {
       k.hits = k.hits.filter(h => h.at > now); kothChanged = true;
       for (const h of due) {
         if (!crown || crown.holder !== h.target || !crown.on) continue;
+        // it takes CROWN_HITS of them, close enough together: the first only counts
+        const st = k.struck && k.struck.target === h.target && h.at - k.struck.at < CROWN_HIT_WINDOW_MS ? k.struck : {target: h.target, n: 0};
+        k.struck = {target: h.target, n: st.n + 1, at: h.at};
+        if (k.struck.n < CROWN_HITS) { send('struck', {by: h.target, byName: nameOf(h.target), from: h.by || '', fromName: h.by ? nameOf(h.by) : '', n: k.struck.n}); continue; }
+        delete k.struck;
         const target = players.find(p => p && p.id === h.target);
         k.cause = 'paintball'; k.causeBy = h.by || ''; k.lostAt = h.at;   // it came off when the ball landed
         for (const o of releaseItems({[crown.id]: crown}, target || {id: h.target, pose: null})) out.push(o);
@@ -476,7 +539,7 @@ export function kothTick(room, now) {
     const id = k.wearer;
     const end = Math.min(now, k.lostAt ?? now);
     if (k.state === 'running') k.times[id] = (k.times[id] || 0) + Math.max(0, end - k.since);
-    k.wearer = ''; k.droppedAt = now; kothChanged = true;
+    k.wearer = ''; k.droppedAt = now; kothChanged = true; delete k.struck;
     send('lost', {by: id, byName: nameOf(id), time: k.times[id] || 0, how: k.cause || '',
       from: k.causeBy || '', fromName: k.causeBy ? nameOf(k.causeBy) : ''});
   }

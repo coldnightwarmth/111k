@@ -10,11 +10,17 @@ export function createBubble(text, {typing = false} = {}) {
   document.getElementById('bubbles').append(el);
   let w = 0, h = 0, measuredFor = '';
   return {
-    update(x, y, visible) {
+    // edge: -1 / 1 when its player is out of view to the left / right (x, y then a spot on that side of the screen)
+    update(x, y, visible, edge = 0) {
       if (el.hidden === visible) el.hidden = !visible;
       if (!visible) return y;
       const key = innerWidth + 'x' + innerHeight;
       if (measuredFor !== key) { w = el.offsetWidth; h = el.offsetHeight; measuredFor = key; }
+      if (edge !== (el._edge || 0)) { el.classList.toggle('edge-l', edge < 0); el.classList.toggle('edge-r', edge > 0); el._edge = edge; }
+      if (edge) {
+        el.style.transform = `translate(${Math.round(edge < 0 ? 14 : innerWidth - w - 14)}px, ${Math.round(Math.max(8, y - h / 2))}px)`;
+        return y - h / 2 - 6;
+      }
       el.style.transform = `translate(${Math.round(Math.max(8, Math.min(innerWidth - w - 8, x - w / 2)))}px, ${Math.round(Math.max(8, y - h - 10))}px)`;
       return y - h - 6;
     },

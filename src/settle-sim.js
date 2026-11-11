@@ -16,15 +16,22 @@ function turn(q, x, y, z) {
 export function simulate(R, job) {
   const world = new R.World({x: 0, y: -9.81, z: 0});
   world.timestep = job.step;
-  world.integrationParameters.normalizedAllowedLinearError = .0002;
-  world.integrationParameters.numSolverIterations = 8;
+  const ip = world.integrationParameters, tune = job.tune || {};
+  ip.normalizedAllowedLinearError = tune.slop ?? .0002;
+  ip.numSolverIterations = tune.iterations ?? 16;
+  if (tune.pgs) ip.numInternalPgsIterations = tune.pgs;
+  if (tune.friction) ip.numAdditionalFrictionIterations = tune.friction;
+  if (tune.lengthUnit) ip.lengthUnit = tune.lengthUnit;
+  if (tune.small) ip.switchToSmallStepsPgsSolver?.();
+  // stiff contacts: a tall stack holds its shape instead of sagging into itself and jittering awake
+  ip.contact_natural_frequency = tune.freq ?? 120;
   try {
     const {vertices, indices} = job.level;
     if (indices.length) world.createCollider(R.ColliderDesc.trimesh(vertices, indices).setFriction(job.friction), world.createRigidBody(R.RigidBodyDesc.fixed()));
     const bodies = [], wake = new Set(job.wake || []);
     for (const b of job.bodies) {
       const desc = (b.kind === 'fixed' ? R.RigidBodyDesc.fixed() : R.RigidBodyDesc.dynamic().setCcdEnabled(true).setSleeping(b.kind === 'asleep')
-        .setLinearDamping(.05).setAngularDamping(.2)).setTranslation(...b.c).setRotation({x: b.q[0], y: b.q[1], z: b.q[2], w: b.q[3]});
+        .setLinearDamping(job.tune?.lin ?? .05).setAngularDamping(job.tune?.ang ?? .2)).setTranslation(...b.c).setRotation({x: b.q[0], y: b.q[1], z: b.q[2], w: b.q[3]});
       if (b.vel) desc.setLinvel(...b.vel);
       const body = world.createRigidBody(desc);
       world.createCollider(R.ColliderDesc.cuboid(...b.half).setFriction(job.friction).setRestitution(job.bounce).setDensity(job.density), body);

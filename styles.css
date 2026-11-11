@@ -27,15 +27,18 @@ kbd { font: inherit; color: var(--ink); border: 1px solid var(--line); border-ra
 
 #hint { position: fixed; left: 50%; bottom: max(16px, env(safe-area-inset-bottom)); transform: translateX(-50%); margin: 0;
   color: var(--dim); white-space: nowrap; text-shadow: 0 1px 2px #000; pointer-events: none; transition: opacity .4s; }
-body.locked #hint { opacity: 0; }
+body.locked #hint, body.pad #hint { opacity: 0; }
 #prompt, #emoteLabel { position: fixed; left: 50%; transform: translateX(-50%); margin: 0; pointer-events: none;
   white-space: nowrap; text-shadow: 0 1px 2px #000; font-size: 12px; letter-spacing: .08em; }
 #prompt { bottom: max(44px, calc(env(safe-area-inset-bottom) + 36px)); color: var(--ink, #e9e6dc); opacity: .85; }
 #emoteLabel { bottom: max(70px, calc(env(safe-area-inset-bottom) + 62px)); color: var(--dim); text-transform: lowercase; }
-body:not(.locked):not(.touch) #prompt { opacity: 0; }
+body:not(.locked):not(.touch):not(.pad) #prompt { opacity: 0; }
 /* a little crosshair dot so punches and grabs have an aim */
-body.locked::after { content: ''; position: fixed; left: 50%; top: 50%; width: 4px; height: 4px; margin: -2px 0 0 -2px;
+body.locked::after, body.pad::after { content: ''; position: fixed; left: 50%; top: 50%; width: 4px; height: 4px; margin: -2px 0 0 -2px;
   border-radius: 50%; background: rgba(233, 230, 220, .55); pointer-events: none; }
+
+/* a gamepad's place in a menu (the d-pad moves it, A picks) */
+.padsel { outline: 2px solid #ffe08a !important; outline-offset: 2px; }
 
 /* ---- chat ---- */
 #chat { position: fixed; left: max(14px, env(safe-area-inset-left)); bottom: max(48px, calc(env(safe-area-inset-bottom) + 40px));
@@ -72,6 +75,12 @@ body.touch #chat .log { pointer-events: auto; touch-action: pan-y; }
 .bubble.typing i { width: 5px; height: 5px; border-radius: 50%; background: #333; animation: dot 1.2s infinite; }
 .bubble.typing i:nth-child(2) { animation-delay: .2s; } .bubble.typing i:nth-child(3) { animation-delay: .4s; }
 @keyframes dot { 0%, 60%, 100% { opacity: .25; } 30% { opacity: 1; } }
+.bubble[hidden] { display: none; }   /* (.typing's display: flex would otherwise show a hidden one, up in the corner) */
+/* someone out of view typing (or talking): at the side of the screen they're off to, pointing their way */
+.bubble.edge-l::after, .bubble.edge-r::after { bottom: auto; top: calc(50% - 6px); border: 6px solid transparent; }
+.bubble.edge-l::after { left: -6px; border-left: 0; border-right-color: rgba(245, 242, 232, .94); }
+.bubble.edge-r::after { left: auto; right: -6px; border-right: 0; border-left-color: rgba(245, 242, 232, .94); }
+.bubble.edge-l, .bubble.edge-r { opacity: .82; }
 
 /* ---- emotes ---- */
 #emotes { position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%); width: min(520px, calc(100vw - 28px));
@@ -300,6 +309,11 @@ body.touch #chat .log { max-height: min(30vh, calc(100vh - 260px)); }
 .speaking { position: absolute; left: 0; top: 0; display: flex; gap: 2px; align-items: flex-end; height: 14px; padding: 3px 5px; border-radius: 8px;
   background: rgba(10, 10, 11, .55); pointer-events: none; }
 .speaking[hidden] { display: none; }
+.speaking.edge-l, .speaking.edge-r { opacity: .85; }
+.speaking.edge-l::before, .speaking.edge-r::before { content: ""; align-self: center; border: 4px solid transparent; }
+.speaking.edge-l::before { order: -1; border-left: 0; border-right-color: #6dff92; margin-right: 2px; }
+.speaking.edge-r::after { content: ""; align-self: center; border: 4px solid transparent; border-right: 0; border-left-color: #6dff92; margin-left: 2px; }
+.speaking.edge-r::before { display: none; }
 .speaking i { width: 3px; height: 10px; background: #6dff92; border-radius: 2px; transform-origin: bottom; transition: transform 70ms linear; }
 
 /* the controls bar: each control fades once you've used it; the bar goes when you've used them all */

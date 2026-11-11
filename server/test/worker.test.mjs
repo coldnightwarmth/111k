@@ -252,7 +252,7 @@ test('items: scattered flashlights start lit or not, and an idle room puts every
   const {ITEM_SPAWNS} = await import('../../src/world-items.js');
   const {IDLE_RESET_MS} = await import('../../src/protocol.js');
   const lights = ITEM_SPAWNS.filter(s => s.type === 'flashlight');
-  assert.equal(lights.length, 20); assert.equal(lights.filter(s => s.on).length, 6);
+  assert.equal(lights.length, 21); assert.equal(lights.filter(s => s.on).length, 6);
   const {room, sockets, ctx} = makeRoom();
   await join(room, S1); await join(room, S2);
   const [a, b] = sockets;
@@ -322,7 +322,7 @@ test('lap timer: start, busy for others, laps either way then the same way, fini
   pose(b, at(R.MACHINE_ANGLE + 1)); press(b); assert.equal(race.state, 'cancelled');
 });
 
-test('lap timer: a lap counts as you cross the line at the machine, anywhere across the tunnel, at any speed', async () => {
+test('lap timer: a lap counts as you cross the line just before the machine, anywhere across the tunnel, at any speed', async () => {
   const {handleMessage, newPlayer} = await import('../room.js');
   const R = await import('../../src/race.js');
   const race = R.freshRace();
@@ -346,7 +346,7 @@ test('lap timer: a lap counts as you cross the line at the machine, anywhere acr
   assert.equal(race.laps, 0, 'all three laps');
   // each on the pose that crossed the line, at the time it crossed (between the two poses)
   laps.forEach(({k, split}, i) => {
-    const lapAng = 2 * Math.PI * (i + 1);
+    const lapAng = 2 * Math.PI * (i + 1) - R.LAP_LINE;   // (the line's LAP_LINE short of the machine)
     assert.equal(k, Math.ceil(lapAng / step) - 1, `lap ${i + 1} on the pose that crossed`);
     assert.ok(Math.abs(split - lapAng / step * dt) < 25, `lap ${i + 1} split ${split} ≈ ${lapAng / step * dt}`);
   });
@@ -455,10 +455,16 @@ test('king of the hill: start with the crown, grace, knocked off by punch and pa
   r = send(a, {type: 'shoot', o: [a.pose.x, 1.3, a.pose.z], v: [-20, 0, 0], c: 0xff0000, s: 1, t: .25, target: 'bbb', local: {p: [0, 1, 0], n: [1, 0, 0]}}, 2000);
   assert.ok(r.out.some(o => o.msg.type === "shot"), JSON.stringify(r.out)); assert.equal(koth.hits.length, 1);
   assert.equal(crown.holder, 'bbb', 'still on while the ball is in the air');
-  const msgs = tick(300);
+  // the first one only counts; it takes a second
+  let msgs = tick(300);
+  assert.ok(msgs.some(m => m.event === 'struck' && m.n === 1 && m.from === 'aaa'));
+  assert.equal(crown.on, true, 'one hit: still on');
+  r = send(a, {type: 'shoot', o: [a.pose.x, 1.3, a.pose.z], v: [-20, 0, 0], c: 0xff0000, s: 2, t: .25, target: 'bbb', local: {p: [0, 1, 0], n: [1, 0, 0]}}, 200);
+  assert.equal(crown.holder, 'bbb', 'still on while the second is in the air');
+  msgs = tick(300);
   const shot = msgs.find(m => m.event === 'lost');
   assert.equal(shot.how, 'paintball'); assert.equal(shot.by, 'bbb'); assert.equal(shot.from, 'aaa');
-  assert.equal(shot.time, 2250, 'banked up to when the ball landed');
+  assert.equal(shot.time, 2750, 'banked up to when the second ball landed');
   assert.equal(crown.on, false);
   // alice takes it back and her time carries on from where it was
   a.pose.x = crown.x; a.pose.z = crown.z; gun.holder = null;
@@ -599,8 +605,19 @@ test('paintings: hung on a nail or settled by physics, with the tumble passed on
   r = send({type: 'settle', items: [{id: other.id, x: pt.x, y: .01, z: pt.z, yaw: 0, tilt: 0, roll: 0}]});
   assert.equal(other.x, Math.round((pt.x + .9) * 1000) / 1000);
   other.holder = null;
-  r = send({type: 'settle', items: [{id: other.id, x: pt.x + 4, y: .01, z: pt.z, yaw: 0, tilt: 0, roll: 0}]});
+  r = send({type: 'settle', items: [{id: other.id, x: pt.x + 7, y: .01, z: pt.z, yaw: 0, tilt: 0, roll: 0}]});
   assert.equal(r.out.length, 0);
+  // a pile coming down: a message well past the usual size is fine (a tower's tumbles), within reason
+  const long = Array.from({length: 60}, (_, i) => [pt.x + .9, .5 - i * .008, pt.z, 0, 0, 0, 1]);
+  r = send({type: 'settle', items: [{id: other.id, x: pt.x + .9, y: long.at(-1)[1], z: pt.z, yaw: 0, tilt: 0, roll: 0, path: long}]});
+  assert.ok(!r.close); assert.equal(r.out.length, 1); assert.ok(r.out[0].msg.path);
+  r = send({type: 'settle', items: [{id: other.id, x: pt.x, y: .01, z: pt.z, yaw: 0, tilt: 0, roll: 0, junk: 'x'.repeat(20000)}]});
+  assert.ok(r.close);
+  // and only so many a second
+  now += 2000;
+  let through = 0;
+  for (let i = 0; i < 20; i++) if (handleMessage(a, JSON.stringify({type: 'settle', items: [{id: other.id, x: pt.x, y: .01, z: pt.z, yaw: i / 100, tilt: 0, roll: 0}]}), now, room).out.length) through++;
+  assert.equal(through, 12);
   // not a flashlight either
   r = send({type: 'settle', items: [{id: 'fl1', x: items.fl1.x, y: 1, z: items.fl1.z, yaw: 0, tilt: 0, roll: 0}]});
   assert.equal(r.out.length, 0);
@@ -705,4 +722,120 @@ test('a new SCENE starts the room over once: items home, no tags or paint, nothi
   msgs = r.sockets[0].messages();
   assert.equal(msgs.find(m => m.type === 'state').items.find(i => i.id === 'pt1').x, 1);
   assert.equal(msgs.find(m => m.type === 'marks').sprays.length, 1);
+});
+
+test('paintball hopper: a ball a shot, nothing when it is empty, a reload fills it after a moment', async () => {
+  const {handleMessage, newPlayer, freshMarks} = await import('../room.js');
+  const {ITEM_SPAWNS} = await import('../../src/world-items.js');
+  const {MAG_SIZE, RELOAD_MS, SHOT_INTERVAL_MS, cleanItem} = await import('../../src/protocol.js');
+  const items = Object.fromEntries(ITEM_SPAWNS.map(s => [s.id, {...s, holder: null, on: false}]));
+  const gun = Object.values(items).find(it => it.type === 'paintball');
+  const a = newPlayer('aaa', 0); a.pose = {x: gun.x, y: 1.45, z: gun.z, yaw: 0, pitch: 0, g: 0};
+  const room = {items, marks: freshMarks(), race: null, players: () => [a]};
+  let now = 10_000;
+  const send = (m, dt = SHOT_INTERVAL_MS + 1) => { now += dt; return handleMessage(a, JSON.stringify(m), now, room); };
+  send({type: 'pickup', id: gun.id});
+  assert.equal(cleanItem(gun).ammo, MAG_SIZE);
+  const shot = {type: 'shoot', o: [gun.x, 1.2, gun.z], v: [-30, 1, 0], c: 0xff00ff, s: 7, t: .3};
+  // nothing to reload while it's full
+  assert.equal(send({type: 'reload'}).out.length, 0);
+  let fired = 0;
+  for (let i = 0; i < MAG_SIZE + 5; i++) if (send(shot).out.some(o => o.msg.type === 'shot')) fired++;
+  assert.equal(fired, MAG_SIZE); assert.equal(gun.ammo, 0);
+  const r = send({type: 'reload'});
+  assert.equal(r.out[0].msg.type, 'reload'); assert.equal(r.out[0].msg.from, 'aaa'); assert.equal(gun.ammo, MAG_SIZE);
+  assert.equal(send(shot, 200).out.length, 0, 'still reloading');
+  assert.ok(send(shot, RELOAD_MS).out.some(o => o.msg.type === 'shot'));
+  assert.equal(gun.ammo, MAG_SIZE - 1);
+});
+
+test('loop runs: a lap counts at the line just before the machine either way round, and the button counts the last one', async () => {
+  const {handleMessage, newPlayer} = await import('../room.js');
+  const {loopPoint, MACHINE_ANGLE, BUTTON, RACE_LAPS, freshRace} = await import('../../src/race.js');
+  for (const way of [1, -1]) {
+    const a = newPlayer('aaa', 0);
+    const room = {items: {}, race: freshRace(), players: () => [a]};
+    let now = 10_000;
+    const at = (ang, off) => { const p = loopPoint(ang, off); a.pose = {x: p.x, y: 1.45, z: p.z, yaw: 0, pitch: 0, g: 0}; };
+    const send = m => { now += 700; return handleMessage(a, JSON.stringify(m), now, room); };
+    at(MACHINE_ANGLE, 2.2);
+    send({type: 'button'});
+    assert.equal(room.race.state, 'running');
+    // round the far side of the tunnel (well away from the machine), in steps
+    const step = .25, lapEvents = [];
+    let ang = MACHINE_ANGLE;
+    for (let lap = 0; lap < RACE_LAPS; lap++) {
+      const end = lap < RACE_LAPS - 1 ? 2 * Math.PI : 2 * Math.PI - .3;   // the last stops at the button, short of the line
+      for (let t = step; t <= end + 1e-9; t += step) {
+        ang += way * step;
+        at(ang, -2.4);
+        const r = send({type: 'pose', pose: {...a.pose}});
+        for (const o of r.out) if (o.msg.type === 'race' && o.msg.event === 'lap') lapEvents.push(o.msg);
+      }
+    }
+    assert.equal(lapEvents.length, RACE_LAPS - 1, `way ${way}: laps counted at the line`);
+    // ...walk up to the button: the line's before it (out of its reach), so the last lap's in by then; pushing it finishes
+    for (const short of [.3, .2, .12, .06]) {
+      at(MACHINE_ANGLE + way * (2 * Math.PI * RACE_LAPS - short), 2.2);
+      for (const o of send({type: 'pose', pose: {...a.pose}}).out) if (o.msg.event === 'lap') lapEvents.push(o.msg);
+      if (short === .2) assert.equal(lapEvents.length, RACE_LAPS - 1, `way ${way}: not yet at the line 8 m out`);
+    }
+    assert.equal(lapEvents.length, RACE_LAPS, `way ${way}: counted at the line`);
+    const r = send({type: 'button'});
+    assert.ok(r.out.some(o => o.msg.event === 'finish'), `way ${way}: ${JSON.stringify(r.out.map(o => o.msg.event))}`);
+    assert.equal(room.race.state, 'done');
+  }
+});
+
+test('items: a stored set from an older version keeps where things were, adds what is new, drops what is gone', async () => {
+  const {validItems} = await import('../room.js');
+  const {ITEM_SPAWNS} = await import('../../src/world-items.js');
+  const old = Object.fromEntries(ITEM_SPAWNS.slice(0, 50).map(s => [s.id, {...s, holder: null, on: false}]));
+  old.pt1 = {...old.pt1, x: 1.234, y: 2, z: 3, hung: false};
+  old.zz9 = {id: 'zz9', type: 'spray', x: 0, y: 0, z: 0, yaw: 0, holder: null, on: false};
+  const v = validItems(old);
+  assert.equal(Object.keys(v).length, ITEM_SPAWNS.length);
+  assert.equal(v.pt1.x, 1.234, 'kept where it was left');
+  assert.equal(v.zz9, undefined, 'gone from the level, gone');
+  const fresh = ITEM_SPAWNS.find(s => s.type === 'marker');
+  assert.equal(v[fresh.id].type, 'marker'); assert.equal(v[fresh.id].x, Math.round(fresh.x * 1000) / 1000);
+});
+
+test('marker ink: kept as it is drawn, only with a marker, the oldest go, scrubbed off with the sponge, on players passed on but not kept', async () => {
+  const {handleMessage, newPlayer, freshMarks, marksMessage} = await import('../room.js');
+  const {ITEM_SPAWNS} = await import('../../src/world-items.js');
+  const {MAX_INK_STROKES} = await import('../../src/protocol.js');
+  const items = Object.fromEntries(ITEM_SPAWNS.map(s => [s.id, {...s, holder: null, on: false}]));
+  const marker = Object.values(items).find(it => it.type === 'marker'), bucket = Object.values(items).find(it => it.type === 'bucket');
+  const id = '0123456789abcdef';
+  const a = newPlayer(id, 0); a.pose = {x: marker.x, y: 1.45, z: marker.z, yaw: 0, pitch: 0, g: 0};
+  const room = {items, marks: freshMarks(), race: null, players: () => [a]};
+  let now = 10_000;
+  const send = m => { now += 60; return handleMessage(a, JSON.stringify(m), now, room); };
+  const pts = n => Array.from({length: n}, (_, i) => [marker.x + i * .01, 1, marker.z + 1, 0, 0, -1, .5, .5]);
+  // no marker in hand: nothing
+  assert.equal(send({type: 'ink', id: id + ':1', h: 'w', c: 0xff0000, p: pts(3)}).out.length, 0);
+  send({type: 'pickup', id: marker.id});
+  let r = send({type: 'ink', id: id + ':1', h: 'w', c: 0xff0000, p: pts(3)});
+  assert.equal(r.out[0].msg.type, 'ink'); assert.equal(r.out[0].msg.p.length, 3); assert.ok(r.marksChanged);
+  send({type: 'ink', id: id + ':1', h: 'w', c: 0xff0000, p: pts(4)});
+  assert.equal(room.marks.ink.length, 1); assert.equal(room.marks.ink[0].pts.length, 7, 'more of the same stroke');
+  assert.equal(marksMessage(room.marks).ink.length, 1, 'newcomers get it');
+  // someone else's stroke id, a stroke miles away, a bad host: ignored
+  assert.equal(send({type: 'ink', id: 'ffffffffffffffff:1', h: 'w', c: 1, p: pts(2)}).out.length, 0);
+  assert.equal(send({type: 'ink', id: id + ':2', h: 'w', c: 1, p: [[marker.x + 50, 1, marker.z, 0, 0, 1, 0, 0]]}).out.length, 0);
+  assert.equal(send({type: 'ink', id: id + ':2', h: 'zz', c: 1, p: pts(2)}).out.length, 0);
+  // on a player: passed on, not kept
+  r = send({type: 'ink', id: id + ':3', h: 'a' + 'aaaaaaaaaaaaaaaa', c: 1, p: [[0, 1, .2, 0, 0, 1, 0, 0]]});
+  assert.equal(r.out[0].msg.h, 'aaaaaaaaaaaaaaaaa'.replace(/^a/, 'a')); assert.equal(room.marks.ink.length, 1);
+  // too many strokes: the oldest go, and everyone's told
+  let erased = 0;
+  for (let k = 0; k < MAX_INK_STROKES + 3; k++) { now += 1000; erased += send({type: 'ink', id: `${id}:s${k}`, h: 'w', c: 1, p: pts(1)}).out.filter(o => o.msg.type === 'erase').length; }
+  assert.equal(room.marks.ink.length, MAX_INK_STROKES); assert.equal(erased, 4);
+  // the sponge scrubs one off
+  send({type: 'drop', id: marker.id, x: a.pose.x, y: 0, z: a.pose.z});
+  a.pose = {...a.pose, x: bucket.x, z: bucket.z}; send({type: 'pickup', id: bucket.id});
+  const victim = room.marks.ink[5].id;
+  r = send({type: 'erase', kind: 'ink', id: victim});
+  assert.equal(r.out[0].msg.kind, 'ink'); assert.ok(!room.marks.ink.some(s => s.id === victim));
 });

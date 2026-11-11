@@ -1,6 +1,8 @@
 // The supply room: B-02, the empty room next to the start room, fitted out at runtime with
-// steel shelving stocked with spray cans, paintball guns, flashlights and cleaning buckets.
+// steel shelving stocked with spray cans, markers, paintball guns, flashlights and cleaning buckets.
 // Shared by the server (where the stock starts) and the client (which builds the shelves).
+// (SHELF_ITEMS also carries what's scattered about the tunnel and rooms: src/scatter.js.)
+import {SCATTERED} from './scatter.js';
 const RL = 38, XF = Math.sqrt(3.3 ** 2 - 2 ** 2), VD = XF + 1.15, ROOM_C = VD + 3.2;
 const ROOM = 1, DOOR_X = 1.6;                 // the level builder's room 1 and its door offset
 const A = 2 * Math.PI * ROOM / 20;
@@ -18,6 +20,8 @@ export const UNITS = [
   {x: -1.5, z: 3 - SHELF_D / 2 - .03, turn: 0},
   {x: .55, z: 3 - SHELF_D / 2 - .03, turn: 0},
   {x: -3.5 + SHELF_D / 2 + .03, z: .2, turn: Math.PI / 2},
+  {x: 3.5 - SHELF_D / 2 - .03, z: .3, turn: -Math.PI / 2},      // the right-hand wall
+  {x: -3.5 + SHELF_D / 2 + .03, z: -1.95, turn: Math.PI / 2},   // the left wall, by the front
 ];
 // a unit's local (along, across) to room coords
 const onUnit = (u, along, across = 0) => ({
@@ -40,8 +44,20 @@ const STOCK = [
   [2, 0, -.55, 'bucket'], [2, 0, 0, 'bucket'], [2, 0, .55, 'bucket'],
   [2, 1, -.4, 'spray'], [2, 1, .3, 'spray'],
   [2, 2, 0, 'flashlight'],
+  // markers alongside the cans
+  [0, 1, .72, 'marker'], [1, 2, .76, 'marker'], [2, 1, .65, 'marker'],
+  // the right-hand wall: mostly paintball guns and markers
+  [3, 1, -.5, 'paintball'], [3, 1, .1, 'paintball'], [3, 1, .62, 'paintball'],
+  [3, 2, -.6, 'marker'], [3, 2, -.3, 'marker'], [3, 2, 0, 'marker'], [3, 2, .3, 'marker'], [3, 2, .6, 'marker'],
+  [3, 3, -.45, 'paintball'], [3, 3, .45, 'paintball'],
+  [3, 0, -.5, 'spray'], [3, 0, -.15, 'spray'], [3, 0, .2, 'spray'], [3, 0, .55, 'spray'],
+  // the left wall by the front
+  [4, 1, -.45, 'paintball'], [4, 1, .45, 'paintball'],
+  [4, 2, -.5, 'spray'], [4, 2, -.15, 'spray'], [4, 2, .2, 'spray'], [4, 2, .55, 'spray'],
+  [4, 3, -.4, 'marker'], [4, 3, 0, 'marker'], [4, 3, .4, 'marker'],
+  [4, 0, 0, 'flashlight'],
 ];
-const PREFIX = {flashlight: 'fls', paintball: 'pbs', spray: 'sps', bucket: 'bks'};
+const PREFIX = {flashlight: 'fls', paintball: 'pbs', spray: 'sps', bucket: 'bks', marker: 'mks'};
 export const SHELF_ITEMS = (() => {
   const count = {};
   return STOCK.map(([k, level, along, type], i) => {
@@ -52,7 +68,7 @@ export const SHELF_ITEMS = (() => {
     const yaw = type === 'bucket' ? dirYaw + i : Math.atan2(-Math.cos(dirYaw), Math.sin(dirYaw)) + (i % 2 ? Math.PI : 0) + jitter;
     return {id: `${PREFIX[type]}${count[type]}`, type, x: Math.round(w.x * 1000) / 1000, y: SHELF_LEVELS[level] + .02,
       z: Math.round(w.z * 1000) / 1000, yaw: Math.round(yaw * 1000) / 1000};
-  });
+  }).concat(SCATTERED);
 })();
 // where the work lantern sits (top of the first unit)
 export const LANTERN = (() => { const p = onUnit(UNITS[0], .55, 0); return {...roomToWorld(p.x, p.z), y: SHELF_LEVELS[4] + .02}; })();

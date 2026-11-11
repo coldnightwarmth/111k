@@ -219,7 +219,7 @@ export function createMachine(scene) {
   const cam = new THREE.Group(); cam.position.set(-.6, HEIGHT + .02, -SLOPE * HEIGHT - .07); root.add(cam);
   part(cam, new THREE.BoxGeometry(.08, .03, .08), dark);
   part(cam, new THREE.CylinderGeometry(.015, .015, .16, 10), steel, [0, .09, 0]);
-  const head = new THREE.Group(); head.position.set(0, .18, 0); head.rotation.set(.3, .3, 0, 'YXZ'); cam.add(head);
+  const head = new THREE.Group(); head.position.set(0, .18, 0); head.rotation.set(.3, 0, 0, 'YXZ'); cam.add(head);   // (turned a touch clockwise)
   part(head, new THREE.BoxGeometry(.11, .1, .24), std(0xd9d6cc, .5, .2), [0, 0, .06]);
   part(head, new THREE.BoxGeometry(.13, .02, .28), dark, [0, .06, .07]);                       // sun hood
   part(head, new THREE.CylinderGeometry(.035, .04, .04, 20), black, [0, 0, .19], [Math.PI / 2, 0, 0]);

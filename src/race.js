@@ -6,6 +6,11 @@ export const MACHINE_ANGLE = -0.2;
 export const RACE_LAPS = 3;
 export const RACE_TIMEOUT_MS = 3 * 60 * 1000;   // after this anyone can call off a run
 export const BUTTON_RANGE = 3.4;                // metres from the button to push it
+// A lap counts at a line just before the machine, whichever way round you're going: this far short of a full
+// turn (6 m along the loop), anywhere across the tunnel. Pushing the button after coming round counts it too,
+// from anywhere it can be reached (BUTTON_LAP: so the last lap's button press finishes the run, never calls it off).
+export const LAP_LINE = 6 / LOOP_RADIUS;
+export const BUTTON_LAP = .5;
 
 // a point at loop angle a, offset x from the centreline (outward positive)
 export const loopPoint = (a, x) => ({x: (LOOP_RADIUS + x) * Math.cos(a), z: -(LOOP_RADIUS + x) * Math.sin(a)});

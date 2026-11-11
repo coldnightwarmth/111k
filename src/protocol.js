@@ -18,10 +18,10 @@ export const PUNCH_COMBO_MS = 800;   // punch again within this and the other ha
 export const SHOT_INTERVAL_MS = 160;   // paintball rate of fire
 export const SPRAY_INTERVAL_MS = 450;
 export const SPRAY_RANGE = 3.2;        // metres from a player to the wall they tag
-export const SPLAT_LIFE_MS = 60000;    // paint fades away after a minute
-export const MAX_SPLATS = 400;         // paint marks the room remembers (oldest go first)
+export const SPLAT_LIFE_MS = 180000;   // paint fades away after three minutes
+export const MAX_SPLATS = 700;         // paint marks the room remembers (oldest go first; they last 3 minutes now)
 export const MAX_SPRAYS = 150;
-export const ITEM_TYPES = ['flashlight', 'paintball', 'spray', 'bucket', 'crown', 'painting'];
+export const ITEM_TYPES = ['flashlight', 'paintball', 'spray', 'bucket', 'crown', 'painting', 'marker'];
 
 // Emotes: every id the game knows (src/emotes.js); which clip plays is the settings' choice.
 export const EMOTES = Object.freeze(EMOTE_LIST.map(e => Object.freeze({id: e.id, label: e.label})));
@@ -73,6 +73,33 @@ export function sanitizeChat(text) {
 // A painting's tumble as worked out by whoever let it go (src/settle.js): [x, y, z, qx, qy, qz, qw] frames,
 // 30 a second, a few seconds at most, each near the one before. Anything else: none.
 export const PATH_MAX = 181;
+// Paintings coming down (a 'settle', or a 'drop' with its tumble): each message at most this big and this many
+// paintings (a pile coming down goes in several), and at most SETTLE_PER_S of them a second from anyone.
+export const SETTLE_BYTES = 14000, SETTLE_MAX = 16, SETTLE_PER_S = 12;
+// The paintball gun's hopper: this many balls (the ones you can see in it), one gone each shot; empty, a click
+// reloads it, which takes RELOAD_MS. And it takes CROWN_HITS paintballs, landing within CROWN_HIT_WINDOW_MS of
+// each other, to knock the crown off.
+// Marker ink: a stroke at a time, sent as it's drawn (INK_PTS points a message at most); the room keeps the last
+// MAX_INK_STROKES strokes, each up to MAX_STROKE_PTS points, MAX_INK_PTS in all (oldest go first). A point is
+// [x, y, z, nx, ny, nz, u, v]: where it is and which way the surface faces (in its host's own space: the world,
+// a door 'd<k>', a painting 'p<id>', or a player 'a<id>', whose ink isn't kept), and the level's lightmap there.
+export const INK_PTS = 64, MAX_INK_STROKES = 240, MAX_STROKE_PTS = 500, MAX_INK_PTS = 40000, INK_PER_S = 25;
+const inkNum = (v, k) => Math.round(v * k) / k;
+export function cleanInkPoints(pts, localHost) {
+  if (!Array.isArray(pts) || !pts.length || pts.length > INK_PTS) return null;
+  const out = [];
+  for (const q of pts) {
+    if (!Array.isArray(q) || q.length !== 8 || !q.every(Number.isFinite)) return null;
+    if (localHost && Math.hypot(q[0], q[1], q[2]) > 4) return null;
+    const n = Math.hypot(q[3], q[4], q[5]);
+    if (n < .5 || n > 1.5) return null;
+    out.push([inkNum(q[0], 1000), inkNum(q[1], 1000), inkNum(q[2], 1000), inkNum(q[3] / n, 100), inkNum(q[4] / n, 100), inkNum(q[5] / n, 100),
+      inkNum(Math.max(0, Math.min(1, q[6])), 1e4), inkNum(Math.max(0, Math.min(1, q[7])), 1e4)]);
+  }
+  return out;
+}
+export const INK_HOST = /^(w|d\d{1,3}|p[a-z0-9]{1,12}|a[0-9a-f]{16})$/;
+export const MAG_SIZE = 33, RELOAD_MS = 1300, CROWN_HITS = 2, CROWN_HIT_WINDOW_MS = 15000;
 export function cleanPath(path) {
   if (!Array.isArray(path) || path.length < 2 || path.length > PATH_MAX) return undefined;
   const out = [];
@@ -97,6 +124,7 @@ export function cleanItem(it) {
     out.art = Number.isInteger(it.art) && it.art > 0 && it.art <= ART_MAX ? it.art : 1;
     if (typeof it.hung === 'boolean') out.hung = it.hung;     // on its nail (held still), or free to fall
   }
+  if (out.type === 'paintball') out.ammo = Number.isInteger(it.ammo) ? Math.max(0, Math.min(MAG_SIZE, it.ammo)) : MAG_SIZE;
   return out;
 }
 // paintings are items pt1, pt2, ...: marks on one are kept in its own space and ride along with it

@@ -876,9 +876,14 @@ def scrawl(lines, color, r, height_m=0.16, width_m=0.016, drips=1.0, mist=1.0):
     for i, line in enumerate(lines):
         st = layout(line, r, slant=r.uniform(0.05, 0.3), bounce=0.08, spacing=0.1, jitter=0.04, scale_var=0.1, smooth=1,
                     condense=0.9)
+        shift = None
         for s in st:
             s[:, 1] -= i * 1.55
-            s[:, 0] += r.uniform(-0.1, 0.3) * i
+            # the whole line set in a little (the first stroke's draw: every stroke used to get its own, which
+            # scrambled every line after the first; one is still drawn per stroke, so nothing else changes)
+            u = r.uniform(-0.1, 0.3) * i
+            shift = u if shift is None else shift
+            s[:, 0] += shift
         strokes += st
     pad = int(hp * 0.5 + PX_PER_M * 0.04)
     cv, origin = fit_canvas(strokes, hp, pad)

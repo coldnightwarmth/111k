@@ -7,11 +7,11 @@ import * as THREE from 'three';
 import {SOUNDS, make, RATE} from './sfx-synth.js';
 
 // Which version of each sound the game uses (the /sfx page tries them all; one picked there is used in that
-// browser until it's set here)
-export const PICKS = {step: 'a', jump: 'a', land: 'a', hop: 'a', swing: 'a', hit: 'a', rattle: 'a', spray: 'a', fire: 'a', splat: 'a',
-  splatBody: 'a', scrub: 'a', flashlight: 'a', grab: 'a', thunkWood: 'a', thunkMetal: 'a', thunkCan: 'a', thunkPlastic: 'a', place: 'a',
-  doorOpen: 'a', doorBump: 'a', doorShut: 'a', button: 'a', raceStart: 'a', lap: 'a', finish: 'a', raceCancel: 'a',
-  crownStart: 'a', crownTake: 'a', crownLost: 'a', crownWin: 'a', chat: 'a', hum: 'a'};
+// browser until it's set here). Set from the picks sent over on 10 November.
+export const PICKS = {step: 'c', jump: 'a', land: 'c', hop: 'c', swing: 'a', hit: 'c', rattle: 'c', spray: 'a', fire: 'a',
+  splat: 'c', splatBody: 'a', scrub: 'b', flashlight: 'b', grab: 'b', thunkWood: 'a', thunkMetal: 'b', thunkCan: 'a',
+  thunkPlastic: 'a', place: 'b', doorOpen: 'a', doorBump: 'a', doorShut: 'b', button: 'a', raceStart: 'a', lap: 'a', finish: 'a',
+  raceCancel: 'a', crownStart: 'b', crownTake: 'b', crownLost: 'b', crownWin: 'b', chat: 'b', hum: 'a'};
 export const PICKS_KEY = '111k:sfx-picks';
 export function picks() {
   let mine = {};

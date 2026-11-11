@@ -15,6 +15,7 @@ import {createShelves, SHELF_COLLIDERS} from './shelves.js';
 import {loadCrates, addCrates, CRATE_COLLIDERS} from './crates.js';
 import {mergeGeometries} from '../vendor/three/BufferGeometryUtils.js';
 import {createCleaning} from './cleaning.js';
+import {createInk} from './ink.js';
 import {MACHINE_COLLIDER, BUTTON, BUTTON_RANGE, RACE_LAPS} from './race.js';
 import {KOTH_GRACE_MS, KOTH_WIN_MS, kothActive, kothTime} from './koth.js';
 import {createMimic} from './mimic.js';
@@ -22,12 +23,13 @@ import {createBeamShadows, castsBeamShadow} from './beamshadows.js';
 import {createWorldHits, cutDecal, createBatch, markMaterial, splatAtlas, splatCell, PAINT_COLORS, PAINT_ROWS, RANDOM_PAINT, rgbOf} from './decals.js';
 import {createDoors} from './doors.js';
 import {pickAvatar} from './picker.js';
+import {padFocus, padMove, padPick} from './padnav.js';
 import {createVoice, voicePanel} from './voice.js';
 import {createSfx} from './sfx.js';
 import {randomLook, cleanLook} from './looks.js';
 import {cleanEmoteConfig, offeredEmotes} from './emotes.js';
 import {EMOTES, EMOTE_DURATION, PUNCH_COOLDOWN_MS, PUNCH_DURATION, PUNCH_COMBO_MS, SHOT_INTERVAL_MS, SPRAY_INTERVAL_MS, SPRAY_RANGE,
-  MAX_SPLATS, MAX_SPRAYS, SPLAT_LIFE_MS, sanitizePose, sanitizeName, cleanSplat, cleanSpray, splatId, sprayId} from './protocol.js';
+  MAX_SPLATS, MAX_SPRAYS, SPLAT_LIFE_MS, SETTLE_BYTES, SETTLE_MAX, MAG_SIZE, INK_PTS, MAX_STROKE_PTS, sanitizePose, sanitizeName, cleanSplat, cleanSpray, splatId, sprayId} from './protocol.js';
 import {paintingSize, paintingMatrix, paintingTris} from './paintings.js';
 import {settle as settlePaintings, warmPhysics, reversed} from './settle.js';
 
@@ -201,6 +203,10 @@ async function start() {
   if (crates) crates.traverse(o => { if (o.isMesh && !o.material.transparent) castsBeamShadow(o); });
   const beamShadows = createBeamShadows(renderer, scene);
   const cleaning = createCleaning({level, scene, hits});
+  // marker ink (src/ink.js): on the world, a door, a painting or a player, each in its own space
+  const ink = createInk({level, scene, hostOf: h => (h[0] === 'd' ? hits.door(Number(h.slice(1)))?.mesh || null
+    : h[0] === 'p' ? items.items.get(h.slice(1))?.model || null
+    : h[0] === 'a' ? (h.slice(1) === network.id ? me.root : peers.get(h.slice(1))?.avatar?.root || null) : null)});
   const mimic = createMimic(level, scene);   // the control room's ring board: occupied rooms light up
   let mimicAt = 0;
   const bore = level.meta.bore;
@@ -306,7 +312,7 @@ async function start() {
       if (locked) { toggleGallery(false); return; }
       // Esc (or Tab) while holding a can opens the piece gallery (or, holding the paintball gun, the paint list)
       const byYou = !menuRelease && !chat.open && emoteMenu.hidden;
-      if (byYou && ['spray', 'paintball'].includes(heldType())) toggleGallery(true);
+      if (byYou && ['spray', 'paintball', 'marker'].includes(heldType())) toggleGallery(true);
       menuRelease = false;
       // and it opens the chat box, ready to type (staying out of the world once you've sent or shut it).
       // Not when the mouse went because the window lost focus (switching apps, a system dialog).
@@ -318,6 +324,9 @@ async function start() {
     onSecondary: () => secondary(),
     onUse: () => { held() ? secondary() : grab() || secondary(); },
     onGallery: () => toggleGallery(),
+    menuOpen: () => !emoteMenu.hidden || !gallery.hidden || chat.open,
+    onMenuMove: dir => menuMove(dir), onMenuPick: () => menuPick(), onMenuBack: () => menuBack(),
+    onDpad: (dir, shoulder) => padStep(dir, shoulder),
   });
   // let go of the mouse for one of our own menus (not the gallery's Esc)
   function release() { if (controls.state.locked) menuRelease = true; controls.release(); }
@@ -364,7 +373,7 @@ async function start() {
   // ------------------------------------------------------- paint & tags
   const splats = createBatch(markMaterial(level, splatAtlas(), 2));
   splats.mesh.renderOrder = 3; scene.add(splats.mesh);
-  const splatMarks = [];   // {batch, m, born}: paint fades away a minute after it lands
+  const splatMarks = [];   // {batch, m, born}: paint fades away three minutes after it lands (SPLAT_LIFE_MS)
   const doorBatches = new Map();
   function doorBatch(k) {
     if (!doorBatches.has(k)) {
@@ -570,6 +579,7 @@ async function start() {
   // a mark scrubbed off by someone with the bucket
   function eraseMark(kind, id) {
     if (kind === 'baked') { cleaning.eraseBaked(id); return; }
+    if (kind === 'ink') { ink.remove(id); cleaning.forget(kind, id); return; }
     const list = kind === 'splat' ? splatMarks : sprayMarks;
     if (kind === 'spray') parkedSprays.delete(id);
     const i = list.findIndex(k => k.id === id);
@@ -659,6 +669,9 @@ async function start() {
       if (h) best = {t: t - step + step * h.distance / len, point: h.point, normal: h.normal, d: h.distance, door: h.door, local: h.local, mesh: h.mesh};
       const ph = items.paintingHit(prev, dir, len);
       if (ph && (!best || ph.distance < best.d)) best = {t: t - step + step * ph.distance / len, point: ph.point, normal: ph.normal, d: ph.distance};
+      // a painting held up in front of someone: it takes the ball (and the paint), not them
+      const sh = items.shieldHit(prev, dir, len, ignore);
+      if (sh && (!best || sh.distance < best.d)) best = {t: t - step + step * sh.distance / len, point: sh.point, normal: sh.normal, d: sh.distance, shield: sh};
       for (const p of [...peers.values(), {id: network.id, last: {x: player.x, z: player.z}, avatar: me}]) {
         if (p.id === ignore || !p.last || !p.avatar) continue;
         // a capsule around each body: 0.28 m wide, feet to head
@@ -767,6 +780,7 @@ async function start() {
     }
     if (h?.state.type === 'flashlight') { network.send({type: 'toggle', id: h.state.id, on: !h.state.on}); sfx.play('flashlight', {rate: h.state.on ? .92 : 1}); learn('flashlight'); return; }
     if (h?.state.type === 'paintball') { shoot(); return; }
+    if (h?.state.type === 'marker') { learn('draw'); return; }   // (it draws while the button's held: drawInk, each frame)
     if (h?.state.type === 'spray') { spray(); return; }
     if (h?.state.type === 'crown') { if (!kothActive(koth)) network.send({type: 'koth'}); learn('koth'); return; }
     if (h?.state.type === 'painting') { const plan = planPlace(h); if (plan) placePainting(h, plan); return; }
@@ -936,14 +950,33 @@ async function start() {
   // too far over an edge it tips off, and whatever it knocks moves too. Everyone sees it go as it went here.
   const lyingAbout = () => items.paintings().map(it => it.state);
   const poseFields = p => ({x: r3(p.x), y: r3(p.y), z: r3(p.z), yaw: r3(p.yaw), tilt: r3(p.tilt), roll: r3(p.roll || 0)});
+  // A message has to stay under the server's size limit (SETTLE_BYTES, src/protocol.js): a long tumble's path is
+  // left out if it won't fit (it's just put where it landed), and a pile coming down goes in as many as it takes.
+  // (Over the limit, the server used to close the connection: whoever knocked a tower over dropped out and came
+  // back, flickering for everyone, and the tower went back up.)
   function sendPlaced(id, pose, path) {
-    return network.send({type: 'drop', id, ...poseFields(pose), hung: !!pose.hung && !path, ...(path ? {path} : {})});
+    const msg = {type: 'drop', id, ...poseFields(pose), hung: !!pose.hung && !path, ...(path ? {path} : {})};
+    if (path && JSON.stringify(msg).length > SETTLE_BYTES) { delete msg.path; msg.hung = !!pose.hung; }
+    return network.send(msg);
   }
   // the paintings knocked or left with nothing under them: moving here straight away, and sent for everyone
   function sendSettled(moved) {
     if (!moved?.length) return;
-    if (!network.send({type: 'settle', items: moved.map(m => ({id: m.id, ...m.pose, path: m.path}))})) return;
-    for (const m of moved) if (m.path) { items.predict(m.id, {holder: null, ...poseFields(m.pose), hung: false}, {me: network.id}); items.tumble(m.id, m.path); }
+    const chunks = [[]];
+    let size = 40;
+    for (const m of moved) {
+      let entry = {id: m.id, ...m.pose, path: m.path}, n = JSON.stringify(entry).length + 1;
+      if (n > SETTLE_BYTES - 60) { entry = {id: m.id, ...m.pose}; n = JSON.stringify(entry).length + 1; m.path = null; }
+      if (chunks.at(-1).length >= SETTLE_MAX || size + n > SETTLE_BYTES) { chunks.push([]); size = 40; }
+      chunks.at(-1).push(entry); size += n;
+    }
+    for (const chunk of chunks) {
+      if (!network.send({type: 'settle', items: chunk})) return;
+      for (const e of chunk) {
+        items.predict(e.id, {holder: null, ...poseFields(e), hung: false}, {me: network.id});
+        if (e.path) items.tumble(e.id, e.path);
+      }
+    }
   }
   async function letSettle(state, pose, vel) {
     try { return await settlePaintings({hits, paintings: lyingAbout(), moving: {state, pose, vel}}); }
@@ -1083,10 +1116,80 @@ async function start() {
     if (ph && (!h || ph.distance < h.distance)) h = ph;           // a painting in front of the wall
     return {point: h ? h.point : o.clone().addScaledVector(d, far), hit: h, origin: o, dir: d};
   }
+  // ----------------------------------------------------------- the marker
+  // Held down with a marker in hand: wherever the crosshair is on a surface within reach (a wall, a door, a
+  // painting, someone), a point every centimetre and a bit; a new stroke when it jumps (off an edge, onto
+  // something else). Your own ink goes on straight away; the points go out every 100 ms.
+  const INK_REACH = 2.4, INK_STEP = .012, INK_JUMP = .3, INK_SEND_MS = 100;
+  let inkStroke = null, inkSeq = 0, inkRefreshAt = 0;
+  const _ip = new THREE.Vector3(), _in = new THREE.Vector3();
+  function inkTarget() {
+    camera.updateMatrixWorld();
+    const o = camera.getWorldPosition(new THREE.Vector3()), d = camera.getWorldDirection(new THREE.Vector3());
+    if (boom) o.addScaledVector(d, camDist);
+    const reach = INK_REACH + (boom ? 0 : 0);
+    let best = null;
+    const h = hits.raycast(o, d, reach, true);
+    if (h) best = h.door !== undefined ? {d: h.distance, host: 'd' + h.door, p: h.local.point, n: h.local.normal}
+      : {d: h.distance, host: 'w', p: h.point, n: h.normal, light: true};
+    for (const ph of [items.paintingHit(o, d, reach), items.shieldHit(o, d, reach, network.id)]) {
+      if (ph && (!best || ph.distance < best.d)) best = {d: ph.distance, host: 'p' + ph.painting.state.id, p: ph.local.point, n: ph.local.normal};
+    }
+    // someone standing there: on them, in their own space (it goes where they go)
+    for (const p of peers.values()) {
+      const a = p.avatar;
+      if (!a || !p.last) continue;
+      const base = a.root.position.y, top = base + 1.62, c = _ip.set(p.last.x, 0, p.last.z);
+      // the ray against an upright capsule round them (0.28 m), stepped
+      for (let t = 0; t < reach && (!best || t < best.d); t += .02) {
+        const q = o.clone().addScaledVector(d, t);
+        if (q.y < base || q.y > top || Math.hypot(q.x - c.x, q.z - c.z) > .28) continue;
+        const n = _in.set(q.x - c.x, 0, q.z - c.z).normalize();
+        a.root.updateMatrixWorld();
+        const inv = a.root.matrixWorld.clone().invert();
+        best = {d: t, host: 'a' + p.id, p: q.applyMatrix4(inv), n: n.clone().transformDirection(inv)};
+        break;
+      }
+    }
+    if (best?.light) {
+      const uv = hits.lightAt(o, d, best.d + .05);
+      best.uv = uv ? [uv.x, uv.y] : [0, 0];
+    }
+    return best;
+  }
+  function inkFlush(st, now) {
+    if (!st.buf.length) return;
+    network.send({type: 'ink', id: st.id, h: st.h, c: st.c, p: st.buf.splice(0, INK_PTS)});
+    st.sentAt = now;
+  }
+  function drawInk(now) {
+    const h = held(), on = h?.state.type === 'marker' && controls.state.firing && !chat.open && emoteMenu.hidden && gallery.hidden;
+    if (h?.state.type === 'marker') items.drawing(h.state.id, on);
+    if (!on) { if (inkStroke) { inkFlush(inkStroke, now); inkStroke = null; } return; }
+    const t = inkTarget();
+    if (!t) { if (inkStroke) { inkFlush(inkStroke, now); inkStroke = null; } return; }
+    const r3 = v => Math.round(v * 1000) / 1000, r2 = v => Math.round(v * 100) / 100, r4 = v => Math.round(v * 1e4) / 1e4;
+    const q = [r3(t.p.x), r3(t.p.y), r3(t.p.z), r2(t.n.x), r2(t.n.y), r2(t.n.z), r4(t.uv?.[0] ?? 0), r4(t.uv?.[1] ?? 0)];
+    let st = inkStroke;
+    // a new stroke: the first, a jump, onto something else, or this one's full
+    if (st && (st.h !== t.host || Math.hypot(q[0] - st.last[0], q[1] - st.last[1], q[2] - st.last[2]) > INK_JUMP || st.n >= MAX_STROKE_PTS)) { inkFlush(st, now); st = inkStroke = null; }
+    if (!st) {
+      const c = chosenPaint === RANDOM_PAINT ? PAINT_COLORS[Math.floor(Math.random() * PAINT_COLORS.length)] : chosenPaint;
+      st = inkStroke = {id: `${network.id}:${(++inkSeq).toString(36)}`, h: t.host, c, last: null, n: 0, buf: [], sentAt: now};
+    }
+    if (st.last && Math.hypot(q[0] - st.last[0], q[1] - st.last[1], q[2] - st.last[2]) < INK_STEP) return;
+    st.last = q; st.n++; st.buf.push(q);
+    if (now - (st.heardAt || 0) > 140) { st.heardAt = now; sfx.play('scrub', {gain: .3, rate: 1.7 + Math.random() * .2}); }   // the nib on the wall
+    ink.add({id: st.id, h: st.h, c: st.c, p: [q]});
+    if (st.buf.length >= INK_PTS || now - st.sentAt > INK_SEND_MS) inkFlush(st, now);
+  }
+
   function shoot() {
     const now = performance.now(), gun = held();
-    if (!gun || now - lastShot < SHOT_INTERVAL_MS) return;
+    if (!gun || now - lastShot < SHOT_INTERVAL_MS || items.reloading(gun.state.id)) return;
     lastShot = now;
+    // the hopper's empty: this click fills it again (a moment, everyone sees it), then it fires again
+    if ((gun.state.ammo ?? MAG_SIZE) <= 0) { items.reload(gun.state.id); network.send({type: 'reload'}); sfx.play('rattle', {rate: .82, gain: 1.2}); return; }
     learn('fire');
     camera.updateMatrixWorld(); items.frame(frameArgs(0));
     const muzzle = items.tip(gun);
@@ -1102,7 +1205,12 @@ async function start() {
     const seed = Math.floor(Math.random() * 0xffffff);
     const land = trace(muzzle, v, network.id);
     const msg = {type: 'shoot', o: muzzle.toArray().map(r3), v: v.toArray().map(r3), c: color, s: seed, t: r3(land.t)};
-    if (land.target) {
+    if (land.shield) {
+      // on the painting someone's holding: the splat's in its own space and goes wherever they carry it
+      const sh = land.shield, fly = new THREE.Vector3(v.x, v.y - GRAVITY * land.t, v.z).normalize();
+      fly.transformDirection(sh.painting.model.matrixWorld.clone().invert());
+      msg.parts = [{pi: sh.painting.state.id, p: sh.local.point.toArray().map(r3), n: sh.local.normal.toArray().map(r3), v: fly.toArray().map(r3)}];
+    } else if (land.target) {
       msg.target = land.target.id;
       const a = land.target.avatar;
       const lp = a.root.worldToLocal(land.point.clone());
@@ -1125,7 +1233,7 @@ async function start() {
     }
     items.kick(gun.state.id);
     sfx.play('fire');
-    network.send(msg);
+    if (network.send(msg)) items.spend(gun.state.id);
   }
   const r3 = x => Math.round(x * 1000) / 1000;
   const formatRace = ms => `${Math.floor(ms / 60000)}:${String(Math.floor(ms / 1000) % 60).padStart(2, '0')}.${String(Math.floor(ms / 10) % 100).padStart(2, '0')}`;
@@ -1206,11 +1314,7 @@ async function start() {
       adjAt = now; adjAcc += d;
       if (Math.abs(adjAcc) < 40) return;
       const step = -Math.sign(adjAcc); adjAcc = 0;
-      if (turning) { tagTurn = Math.round((tagTurn + step * TURN_STEP) / TURN_STEP) * TURN_STEP; tagTurn = Math.atan2(Math.sin(tagTurn), Math.cos(tagTurn)); learn('tagturn'); }
-      else { tagScale = Math.max(SCALE_MIN, Math.min(SCALE_MAX, tagScale * (step > 0 ? SCALE_STEP : 1 / SCALE_STEP))); learn('tagsize'); }
-      nextTilt = 0; nextScale = 1;                      // set by hand: no random wobble on top
-      showTagAdjust();
-      previewKey = '';
+      adjustTag(turning, step);
       return;
     }
     if (now - wheelAt > 250) wheelAcc = 0;
@@ -1218,9 +1322,39 @@ async function start() {
     wheelAcc += e.deltaY * (e.deltaMode === 1 ? 33 : e.deltaMode === 2 ? 400 : 1);
     if (Math.abs(wheelAcc) < 50 || now - stepAt < 70) return;
     const step = Math.sign(wheelAcc); wheelAcc = 0; stepAt = now;
+    stepPiece(step);
+  }, {passive: false});
+  function stepPiece(step) {
     const i = Math.max(0, pieces.findIndex(p => p.name === chosenPiece));
     choosePiece(pieces[(i + step + pieces.length) % pieces.length].name);
-  }, {passive: false});
+  }
+  // the next tag turned a step (turning) or sized one
+  function adjustTag(turning, step) {
+    if (turning) { tagTurn = Math.round((tagTurn + step * TURN_STEP) / TURN_STEP) * TURN_STEP; tagTurn = Math.atan2(Math.sin(tagTurn), Math.cos(tagTurn)); learn('tagturn'); }
+    else { tagScale = Math.max(SCALE_MIN, Math.min(SCALE_MAX, tagScale * (step > 0 ? SCALE_STEP : 1 / SCALE_STEP))); learn('tagsize'); }
+    nextTilt = 0; nextScale = 1;                      // set by hand: no random wobble on top
+    showTagAdjust();
+    previewKey = '';
+  }
+  // ---------------------------------------------------- gamepad in menus
+  // the menu that's open (emotes, or the tags / paint list), its buttons as laid out on screen
+  const openMenu = () => (!emoteMenu.hidden ? emoteMenu : !gallery.hidden ? gallery : null);
+  function menuMove(dir) { const menu = openMenu(); if (menu) padMove(menu, dir); }
+  function menuPick() { const menu = openMenu(); if (menu) { padPick(menu); padFocus(null); } }
+  function menuBack() { padFocus(null); toggleEmotes(false); toggleGallery(false); if (chat.open) { relock = false; chat.setOpen(false); } }
+  // the d-pad with nothing open: with a can, through your tags (left, right) and their size (up, down; LB and
+  // left or right turns the next one); with the paintball gun, through the paints
+  function padStep(dir, shoulder) {
+    const t = heldType(), step = dir === 'right' || dir === 'up' ? 1 : -1;
+    if (t === 'spray' && pieces.length) {
+      if (dir === 'up' || dir === 'down') adjustTag(false, step);
+      else if (shoulder) adjustTag(true, -step);
+      else stepPiece(step);
+    } else if ((t === 'paintball' || t === 'marker') && (dir === 'left' || dir === 'right')) {
+      const all = [RANDOM_PAINT, ...PAINT_COLORS], i = Math.max(0, all.indexOf(chosenPaint));
+      choosePaint(all[(i + step + all.length) % all.length]);
+    }
+  }
   // picked something: shut the menu and go straight back to playing (the click is the gesture the
   // browser needs to take the mouse again)
   function backToPlay() {
@@ -1229,8 +1363,8 @@ async function start() {
   }
   function toggleGallery(force) {
     const open = force ?? gallery.hidden;
-    const paint = heldType() === 'paintball';
-    // the tags menu is for a can in hand (the paint list for the paintball gun): nothing else opens it
+    const paint = heldType() === 'paintball' || heldType() === 'marker';
+    // the tags menu is for a can in hand (the paint list for the paintball gun or a marker): nothing else opens it
     if (open && (paint ? false : heldType() !== 'spray' || !pieces.length)) return;
     if (open) {
       gallery.dataset.mode = paint ? 'paint' : 'piece';
@@ -1399,7 +1533,7 @@ async function start() {
   }
   function removePeer(id) {
     const p = peers.get(id); if (!p) return;
-    p.avatar?.dispose(); p.bubble?.dispose(); p.typing?.dispose(); p.speakEl?.remove(); peers.delete(id); updateCount();
+    p.avatar?.dispose(); p.bubble?.dispose(); p.typing?.dispose(); p.speakEl?.remove(); peers.delete(id); updateCount(); ink.dropHost('a' + id);
   }
   function applyPose(id, pose, time) {
     const p = peer(id); if (!p) return;
@@ -1473,11 +1607,14 @@ async function start() {
         return;
       }
       if (m.type === 'look' && m.id !== network.id) setLook(peer(m.id), m.look);
-      else if (m.type === 'marks') resetMarks(m);
+      else if (m.type === 'marks') { resetMarks(m); ink.reset(m.ink); }
+      else if (m.type === 'ink') { if (m.by !== network.id) { ink.add(m); hear('scrub', m.by, {gain: .3, rate: 1.75}); } }
+      else if (m.type === 'reload') { if (m.from !== network.id) { items.reload(m.id); hear('rattle', m.from, {rate: .82, gain: 1.2}); } }
       else if (m.type === 'shot') {
         const o = new THREE.Vector3(...m.o), v = new THREE.Vector3(...m.v);
         // out of the shooter's barrel as you see it: your view model's, or their avatar's gun
         const gun = items.heldBy(m.from);
+        if (gun && m.from !== network.id) items.spend(gun.state.id);   // (yours went when you fired it)
         const from = gun?.state.type === 'paintball' && gun.model.visible !== false ? items.tip(gun) : null;
         if (m.from !== network.id) sfx.play('fire', {at: from || o, key: m.from});       // (yours went off as you clicked)
         launch(o, v, m.c, m.t, () => {
@@ -1607,6 +1744,21 @@ async function start() {
     const visible = bubbleAnchor.z > -1 && bubbleAnchor.z < 1 && Math.abs(bubbleAnchor.x) < 1.1 && Math.abs(bubbleAnchor.y) < 1.1;
     return {x: (bubbleAnchor.x + 1) * innerWidth / 2, y: (1 - bubbleAnchor.y) * innerHeight / 2, visible};
   }
+  // Someone near enough to matter but out of view (typing, talking): shown at the side of the screen they're off
+  // to, level with them; just off the top or bottom, along that edge where they are; behind you, on the side
+  // they're nearer. edge: -1 left, 1 right, 0 along the top or bottom (x, y where to put it).
+  const _cam = new THREE.Vector3(), EDGE_NEAR = 22, EDGE_PAD = 34;
+  function edgeSpot(pos, height) {
+    const at = project(pos, height);
+    _cam.set(pos.x, height, pos.z).applyMatrix4(camera.matrixWorldInverse);
+    const ahead = _cam.z < -.05, side = _cam.x >= 0 ? 1 : -1;
+    const y = ahead ? Math.max(70, Math.min(innerHeight - 150, at.y)) : innerHeight * .42;
+    if (!ahead) return {x: side > 0 ? innerWidth : 0, y, edge: side};
+    if (at.x < EDGE_PAD) return {x: 0, y, edge: -1};
+    if (at.x > innerWidth - EDGE_PAD) return {x: innerWidth, y, edge: 1};
+    return {x: at.x, y, edge: 0};
+  }
+  const nearMe = pos => Math.hypot(pos.x - camera.position.x, pos.z - camera.position.z) < EDGE_NEAR;
   // speech bubbles hide when a wall is between you and the speaker
   function inSight(pos) {
     const dx = pos.x - camera.position.x, dz = pos.z - camera.position.z, d = Math.hypot(dx, dz);
@@ -1712,7 +1864,7 @@ async function start() {
     if (!input.firing) fireLatch = false;
     if (h?.state.type === 'paintball' && input.firing && !fireLatch && !frozen) shoot();
     document.body.classList.toggle('holding-spray', h?.state.type === 'spray');
-    document.body.classList.toggle('holding-paint', h?.state.type === 'paintball');
+    document.body.classList.toggle('holding-paint', h?.state.type === 'paintball' || h?.state.type === 'marker');
     const motion = {...vertical.pose, emote: player.emote, emoteTime: player.emoteTime, emoteConfig, pitch: facePitch,
       punchTime: player.punchTime, punchHand: player.punchHand, holding};
 
@@ -1827,7 +1979,8 @@ async function start() {
         const at = project(s, (s.g || 0) + 2.0 + (s.jumpTime >= 0 ? .4 : 0));
         const show = at.visible && p.seen;
         const top = p.bubble ? p.bubble.update(at.x, at.y, show) : at.y;
-        p.typing?.update(at.x, top, show);
+        if (p.typing && !at.visible && nearMe(s)) { const e = edgeSpot(s, (s.g || 0) + 1.6); p.typing.update(e.x, e.y - 16, true, e.edge); }   // (over any talking bars)
+        else p.typing?.update(at.x, top, show);
       }
     }
     // voice: link up with nearby talkers, place their voices, and mark who's speaking
@@ -1838,11 +1991,16 @@ async function start() {
       if (level > .05 || p.speakEl) {
         if (!p.speakEl) { p.speakEl = document.createElement('div'); p.speakEl.className = 'speaking'; p.speakEl.innerHTML = '<i></i><i></i><i></i>'; bubbleLayer.append(p.speakEl); }
         p.speakLevel = Math.max(level, (p.speakLevel || 0) * .9);
-        const at = project(p.last, (p.last.g || 0) + 1.78 + jumpHeight(p.last.jumpTime ?? -1, p.last.jumpPower));
+        const head = (p.last.g || 0) + 1.78 + jumpHeight(p.last.jumpTime ?? -1, p.last.jumpPower);
+        let at = project(p.last, head), edge = 0;
+        // talking out of view: at the side of the screen they're off to (like someone typing)
+        if (!at.visible && nearMe(p.last)) { const e = edgeSpot(p.last, head - .2); at = {x: e.x, y: e.y + 16, visible: true}; edge = e.edge; }
         const show = at.visible && p.speakLevel > .04;
         p.speakEl.hidden = !show;
         if (show) {
-          p.speakEl.style.transform = `translate(${at.x.toFixed(1)}px, ${at.y.toFixed(1)}px) translate(-50%, -100%)`;
+          if (edge !== (p.speakEdge || 0)) { p.speakEl.classList.toggle('edge-l', edge < 0); p.speakEl.classList.toggle('edge-r', edge > 0); p.speakEdge = edge; }
+          const x = edge < 0 ? 14 : edge > 0 ? innerWidth - 14 : at.x;
+          p.speakEl.style.transform = `translate(${x.toFixed(1)}px, ${at.y.toFixed(1)}px) translate(${edge < 0 ? '0' : edge > 0 ? '-100%' : '-50%'}, ${edge ? '-50%' : '-100%'})`;
           [...p.speakEl.children].forEach((bar, i) => { bar.style.transform = `scaleY(${(.25 + Math.min(1, p.speakLevel * (1.6 - i * .3) * 2.2)).toFixed(2)})`; });
         }
       }
@@ -1853,6 +2011,9 @@ async function start() {
       else { const at = project(player, player.ground + 2.0); myBubble.update(at.x, at.y, at.visible && boom); }
     }
     doors.update(dt);
+
+    drawInk(now);
+    if (now - inkRefreshAt > 500) { inkRefreshAt = now; ink.refresh(); }   // (ink waiting for a player or painting that's arrived)
 
     // paintballs, paint puffs, fresh tags
     for (let i = balls.length - 1; i >= 0; i--) {
@@ -1911,6 +2072,9 @@ async function start() {
       const o = camera.getWorldPosition(new THREE.Vector3()), d = camera.getWorldDirection(new THREE.Vector3());
       if (boom) o.addScaledVector(d, camDist);
       cleanTarget = cleaning.pick(o, d, 3.2, [...splatMarks, ...sprayMarks]);
+      // marker lines: picked out near enough (they're too thin to aim at square on), unless something's nearer
+      const wall = hits.raycast(o, d, 3.2, true), inkAim = ink.pick(o, d, (wall ? wall.distance : 3.2) + .06);
+      if (inkAim && (!cleanTarget || inkAim.distance < cleanTarget.distance + .01)) cleanTarget = inkAim;
     }
     cleaning.highlight(cleanTarget);
     if (now - mimicAt > 250) {
@@ -1936,6 +2100,7 @@ async function start() {
     const parts = isTouch ? [] : pushable ? [['button', 'click: push the button']] : doorAim !== null ? [['door', 'click: close the door']]
       : h ? (type === 'flashlight' ? [['flashlight', `click: ${h.state.on ? 'turn off' : 'turn on'}`], drop]
         : type === 'paintball' ? [['fire', 'click: fire'], drop]
+        : type === 'marker' ? [['draw', 'hold click: draw'], ['paints', 'esc or tab: pick a colour'], drop]
         : type === 'bucket' ? [['scrub', cleanTarget ? 'click: scrub it off' : 'aim at paint or graffiti to scrub it'], drop]
         : type === 'crown' ? (kothActive(koth) ? [] : [['koth', 'click: start king of the hill'], drop])
         : type === 'painting' ? [['place', placePlan ? `click: ${{hang: 'hang it here', lean: 'lean it here', lay: 'lay it down'}[placePlan.how]}` : 'aim at a wall or the floor to put it there'],
@@ -1947,11 +2112,11 @@ async function start() {
     if (prompt.textContent !== hint) prompt.textContent = hint;
     document.body.classList.toggle('holding', !!h);
     tagLabel.hidden = type !== 'spray' || !chosenPiece;
-    paintLabel.hidden = type !== 'paintball';
-    const galleryLabel = type === 'paintball' ? 'paint' : 'tags';
+    paintLabel.hidden = type !== 'paintball' && type !== 'marker';
+    const galleryLabel = type === 'paintball' || type === 'marker' ? 'paint' : 'tags';
     if (btnGallery.textContent !== galleryLabel) btnGallery.textContent = galleryLabel;
     const act = pushable ? 'push' : doorAim !== null ? 'close' : h ? (type === 'flashlight' ? (h.state.on ? 'light off' : 'light on')
-      : type === 'paintball' ? 'fire' : type === 'bucket' ? 'scrub' : type === 'crown' ? 'start' : type === 'painting' ? 'place' : 'spray') : t ? 'grab' : 'punch';
+      : type === 'paintball' ? 'fire' : type === 'marker' ? 'draw' : type === 'bucket' ? 'scrub' : type === 'crown' ? 'start' : type === 'painting' ? 'place' : 'spray') : t ? 'grab' : 'punch';
     if (btnAct.textContent !== act) btnAct.textContent = act;
     document.body.classList.toggle('can-grab', !!t);
     // first person: say which emote you're doing, since you can't see yourself
@@ -1993,7 +2158,7 @@ async function start() {
     (window.requestIdleCallback || (f => setTimeout(f, 1500)))(() => warmPhysics(), {timeout: 4000});
   }
   window.__111k = {scene, camera, player, peers, network, renderer, items, controls, hits, doors, me, meView, vertical, sfx,
-    voice, cleaning, mimic, planPlace, settlePaintings, culler, cullNow: () => { cullStaticNow(); items.frame(frameArgs(0)); }, get cleanTarget() { return cleanTarget; }, splatMarks, sprayMarks, addSplat, doorBatches, setView: v => { thirdPerson = v; }, primary, secondary, shoot, spray, choosePiece, choosePaint, toggleGallery, get pieces() { return pieces; }};
+    voice, cleaning, mimic, ink, inkTarget: () => inkTarget(), inkStrokes: () => ink.marks().reduce((s, k) => s.add(k.id), new Set()).size, inkHosts: () => [...new Set(ink.marks().map(k => k.batch.mesh.parent?.type || '?'))], planPlace, settlePaintings, culler, cullNow: () => { cullStaticNow(); items.frame(frameArgs(0)); }, get cleanTarget() { return cleanTarget; }, splatMarks, sprayMarks, addSplat, doorBatches, setView: v => { thirdPerson = v; }, primary, secondary, shoot, spray, choosePiece, choosePaint, toggleGallery, get pieces() { return pieces; }};
 }
 
 start().catch(err => {

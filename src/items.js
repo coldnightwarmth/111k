@@ -6,12 +6,13 @@ import * as THREE from 'three';
 import {lighting, MAX_FLASHLIGHTS, MAX_SPOTLIGHTS, FAN_RANGE, packBeams, ghostMaterial} from './level.js';
 const BEAM_FAR = 42, BEAM_FADE = 10;   // torches on the floor: full strength to 32 m, gone by 42 m
 import {EYE_HEIGHT} from './motion.js';
+import {MAG_SIZE, RELOAD_MS} from './protocol.js';
 import {PAINT_COLORS, RANDOM_PAINT} from './decals.js';
 import {ART, ART_IDS, PREVIEW, artFile, paintingSize, paintingMatrix} from './paintings.js';
 import {mergeVertices, mergeGeometries} from '../vendor/three/BufferGeometryUtils.js';
 
 const BEAM_COLOR = new THREE.Color(1, .93, .8);
-export const ITEM_NAMES = {flashlight: 'flashlight', paintball: 'paintball gun', spray: 'spray can', bucket: 'bucket and sponge', crown: 'golden crown', painting: 'painting'};
+export const ITEM_NAMES = {flashlight: 'flashlight', paintball: 'paintball gun', spray: 'spray can', bucket: 'bucket and sponge', crown: 'golden crown', painting: 'painting', marker: 'marker'};
 
 const std = (color, roughness = .55, metalness = .2, extra = {}) => new THREE.MeshStandardMaterial({color, roughness, metalness, ...extra});
 function part(g, geo, mat, [x, y, z] = [0, 0, 0], [rx, ry, rz] = [0, 0, 0]) {
@@ -153,13 +154,38 @@ function paintballModel() {
   const setPaint = (color, palette) => {
     if (color === shown) return;
     shown = color;
-    for (let i = 0; i < balls.count; i++) balls.setColorAt(i, tint.setHex(color < 0 ? palette[(i * 7 + 3) % palette.length] : color));
+    for (let i = 0; i < 33; i++) balls.setColorAt(i, tint.setHex(color < 0 ? palette[(i * 7 + 3) % palette.length] : color));
     balls.instanceColor.needsUpdate = true;
   };
+  // as many balls as are loaded (the top layer goes first: they're drawn bottom layer up)
+  const setAmmo = n => { n = Math.max(0, Math.min(33, Math.round(n))); if (balls.count !== n) balls.count = n; };
   const body = new THREE.Group(); body.scale.setScalar(GUN_SCALE);
   while (g.children.length) body.add(g.children[0]);
   g.add(body);
-  g.userData = {tip: new THREE.Vector3(0, .012, -.428).multiplyScalar(GUN_SCALE), ground: .052 * GUN_SCALE, groundRoll: Math.PI / 2, setPaint};
+  g.userData = {tip: new THREE.Vector3(0, .012, -.428).multiplyScalar(GUN_SCALE), ground: .052 * GUN_SCALE, groundRoll: Math.PI / 2, setPaint, setAmmo};
+  return g;
+}
+
+// A fat paint marker, its nib down its local -z: the band and the nib show the paint it's loaded with.
+const MARKER_SCALE = 1.4;
+function markerModel() {
+  const g = new THREE.Group(), m = new THREE.Group(); m.scale.setScalar(MARKER_SCALE); g.add(m);
+  const Z = [Math.PI / 2, 0, 0], NZ = [-Math.PI / 2, 0, 0];
+  const body = std(0x18191c, .45, .25), metal = std(0xc4c8ce, .28, .92), nib = std(0xffffff, .6, 0), band = std(0xffffff, .4, .05);
+  part(m, new THREE.CylinderGeometry(.0135, .0135, .11, 20), body, [0, 0, .005], Z);                  // barrel
+  part(m, new THREE.CylinderGeometry(.0137, .0137, .028, 20), band, [0, 0, .028], Z);                 // the colour band
+  part(m, new THREE.CylinderGeometry(.0128, .0135, .012, 20), body, [0, 0, .066], Z);                 // end
+  part(m, new THREE.SphereGeometry(.0128, 16, 8, 0, Math.PI * 2, 0, Math.PI / 2), body, [0, 0, .072], Z);
+  part(m, new THREE.CylinderGeometry(.0135, .011, .018, 20), metal, [0, 0, -.059], Z);                // ferrule
+  part(m, new THREE.CylinderGeometry(.0035, .0062, .016, 12), nib, [0, 0, -.076], NZ);                // nib
+  for (let i = 0; i < 3; i++) part(m, new THREE.TorusGeometry(.0135, .0008, 4, 20), metal, [0, 0, -.045 + i * .004]);   // grip rings
+  let shown = null;
+  const setPaint = (color, palette) => {
+    const c = color < 0 ? palette[(Math.floor(performance.now() / 700)) % palette.length] : color;   // (random: it cycles)
+    if (c === shown) return;
+    shown = c; nib.color.setHex(c); band.color.setHex(c);
+  };
+  g.userData = {tip: new THREE.Vector3(0, 0, -.085 * MARKER_SCALE), ground: .0135 * MARKER_SCALE, groundRoll: Math.PI / 2, setPaint};
   return g;
 }
 
@@ -571,15 +597,18 @@ function showBack(model, u, on) {
   u.backOn = on;
 }
 
-const MODELS = {flashlight: flashlightModel, paintball: paintballModel, spray: sprayModel, bucket: bucketModel, crown: crownModel, painting: paintingModel};
+const MODELS = {flashlight: flashlightModel, paintball: paintballModel, spray: sprayModel, bucket: bucketModel, crown: crownModel, painting: paintingModel, marker: markerModel};
 export const ITEM_MODELS = MODELS;   // for previews
 
 // ------------------------------------------------------------------- falling
 // A dropped item's fall through the level: gravity, a couple of soft bounces, a skid to a stop.
 // Pure and fixed-step, so every client works out the same path from the same start.
 const FALL_DT = 1 / 60;
+// a painting in someone's hands as everyone else sees it (and you, in third person): where its back's middle is
+// from their feet (ahead, to the right, up) and how it's turned from the way they face
+const HELD_PAINTING = {ahead: .32, right: .07, up: .92, turn: -.68, tilt: .08, roll: .02};
 const PREDICT_MS = 3000;       // how long something you picked up or put down is shown so before the server's had its say
-export const PATH_HZ = 30;     // a painting's recorded tumble (src/settle.js)
+export const PATH_HZ = 15;     // a painting's recorded tumble (src/settle.js); played back smoothed between frames
 export function simulateFall(hits, start, velocity) {
   const p = new THREE.Vector3(...start), v = new THREE.Vector3(...velocity), path = [p.clone()];
   const step = new THREE.Vector3(), dir = new THREE.Vector3();
@@ -940,6 +969,13 @@ export function createItems({scene, camera, hits, shadows = null, onImpact = nul
     heldBy(id) { for (const it of items.values()) if (it.state.holder === id && !worn(it.state)) return it; return null; },
     // the crown on this player's head, if they have it on
     wornBy(id) { for (const it of items.values()) if (it.state.holder === id && worn(it.state)) return it; return null; },
+    // a paintball gun's hopper refilled: the reload played (theirs or yours), full at the end of it
+    reload(id) { const it = items.get(id); if (it && it.state.type === 'paintball' && !it.reload) it.reload = {t: 0, from: it.state.ammo ?? MAG_SIZE}; },
+    reloading(id) { return !!items.get(id)?.reload; },
+    // a marker bearing down (drawing): your view model's
+    drawing(id, on) { const it = items.get(id); if (it) it.drawing = on; },
+    // a shot gone from its hopper
+    spend(id) { const it = items.get(id); if (it && it.state.type === 'paintball') it.state.ammo = Math.max(0, (it.state.ammo ?? MAG_SIZE) - 1); },
     // recoil / shake for your own view model
     kick(id, amount = 1) { const it = items.get(id); if (it) it.kick = amount; },
     shake(id) { const it = items.get(id); if (it) it.shake = .5; },
@@ -967,9 +1003,9 @@ export function createItems({scene, camera, hits, shadows = null, onImpact = nul
     // paintings that aren't in anyone's hands (on walls, leant, lying about)
     paintings() { return [...items.values()].filter(it => it.model.userData.painting && !it.state.holder); },
     // the nearest painting along a ray: {point, normal (facing the ray), distance, painting, local: {point, normal}}
-    paintingHit(origin, dir, far) {
+    paintingHit(origin, dir, far, list = this.paintings()) {
       let best = null;
-      for (const it of this.paintings()) {
+      for (const it of list) {
         const u = it.model.userData;
         it.model.updateMatrixWorld();
         const inv = _inv.copy(it.model.matrixWorld).invert();
@@ -988,6 +1024,12 @@ export function createItems({scene, camera, hits, shadows = null, onImpact = nul
         best = {point: wp, normal: wn, distance: dist, painting: it, local: {point: lp, normal: ln}};
       }
       return best;
+    },
+    // the same against paintings in someone's hands (as they're shown carried), but the shooter's own: a held
+    // painting stops a paintball (a shield), whatever's behind it
+    shieldHit(origin, dir, far, ignore) {
+      const held = [...items.values()].filter(it => it.model.userData.painting && it.state.holder && it.state.holder !== ignore && it.model.parent && it.model.visible);
+      return held.length ? this.paintingHit(origin, dir, far, held) : null;
     },
     // A ray test against the paintings lying about near a point (each as its closed box, where the server has
     // it, not mid-fall), shaped like the level's: (origin, dir, far) -> {point, normal (facing the ray),
@@ -1048,6 +1090,17 @@ export function createItems({scene, camera, hits, shadows = null, onImpact = nul
         }
         // the hopper shows what's loaded: yours, the holder's choice, or a mix lying on the floor
         if (u.setPaint) u.setPaint(s.holder === myId ? myPaint : s.holder ? (poseOf(s.holder)?.pc ?? RANDOM_PAINT) : RANDOM_PAINT, PAINT_COLORS);
+        // the hopper: what's left in it, filling back up through a reload
+        let reload = 0;
+        if (it.reload) {
+          const r = it.reload; r.t += dt;
+          reload = Math.min(1, r.t / (RELOAD_MS / 1000));
+          if (reload >= 1) { it.reload = null; s.ammo = MAG_SIZE; reload = 0; }
+          else u.setAmmo?.(r.from + (MAG_SIZE - r.from) * Math.max(0, Math.min(1, (reload - .25) / .55)));
+        }
+        if (!it.reload) u.setAmmo?.(s.ammo ?? MAG_SIZE);
+        // the reload's motion: tipped over to the side and up, a shake, and back (0 to 1 and back to 0)
+        const reTip = reload ? Math.sin(Math.PI * Math.min(1, reload * 1.15)) : 0, rattle = reload > .3 && reload < .8 ? Math.sin(reload * 90) * .03 : 0;
         it.kick *= Math.exp(-dt * 14); it.shake = Math.max(0, it.shake - dt);
         let origin = null, dir = null, eye = null;
         if (!(s.holder === myId && !thirdPerson) || s.type === 'flashlight') m.scale.setScalar(1);
@@ -1115,8 +1168,8 @@ export function createItems({scene, camera, hits, shadows = null, onImpact = nul
           const bob = Math.sin(it.sway * 1.7) * .004;
           if (s.type === 'paintball') {
             m.scale.setScalar(.8 / GUN_SCALE);           // in your own hand: 1.25x what it was (was .64 unscaled)
-            m.position.set(.0, -.05 + bob + it.kick * .012, -.02 + it.kick * .05);
-            m.rotation.set(.04 + it.kick * .12, -.06, 0);
+            m.position.set(.0 - reTip * .03, -.05 + bob + it.kick * .012 - reTip * .05, -.02 + it.kick * .05 + reTip * .04);
+            m.rotation.set(.04 + it.kick * .12 + reTip * .45, -.06 + reTip * .35, reTip * .9 + rattle);
           } else if (s.type === 'spray') {
             const sh = it.shake > 0 ? Math.sin(it.sway * 70) * .006 : 0;
             m.scale.setScalar(.62);              // (the can is drawn 1.5x; about 1.15x what it was in your hand)
@@ -1136,6 +1189,11 @@ export function createItems({scene, camera, hits, shadows = null, onImpact = nul
             m.scale.setScalar(.5);
             m.position.set(.1, -.2 + bob, -.16);
             m.rotation.set(.08, -.95, .02);
+          } else if (s.type === 'marker') {
+            // held like a pen, nib out toward the crosshair; it bears down a touch while it's drawing
+            const press = it.drawing ? .012 : 0;
+            m.position.set(.06, -.085 + bob - press, -.05 - press);
+            m.rotation.set(.32, -.22, .1);
           } else if (s.type === 'crown') {
             m.scale.setScalar(.62);
             m.position.set(-.07, -.02 + bob, -.15);
@@ -1168,13 +1226,15 @@ export function createItems({scene, camera, hits, shadows = null, onImpact = nul
           // gripped in the right hand, aimed where its holder is looking
           if (s.type === 'spray') m.rotation.set(-.35 + pitch * .5, yaw, 0, 'YXZ');
           else if (s.type === 'bucket' || s.type === 'crown') m.rotation.set(0, yaw, 0);
-          else m.rotation.set(pitch, yaw, 0, 'YXZ');
+          else m.rotation.set(pitch + reTip * .4, yaw, reTip * .9 + rattle, 'YXZ');
           if (u.painting) showBack(m, u, true);
-          if (s.type === 'painting' && avatar?.hand) {
-            // carried at their side by the top of the stretcher, the picture facing out
-            m.rotation.set(0, yaw + Math.PI / 2, 0);
-            avatar.hand.getWorldPosition(m.position);
-            m.position.add(tmpV.set(Math.cos(yaw), 0, -Math.sin(yaw)).multiplyScalar(.05)).y -= u.h / 2 - .08;
+          if (s.type === 'painting' && avatar?.root) {
+            // held up in front as it's shown in your own hands in first person: across the chest, a little to the
+            // right, the picture turned toward its holder and its back out (it's a shield: src/main.js trace)
+            const R = HELD_PAINTING, fx = -Math.sin(yaw), fz = -Math.cos(yaw), rx = Math.cos(yaw), rz = -Math.sin(yaw);
+            m.position.copy(avatar.root.position);
+            m.position.x += fx * R.ahead + rx * R.right; m.position.z += fz * R.ahead + rz * R.right; m.position.y += R.up;
+            m.rotation.set(R.tilt + pitch * .25, yaw + R.turn, R.roll, 'YXZ');
             m.visible = avatar.root.visible && avatar.model.visible !== false;
           } else if (s.type === 'bucket' && avatar?.handL && socket) {
             m.scale.setScalar(1);
@@ -1189,6 +1249,7 @@ export function createItems({scene, camera, hits, shadows = null, onImpact = nul
           } else if (socket) {
             socket.getWorldPosition(m.position);
             if (s.type === 'paintball') m.position.addScaledVector(dir, .08).y += .06;
+            else if (s.type === 'marker') m.position.addScaledVector(dir, .05);
             else if (s.type === 'spray') m.position.y -= .07 * CAN_SCALE;
             else if (s.type === 'crown') m.position.addScaledVector(dir, .1).y -= .1;   // held by the band, out in front
             else if (avatar.hand) {

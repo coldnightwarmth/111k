@@ -290,7 +290,9 @@ def rng(name, seed):
 
 # after review (/graffiti, 9 Nov): letters spaced out, and remade without drips
 KERN4 = {'sc_psuedointellectual', 'sc_secretlyfamous', 'sc_stolenimages', 'ci_swagworld'}
-NODRIPS4 = {'ol_source', 'bb_spx111111'}
+NODRIPS4 = {'ol_source', 'bb_spx111111', 'bb_tradingroomfloor'}
+# (11 Nov: spaced out further still)
+KERN_MORE = {}
 THIRD_FAMILIES = {'bb', 'sl', 'ps', 'rn', 'mo', 'tk', 'ne', 'gl', 'ht', 'ch', 'sb', 'sg', 'cx', 'rb'}
 
 
@@ -303,7 +305,7 @@ def build_fourth(seed=13, only=None):
             return
         r = rng(name, seed)
         T.SPRAY, T._R = name.split('_')[0] in THIRD_FAMILIES, np.random.default_rng(zlib.crc32(name.encode()) + 23)
-        G.NODRIPS, G.KERN = name in NODRIPS4, G.KERN_SPACE if name in KERN4 else 0.0
+        G.NODRIPS, G.KERN = name in NODRIPS4, KERN_MORE.get(name, G.KERN_SPACE if name in KERN4 else 0.0)
         try:
             P[name] = trim(fn(r), 6)
         finally:
@@ -451,6 +453,10 @@ def build_fourth(seed=13, only=None):
     return P
 
 
+# after review (11 Nov): letters spaced out
+KERN5 = {'sc_damnbitch': 0.13, 'mp_trynottocum': 0.13}
+
+
 def build_fifth(seed=17, only=None):
     """name -> Canvas: the fifth batch, two takes on each phrase in the families the reviews kept"""
     P = {}
@@ -460,6 +466,7 @@ def build_fifth(seed=17, only=None):
             return
         r = rng(name, seed)
         T.SPRAY, T._R = name.split('_')[0] in THIRD_FAMILIES, np.random.default_rng(zlib.crc32(name.encode()) + 29)
+        G.KERN = KERN5.get(name, 0.0)
         try:
             P[name] = trim(fn(r), 6)
         finally:
@@ -485,9 +492,10 @@ def build_fifth(seed=17, only=None):
     add('sc_moreofthesame', lambda r: G.scrawl(['more of the same', 'more of the same', 'more of the same'], BLACK, r, 0.13, 0.014,
                                                drips=0.15))
     # TRY NOT TO CUM!
-    add('pc_trynottocum', lambda r: G.piece('TRY NOT\nTO CUM!', HOTPINK, BLACK, r, 0.4, fill_style='fade', fill2=WHITE, shadow=BLACK,
-                                            block=GRAPE, **SEMI))
-    add('mp_trynottocum', lambda r: M.mop('', BLACK, r, 0.28, 0.034, lines=['TRY NOT', 'TO CUM!'], drip_rate=1.0, drip_len=0.3))
+    # (redone 11 Nov: the piece went, hollow 3D in its place; the mop's CUM starts its own line, so its C is a first
+    # letter, drawn big)
+    add('ol_trynottocum', lambda r: M.outline3d('TRY NOT\nTO CUM!', BLACK, r, 0.36, fill=HOTPINK, block_fill=None))
+    add('mp_trynottocum', lambda r: M.mop('', BLACK, r, 0.28, 0.034, lines=['TRY NOT TO', 'CUM!'], drip_rate=1.0, drip_len=0.3))
     # SEX
     add('bb_sex', lambda r: T.blockbuster('SEX', RED, BLACK, r, 0.6, fill2=HOTPINK, shadow=WHITE, streak=0.35, drips=0.15))
     add('tu_sex', lambda r: G.piece('SEX', BUBBLEGUM, BLACK, r, 0.6, shadow=BLOOD, shine=WHITE, fat=0.19))
