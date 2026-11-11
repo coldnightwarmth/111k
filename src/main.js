@@ -11,6 +11,7 @@ import {createChatUI, createBubble} from './chat.js';
 import {createControls} from './controls.js';
 import {createItems, ITEM_NAMES, simulateFall} from './items.js';
 import {snapPiece, pieceName, squareAt} from './pieces.js';
+import {EGG_ITEMS} from './egg-items.js';
 import {createMachine} from './machine.js';
 import {createConverter} from './converter.js';
 import {createCinema, ROOM as CINEMA_ROOM} from './cinema.js';
@@ -1143,6 +1144,20 @@ async function start() {
     if (start) {
       const f = simulateFall(hits, start.toArray(), vel.toArray());
       Object.assign(msg, {x: r3(f.rest.x), y: r3(f.rest.y), z: r3(f.rest.z), fall: {p: start.toArray().map(r3), v: vel.toArray().map(r3)}});
+    }
+    // an egg put into an open crate: lying along it, kept inside its sides (on the straw)
+    if (h.state.id.startsWith('egg-')) {
+      for (const c of CRATE_COLLIDERS) {
+        if (c.y1 > .7) continue;                               // (closed: it just goes on the lid)
+        const dx = msg.x - c.x, dz = msg.z - c.z, co = Math.cos(c.yaw), si = Math.sin(c.yaw);
+        const lx = co * dx - si * dz, lz = si * dx + co * dz;
+        if (Math.abs(lx) > c.hx || Math.abs(lz) > c.hz || msg.y > c.y1 + .4) continue;
+        const kx = Math.max(-.15, Math.min(.15, lx)), kz = Math.max(-.08, Math.min(.08, lz));
+        const straw = EGG_ITEMS.some(e => Math.hypot(e.x - c.x, e.z - c.z) < .3);     // (the egg crates have straw in)
+        Object.assign(msg, {x: r3(c.x + co * kx + si * kz), y: straw ? .25 : .115, z: r3(c.z - si * kx + co * kz), yaw: r3(c.yaw)});
+        delete msg.fall; start = null;
+        break;
+      }
     }
     // a Mons piece put down on the board: stood in the middle of its square, facing the way you're looking (to the
     // nearest quarter turn: its front is its +z, so yours turned round); src/pieces.js

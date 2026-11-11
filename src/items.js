@@ -1103,7 +1103,8 @@ export function createItems({scene, camera, hits, shadows = null, onImpact = nul
         const hit = _ray.intersectBox(_box, tmpV);
         if (!hit) continue;
         const d = hit.distanceTo(origin);
-        if (d < bestD && clear(d)) { best = it; bestD = d; }
+        // (an egg sits down in its crate: the crate's side in front of it doesn't hide it)
+        if (d < bestD && clear(it.model.userData.egg ? Math.max(.1, d - .5) : d)) { best = it; bestD = d; }
       }
       return best;
     },
