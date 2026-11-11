@@ -1060,3 +1060,23 @@ test('ink: over the limit, trimmed a little under it in one go, lone strokes fir
   assert.equal(marks.ink.filter(s => s.g === `${a.id}:d0`).length, 60, 'the drawing is all still there');
   assert.ok(r.out.filter(o => o.msg.type === 'erase').length >= 2);
 });
+
+test('the radio: a track that will not play is called off by whoever put it on, or two others', async () => {
+  const {handleMessage, newPlayer, freshMarks} = await import('../room.js');
+  const {ITEM_SPAWNS} = await import('../../src/world-items.js');
+  const items = Object.fromEntries(ITEM_SPAWNS.map(s => [s.id, {...s, holder: null, on: false}]));
+  const r = items.rd1, near = {x: r.x + .5, y: 1.45, z: r.z, yaw: 0, pitch: 0, g: 0};
+  const [a, b, c] = ['aaa', 'bbb', 'ccc'].map(id => { const p = newPlayer(id, 0); p.pose = {...near}; return p; });
+  const room = {items, marks: freshMarks(), race: null, players: () => [a, b, c]};
+  let now = 10_000;
+  const send = (p, m) => { now += 400; return handleMessage(p, JSON.stringify(m), now, room); };
+  send(a, {type: 'radio', id: 'rd1', url: 'https://youtu.be/dQw4w9WgXcQ'});
+  send(b, {type: 'radio-dead', id: 'rd1'});
+  assert.ok(now < r.play.until, 'one other: not enough');
+  send(c, {type: 'radio-dead', id: 'rd1'});
+  assert.ok(now >= r.play.until, 'two others: off');
+  send(b, {type: 'radio', id: 'rd1', url: 'https://youtu.be/aaaaaaaaaaa'});
+  assert.equal(r.play.u, 'yt:aaaaaaaaaaa', 'and another can go on');
+  send(b, {type: 'radio-dead', id: 'rd1'});
+  assert.ok(now >= r.play.until, 'whoever put it on: off');
+});

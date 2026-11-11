@@ -18,6 +18,9 @@ const loadSC = () => scLoad ||= (window.SC?.Widget ? Promise.resolve() : script(
 
 const NEAR = 1.2, FAR = 34, FALL = 2.6;  // full volume this close, silent this far; how fast it drops away (a long tail)
 const CHECK_MS = 5000, DRIFT = 3;        // keep in step with the clock: every so often, jumped back if this far out (s)
+// the players' sound can't be listened to from here (another site's), but whether they're playing can: a track
+// that's said it can't (an error), or hasn't been playing for this long, is called off (server/room.js)
+const DEAD_MS = 30000;
 
 export function createRadio({network, onOpenChange}) {
   // somewhere off to the side for the players (they have to be in the page to play)
@@ -35,7 +38,8 @@ export function createRadio({network, onOpenChange}) {
   }
   const offset = play => Math.max(0, (network.now() - play.at) / 1000);
   function start(id, play) {
-    const p = {key: `${play.u}@${play.at}`, kind: play.u.startsWith('yt:') ? 'yt' : 'sc', ready: false, vol: -1, checkAt: 0, reported: false, play};
+    const p = {key: `${play.u}@${play.at}`, kind: play.u.startsWith('yt:') ? 'yt' : 'sc', ready: false, vol: -1, checkAt: 0, reported: false, play,
+      startedAt: performance.now(), lastPlaying: 0, dead: false};
     playing.set(id, p);
     const report = ms => {                           // how long it is (only whoever put it on is listened to)
       if (p.reported || !(ms > 1000) || play.by !== network.id) return;
@@ -49,7 +53,8 @@ export function createRadio({network, onOpenChange}) {
           playerVars: {autoplay: 1, controls: 0, disablekb: 1, playsinline: 1, start: Math.floor(offset(play))},
           events: {
             onReady: e => { p.ready = true; e.target.setVolume(0); e.target.seekTo(offset(play), true); e.target.playVideo(); },
-            onStateChange: e => { if (e.data === 1) report(p.player.getDuration() * 1000); },
+            onStateChange: e => { if (e.data === 1) { p.lastPlaying = performance.now(); report(p.player.getDuration() * 1000); } },
+            onError: () => dead(id, p),           // (gone, private, not allowed to be played embedded)
           }});
       }).catch(() => {});
     } else {
@@ -63,9 +68,17 @@ export function createRadio({network, onOpenChange}) {
         w.bind(window.SC.Widget.Events.READY, () => {
           p.ready = true; w.setVolume(0); w.seekTo(offset(play) * 1000); w.play();
           w.getDuration(ms => report(ms));
+          w.bind(window.SC.Widget.Events.PLAY_PROGRESS, () => { p.lastPlaying = performance.now(); });
+          w.bind(window.SC.Widget.Events.ERROR, () => dead(id, p));
         });
       }).catch(() => {});
     }
+  }
+  // a track that won't play: said once (the server decides whether that's enough to call it off)
+  function dead(id, p) {
+    if (p.dead) return;
+    p.dead = true;
+    network.send({type: 'radio-dead', id});
   }
   function volume(p, v) {
     const n = Math.round(v * 100);
@@ -79,7 +92,7 @@ export function createRadio({network, onOpenChange}) {
     p.checkAt = now + CHECK_MS;
     const want = offset(p.play);
     try {
-      if (p.kind === 'yt') { if (Math.abs(p.player.getCurrentTime() - want) > DRIFT) p.player.seekTo(want, true); if (p.player.getPlayerState() !== 1) p.player.playVideo(); }
+      if (p.kind === 'yt') { if (p.player.getPlayerState() === 1) p.lastPlaying = now; if (Math.abs(p.player.getCurrentTime() - want) > DRIFT) p.player.seekTo(want, true); if (p.player.getPlayerState() !== 1) p.player.playVideo(); }
       else p.widget.getPosition(ms => { if (Math.abs(ms / 1000 - want) > DRIFT) p.widget.seekTo(want * 1000); });
     } catch {}
   }
@@ -141,6 +154,7 @@ export function createRadio({network, onOpenChange}) {
         if (p.muffled) v *= .4;
         volume(p, v);
         keepUp(p, now);
+        if (!p.dead && now - Math.max(p.startedAt, p.lastPlaying) > DEAD_MS) dead(r.id, p);
       }
       for (const id of [...playing.keys()]) if (!seen.has(id)) stop(id);
       if (openFor && !radios.some(r => r.id === openFor)) close();

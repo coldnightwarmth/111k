@@ -545,6 +545,17 @@ function handle(player, data, now, room) {
     out.push({to: 'all', msg: {type: 'item', item: cleanItem(item)}});
     return {out, changed: true, itemsChanged: true};
   }
+  // a track that won't play (an error, or nothing coming out for half a minute): off, so another can go on. Said
+  // by whoever put it on, or (if they've gone) anyone, or else by two different people
+  if (m.type === 'radio-dead') {
+    if (!item || item.type !== 'radio' || !item.play || now >= item.play.until) return refuse();
+    const play = item.play, setterHere = room.players().some(p => p && p.id === play.by && !p.inactive);
+    play.dead = [...new Set([...(play.dead || []), player.id])];
+    if (player.id !== play.by && setterHere && play.dead.length < 2) return {out, changed: true, itemsChanged: true};
+    play.until = now;
+    out.push({to: 'all', msg: {type: 'item', item: cleanItem(item)}});
+    return {out, changed: true, itemsChanged: true};
+  }
   if (m.type === 'radio-len') {
     if (!item || item.type !== 'radio' || !item.play || item.play.by !== player.id || !Number.isFinite(m.ms) || m.ms < 1000) return refuse();
     item.play.until = Math.min(item.play.until, item.play.at + Math.round(m.ms) + 500);
