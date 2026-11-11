@@ -1276,7 +1276,9 @@ export function createItems({scene, camera, hits, shadows = null, onImpact = nul
         // shown picked up or put down, and the server never said so (or it got lost): back as the server has it
         if (it.pending && clock > it.pending.until && !it.busy) { it.state = it.server || it.state; it.pending = it.server = null; it.path = it.fall = it.fly = null; it.busy = false; }
         const s = it.state, m = it.model, u = m.userData;
-        u.egg?.(s);                         // an egg: sat in its crate as it started, or on its side
+        // an egg: sat in its crate as it started, or on its side (its glowing outline was made round it as it
+        // first was: moved with it)
+        if (u.egg?.(s) && it.outline) { u.eggMesh.updateMatrix(); for (const sh of it.outline.children) sh.matrix.copy(u.eggMesh.matrix); }
         if (u.artAt) {
           // how far it is from you, or from where you'll be in a moment at this speed, whichever's nearer
           let near = s.holder ? 0 : Math.hypot(s.x - _eye.x, s.y - _eye.y, s.z - _eye.z), far = near;

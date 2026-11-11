@@ -123,11 +123,12 @@ export function eggModel(id) {
   // sat in its crate as it started, or loose
   const sit = s => {
     const atHome = !!home && !s.holder && Math.hypot(s.x - home.x, s.z - home.z) < .02 && Math.abs(s.y - home.y) < .02;
-    if (atHome === shown) return;
+    if (atHome === shown) return false;
     shown = atHome; placed(egg, atHome ? pose : LOOSE);
+    return true;                                       // (moved: its outline's to go with it)
   };
   sit({x: 1e9, y: 0, z: 0});
-  g.userData = {tip: new THREE.Vector3(0, .3, 0), ground: 0, standing: true, piece: true, egg: sit, handScale: .5};
+  g.userData = {tip: new THREE.Vector3(0, .3, 0), ground: 0, standing: true, piece: true, egg: sit, eggMesh: egg, handScale: .5};
   return g;
 }
 
