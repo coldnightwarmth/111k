@@ -69,7 +69,7 @@ export function validMarks(stored) {
   return {splats: splats.filter(Boolean).slice(-MAX_SPLATS),
     sprays: stored.sprays.map(cleanSpray).filter(Boolean).slice(-MAX_SPRAYS),
     erased: Array.isArray(stored.erased) ? stored.erased.filter(id => typeof id === 'string' && id.length <= 80).slice(-MAX_ERASED) : [],
-    ink: Array.isArray(stored.ink) ? stored.ink.filter(s => s && typeof s.id === 'string' && INK_HOST.test(s.h) && Array.isArray(s.pts)).slice(-MAX_INK_STROKES) : []};
+    ink: Array.isArray(stored.ink) ? stored.ink.filter(s => s && typeof s.id === 'string' && INK_HOST.test(s.h) && Array.isArray(s.pts)).slice(-MAX_INK_STROKES * 20) : []};   // (a drawing counts as one)
 }
 // paint lasts a minute; sprayed pieces stay
 export function pruneSplats(marks, now) {
@@ -87,7 +87,7 @@ export function marksMessages(marks, now = Date.now()) {
   let part = [], n = 0;
   for (const s of marks.ink || []) {
     if (n + s.pts.length > INK_PART_PTS && part.length) { parts.push(part); part = []; n = 0; }
-    part.push({id: s.id, h: s.h, c: s.c, t: s.t, p: packInk(s.pts)}); n += s.pts.length;
+    part.push({id: s.id, h: s.h, c: s.c, t: s.t, ...(s.g ? {g: s.g} : {}), p: packInk(s.pts)}); n += s.pts.length;
   }
   if (part.length) parts.push(part);
   return [{...marksMessage(marks, now), ink: [], inkParts: parts.length}, ...parts.map((ink, i) => ({type: 'inkpart', i, n: parts.length, ink}))];
@@ -108,21 +108,97 @@ function boundsOf(s) {
   return b;
 }
 const NEAR = .35;
+// strokes as the room keeps count of them: each on its own, or a drawing of strokes joined (s.g), oldest first
+// (by when they were last added to)
+// strokes that cross (points within JOIN of each other, on the same surface), each left alone for a minute,
+// joined into one drawing: s.g, the id of the drawing's oldest stroke. Returns the drawings that changed:
+// [{g, ids}] (everyone's told: they put each on one layer, as one piece)
+const JOIN = .025, JOIN_AFTER = 60000;
+function crosses(a, b) {
+  const A = boundsOf(a), B = boundsOf(b);
+  for (let k = 0; k < 3; k++) if (A.lo[k] - JOIN > B.hi[k] || B.lo[k] - JOIN > A.hi[k]) return false;
+  const cell = new Map(), key = (x, y, z) => `${Math.floor(x / JOIN)},${Math.floor(y / JOIN)},${Math.floor(z / JOIN)}`;
+  for (const q of a.pts) cell.set(key(q[0], q[1], q[2]), q);
+  for (const q of b.pts) {
+    const cx = Math.floor(q[0] / JOIN), cy = Math.floor(q[1] / JOIN), cz = Math.floor(q[2] / JOIN);
+    for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) for (let dz = -1; dz <= 1; dz++) {
+      const p = cell.get(`${cx + dx},${cy + dy},${cz + dz}`);
+      if (p && Math.hypot(p[0] - q[0], p[1] - q[1], p[2] - q[2]) < JOIN) return true;
+    }
+  }
+  return false;
+}
+export function joinInk(ink, now) {
+  const ready = ink.filter(s => s.h[0] !== 'a' && now - (s.at || s.t || 0) >= JOIN_AFTER);
+  const fresh = ready.filter(s => !s.joined);                  // (not looked at yet: each is, once)
+  if (!fresh.length) return [];
+  const changed = new Set();
+  const groupOf = s => s.g || s.id, oldest = new Map();
+  for (const s of ready) { const g = groupOf(s), o = oldest.get(g); if (!o || (s.t || 0) < (o.t || 0)) oldest.set(g, s); }
+  for (const s of fresh) {
+    s.joined = true;
+    for (const o of ready) {
+      if (o === s || o.h !== s.h || groupOf(o) === groupOf(s) || !crosses(s, o)) continue;
+      // the two drawings become one, named for the older's oldest stroke
+      const ga = groupOf(s), gb = groupOf(o), a = oldest.get(ga), b = oldest.get(gb);
+      const keep = (a.t || 0) <= (b.t || 0) ? ga : gb, drop = keep === ga ? gb : ga;
+      for (const x of ready) if (groupOf(x) === drop) x.g = keep;
+      if (keep === s.id || ready.some(x => x.g === keep)) { const k = ready.find(x => x.id === keep); if (k) k.g = keep; }
+      oldest.set(keep, (a.t || 0) <= (b.t || 0) ? a : b);
+      changed.add(keep); changed.delete(drop);
+    }
+  }
+  return [...changed].map(g => ({g, ids: ready.filter(x => (x.g || x.id) === g).map(x => x.id)})).filter(d => d.ids.length > 1);
+}
+export function inkUnits(ink) {
+  const by = new Map();
+  for (const s of ink) { const k = s.g || s.id; let u = by.get(k); if (!u) by.set(k, u = {strokes: [], h: s.h, t: 0}); u.strokes.push(s); u.t = Math.max(u.t, s.at || s.t || 0); }
+  return [...by.values()].sort((a, b) => a.t - b.t);
+}
+const unitBounds = u => {
+  if (!u.strokes) return boundsOf(u);
+  const b = {lo: [Infinity, Infinity, Infinity], hi: [-Infinity, -Infinity, -Infinity]};
+  for (const s of u.strokes) { const c = boundsOf(s); for (let k = 0; k < 3; k++) { b.lo[k] = Math.min(b.lo[k], c.lo[k]); b.hi[k] = Math.max(b.hi[k], c.hi[k]); } }
+  return b;
+};
+// the order to let them go in (units), worked out once: of all but the newest tenth, the lowest scores first (the
+// others near it and the strokes in it, as loneliest), the oldest first among equals
+export function trimOrder(units, keep) {
+  const span = Math.max(1, Math.ceil(units.length * .9)), bounds = units.map(unitBounds), scored = [];
+  for (let i = 0; i < span; i++) {
+    const u = units[i];
+    if (u === keep) continue;
+    const a = bounds[i];
+    let n = u.strokes ? u.strokes.length : 1;
+    for (let j = 0; j < units.length; j++) {
+      const o = units[j];
+      if (o === u || o.h !== u.h) continue;
+      const b = bounds[j];
+      if (a.lo[0] - NEAR <= b.hi[0] && b.lo[0] - NEAR <= a.hi[0] && a.lo[1] - NEAR <= b.hi[1] && b.lo[1] - NEAR <= a.hi[1]
+        && a.lo[2] - NEAR <= b.hi[2] && b.lo[2] - NEAR <= a.hi[2]) n++;
+    }
+    scored.push({u, n, i});
+  }
+  return scored.sort((a, b) => a.n - b.n || a.i - b.i).map(x => x.u);
+}
+// the one to let go (strokes or units): of all but the newest tenth, the one with the fewest others near it and
+// the fewest strokes in it (a lone line before a drawing), the oldest of those
 export function loneliest(ink, keep) {
-  const span = Math.max(1, Math.ceil(ink.length / 2));
+  const span = Math.max(1, Math.ceil(ink.length * .9)), bounds = ink.map(unitBounds);
   let best = 0, bestN = Infinity;
   for (let i = 0; i < span; i++) {
     const s = ink[i];
     if (s === keep) continue;
-    const a = boundsOf(s);
-    let n = 0;
-    for (const o of ink) {
+    const a = bounds[i];
+    let n = s.strokes ? s.strokes.length : 1;
+    for (let j = 0; j < ink.length && n < bestN; j++) {
+      const o = ink[j];
       if (o === s || o.h !== s.h) continue;
-      const b = boundsOf(o);
+      const b = bounds[j];
       if (a.lo[0] - NEAR <= b.hi[0] && b.lo[0] - NEAR <= a.hi[0] && a.lo[1] - NEAR <= b.hi[1] && b.lo[1] - NEAR <= a.hi[1]
-        && a.lo[2] - NEAR <= b.hi[2] && b.lo[2] - NEAR <= a.hi[2] && ++n >= bestN) break;
+        && a.lo[2] - NEAR <= b.hi[2] && b.lo[2] - NEAR <= a.hi[2]) n++;
     }
-    if (n < bestN) { best = i; bestN = n; if (!n) break; }
+    if (n < bestN) { best = i; bestN = n; }
   }
   return best;
 }
@@ -329,10 +405,21 @@ function handle(player, data, now, room) {
     stroke.pts.push(...pts.slice(0, Math.max(0, MAX_STROKE_PTS - stroke.pts.length)));
     // too much ink: a stroke goes (everyone's told): not the newest, and the loneliest of the older ones first
     // (on its own, away from any others: the detailed drawings, lots of strokes together, are kept longest)
+    // (a drawing the room's joined from crossing strokes counts as one, and goes whole)
+    // (trimmed a little under the limit in one go, so it isn't worked out again for every few points drawn)
     let total = ink.reduce((t, s) => t + s.pts.length, 0);
-    while (ink.length > MAX_INK_STROKES || total > MAX_INK_PTS) {
-      const k = loneliest(ink, stroke), old = ink.splice(k, 1)[0]; total -= old.pts.length;
-      out.push({to: 'all', msg: {type: 'erase', kind: 'ink', id: old.id, by: ''}});
+    const units = inkUnits(ink);
+    if (units.length > MAX_INK_STROKES || total > MAX_INK_PTS) {
+      const order = trimOrder(units, units.find(u => u.strokes.includes(stroke)));
+      let left = units.length;
+      for (const gone of order) {
+        if (left <= MAX_INK_STROKES * .98 && total <= MAX_INK_PTS * .98) break;
+        left--;
+        for (const old of gone.strokes) {
+          ink.splice(ink.indexOf(old), 1); total -= old.pts.length;
+          out.push({to: 'all', msg: {type: 'erase', kind: 'ink', id: old.id, by: ''}});
+        }
+      }
     }
     return {out, changed: true, marksChanged: true};
   }

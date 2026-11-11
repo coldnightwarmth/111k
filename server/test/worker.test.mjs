@@ -828,10 +828,10 @@ test('marker ink: kept as it is drawn, only with a marker, the oldest go, scrubb
   // on a player: not at all (neither passed on nor kept)
   r = send({type: 'ink', id: id + ':3', h: 'a' + 'aaaaaaaaaaaaaaaa', c: 1, p: [[0, 1, .2, 0, 0, 1, 0, 0]]});
   assert.equal(r.out.length, 0); assert.equal(room.marks.ink.length, 1);
-  // too many strokes: the oldest go, and everyone's told
+  // too many strokes: some go (trimmed to a little under the limit in one go), and everyone's told
   let erased = 0;
   for (let k = 0; k < MAX_INK_STROKES + 3; k++) { now += 1000; erased += send({type: 'ink', id: `${id}:s${k}`, h: 'w', c: 1, p: pts(1)}).out.filter(o => o.msg.type === 'erase').length; }
-  assert.equal(room.marks.ink.length, MAX_INK_STROKES); assert.equal(erased, 4);
+  assert.ok(room.marks.ink.length <= MAX_INK_STROKES && room.marks.ink.length >= MAX_INK_STROKES * .98 - 1); assert.ok(erased >= 4);
   // the sponge scrubs one off
   send({type: 'drop', id: marker.id, x: a.pose.x, y: 0, z: a.pose.z});
   a.pose = {...a.pose, x: bucket.x, z: bucket.z}; send({type: 'pickup', id: bucket.id});
@@ -1014,4 +1014,49 @@ test('ink is kept across the room going to sleep: packed in chunks, all of it ba
   marks.ink.splice(10);
   await room.saveMarks();
   assert.equal(store.get('inkChunks'), 1); assert.equal(store.has('ink1'), false);
+});
+
+test('ink: strokes that cross, a minute after, become one drawing, counted and let go as one', async () => {
+  const {joinInk, inkUnits, loneliest} = await import('../room.js');
+  const pt = (x, y) => [x, y, 0, 0, 0, 1, .5, .5];
+  const line = (id, t, pts) => ({id, h: 'w', c: 1, t, at: t, pts});
+  const across = line('u:1', 1000, Array.from({length: 40}, (_, k) => pt(k * .01, .2)));        // a stroke across
+  const down = line('u:2', 2000, Array.from({length: 40}, (_, k) => pt(.2, k * .01)));          // and one down through it
+  const apart = line('u:3', 3000, Array.from({length: 40}, (_, k) => pt(5 + k * .01, .2)));     // one elsewhere
+  const ink = [across, down, apart];
+  assert.deepEqual(joinInk(ink, 30_000), [], 'not yet: a minute after they were drawn');
+  const d = joinInk(ink, 70_000);
+  assert.equal(d.length, 1); assert.equal(d[0].g, 'u:1'); assert.deepEqual(d[0].ids.sort(), ['u:1', 'u:2']);
+  assert.equal(apart.g, undefined);
+  assert.deepEqual(joinInk(ink, 80_000), [], 'each looked at once');
+  // one drawing and a stroke on its own: two to count, and the one on its own is let go first
+  const units = inkUnits(ink);
+  assert.equal(units.length, 2);
+  assert.equal(units[loneliest(units, null)].strokes[0].id, 'u:3');
+  // a third stroke crossing the drawing joins it
+  const third = line('u:4', 90_000, Array.from({length: 40}, (_, k) => pt(.1, k * .01)));
+  ink.push(third);
+  const d2 = joinInk(ink, 160_000);
+  assert.equal(d2.length, 1); assert.deepEqual(d2[0].ids.sort(), ['u:1', 'u:2', 'u:4']);
+});
+
+test('ink: over the limit, trimmed a little under it in one go, lone strokes first, drawings last', async () => {
+  const {handleMessage, newPlayer, freshMarks} = await import('../room.js');
+  const {ITEM_SPAWNS} = await import('../../src/world-items.js');
+  const {MAX_INK_PTS} = await import('../../src/protocol.js');
+  const items = Object.fromEntries(ITEM_SPAWNS.map(s => [s.id, {...s, holder: null, on: false}]));
+  const mk = Object.values(items).find(it => it.type === 'marker');
+  const a = newPlayer('aaaaaaaaaaaaaaaa', 0); a.pose = {x: mk.x, y: 1.45, z: mk.z, yaw: 0, pitch: 0, g: 0};
+  mk.holder = a.id;
+  const marks = freshMarks(), room = {items, marks, race: null, players: () => [a]};
+  const pt = (x, y, z) => [x, y, z, 0, 0, 1, .5, .5];
+  // a big drawing (joined) of 30,000 points, then lone strokes of 1,000 points spread far apart, filling it up
+  for (let i = 0; i < 60; i++) marks.ink.push({id: `${a.id}:d${i}`, h: 'w', c: 1, t: i, at: i, g: `${a.id}:d0`, pts: Array.from({length: 500}, (_, k) => pt(0, 1 + i * .001, k * .001))});
+  for (let i = 0; i < 70; i++) marks.ink.push({id: `${a.id}:l${i}`, h: 'w', c: 1, t: 100 + i, at: 100 + i, pts: Array.from({length: 1000}, (_, k) => pt(10 + i * 3, 1, k * .001))});
+  let now = 10_000;
+  const r = handleMessage(a, JSON.stringify({type: 'ink', id: `${a.id}:new`, h: 'w', c: 1, p: [pt(mk.x, 1, mk.z)]}), now, room);
+  const total = marks.ink.reduce((t, s) => t + s.pts.length, 0);
+  assert.ok(total <= MAX_INK_PTS * .98, 'a little under');
+  assert.equal(marks.ink.filter(s => s.g === `${a.id}:d0`).length, 60, 'the drawing is all still there');
+  assert.ok(r.out.filter(o => o.msg.type === 'erase').length >= 2);
 });

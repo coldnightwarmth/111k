@@ -149,6 +149,18 @@ export function createInk({level, scene, hostOf, layerFor = () => 0, order = () 
       for (const e of batches.values()) e.batch.clear();
       for (const s of list) this.add({id: s.id, h: s.h, c: s.c, p: s.pts});
     },
+    // strokes the room has joined into one drawing (they cross, and have been left a minute): all onto one layer
+    // (the highest of theirs) and each redrawn as a single piece, so the drawing is one lot of geometry
+    group(ids) {
+      const sts = ids.map(id => strokes.get(id)).filter(Boolean);
+      if (sts.length < 2) return;
+      const layer = Math.max(...sts.map(s => s.layer || 0));
+      for (const st of sts) {
+        for (const k of st.marks) k.batch.remove(k.m);
+        st.marks = []; st.drawn = 0; st.endSide = null; st.layer = layer;
+        draw(st);
+      }
+    },
     // the highest layer of the strokes on host h that box overlaps (-1: none)
     overlapLayer(h, box) {
       let top = -1;

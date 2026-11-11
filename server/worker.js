@@ -7,7 +7,7 @@ const INK_CHUNK_PTS = 40000;      // points to a stored chunk (packed as 32-bit 
 import {cleanEmoteConfig} from '../src/emotes.js';
 import {cleanReview, hiddenPieces} from '../src/review.js';
 import {freshRace, publicRace} from '../src/race.js';
-import {handleMessage, newPlayer, snapshot, freshItems, freshMarks, validItems, releaseItems, letGo, validMarks, marksMessage, marksMessages, itemsAtSpawn,
+import {handleMessage, newPlayer, snapshot, freshItems, freshMarks, validItems, releaseItems, letGo, validMarks, marksMessage, marksMessages, joinInk, itemsAtSpawn,
   kothTick, kothNext, freshKoth, publicKoth, logError} from './room.js';
 
 // The scene: everything players have done to the space (items moved, pieces sprayed, paint, the level's own
@@ -82,7 +82,7 @@ export class Room {
       if (stored && chunks > 0) {
         const got = await this.ctx.storage.get?.(Array.from({length: chunks}, (_, i) => `ink${i}`));
         stored.ink = [];
-        for (let i = 0; i < chunks; i++) for (const s of got?.get?.(`ink${i}`) || []) stored.ink.push({id: s.id, h: s.h, c: s.c, t: s.t, pts: unpackInk(s.p) || []});
+        for (let i = 0; i < chunks; i++) for (const s of got?.get?.(`ink${i}`) || []) stored.ink.push({id: s.id, h: s.h, c: s.c, t: s.t, at: s.at, g: s.g, joined: s.joined, pts: unpackInk(s.p) || []});
       }
       this.marks = validMarks(stored);
     }
@@ -121,7 +121,7 @@ export class Room {
     const flush = () => { put[`ink${k++}`] = chunk.splice(0); n = 0; };
     for (const s of m.ink || []) {
       if (n + s.pts.length > INK_CHUNK_PTS && chunk.length) flush();
-      chunk.push({id: s.id, h: s.h, c: s.c, t: s.t, p: Int32Array.from(packInk(s.pts))}); n += s.pts.length;
+      chunk.push({id: s.id, h: s.h, c: s.c, t: s.t, at: s.at, g: s.g, joined: s.joined, p: Int32Array.from(packInk(s.pts))}); n += s.pts.length;
     }
     if (chunk.length) flush();
     const before = (await this.ctx.storage.get?.('inkChunks')) || 0;
@@ -256,6 +256,11 @@ export class Room {
       try { ws.close(4000, 'Gone quiet'); } catch {}
     }
     await this.releaseOrphans();
+    // marker strokes that cross, left a minute: one drawing (kept or let go whole; drawn as one)
+    const marks = await this.loadMarks();
+    const joined = joinInk(marks.ink || [], now);
+    for (const d of joined) this.broadcast({type: 'inkgroup', g: d.g, ids: d.ids});
+    if (joined.length) this.saveMarksSoon();
     for (const ws of this.sockets()) {
       const p = ws.deserializeAttachment();
       if (!p || p.inactive || now - p.lastActive < INACTIVE_MS) continue;

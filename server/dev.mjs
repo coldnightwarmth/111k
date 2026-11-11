@@ -9,7 +9,7 @@ import {extname, join, normalize, resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {INACTIVE_MS, IDLE_RESET_MS, MAX_PLAYERS} from '../src/protocol.js';
 import {freshRace, publicRace} from '../src/race.js';
-import {handleMessage, newPlayer, snapshot, freshItems, releaseItems, letGo, freshMarks, marksMessage, itemsAtSpawn, kothTick, freshKoth, publicKoth, logError} from './room.js';
+import {handleMessage, newPlayer, snapshot, freshItems, releaseItems, letGo, freshMarks, marksMessage, marksMessages, joinInk, itemsAtSpawn, kothTick, freshKoth, publicKoth, logError} from './room.js';
 import {cleanEmoteConfig} from '../src/emotes.js';
 import {cleanReview, hiddenPieces} from '../src/review.js';
 
@@ -99,7 +99,7 @@ server.on('upgrade', (req, socket) => {
   send(c, {type: 'emotes', config: emotes});
   send(c, {type: 'graffiti', hidden: hiddenPieces(review)});
   send(c, snapshot(players(), now, items));
-  send(c, marksMessage(marks));
+  for (const msg of marksMessages(marks)) send(c, msg);
   send(c, {type: 'race', race: publicRace(race, now)});
   send(c, {type: 'koth', koth: publicKoth(koth, now)});
   send(c, {type: 'keypad', entry: converter.entry});
@@ -190,5 +190,7 @@ setInterval(() => {
   }
 }, Number(process.env.IDLE_RESET_MS) ? 1000 : 5000);
 setInterval(runKoth, 100);
+// marker strokes that cross, left a minute: one drawing (as the worker's alarm does)
+setInterval(() => { for (const d of joinInk(marks.ink || [], Date.now())) for (const c of clients) send(c, {type: 'inkgroup', g: d.g, ids: d.ids}); }, 7000);
 
 server.listen(PORT, () => console.log(`111k dev server: http://localhost:${PORT}  (multiplayer on the same port)`));

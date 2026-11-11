@@ -1736,9 +1736,14 @@ async function start() {
       } else if (m.type === 'inkpart') {
         const pm = pendingMarks;
         if (!pm || !Array.isArray(m.ink)) return;
-        for (const s of m.ink) { const pts = unpackInk(s.p); if (pts?.length) pm.ink.push({id: s.id, h: s.h, c: s.c, t: s.t, pts}); }
-        if (++pm.got >= pm.m.inkParts) { pendingMarks = null; resetMarks(pm.m, pm.ink); }
-      }
+        for (const s of m.ink) { const pts = unpackInk(s.p); if (pts?.length) pm.ink.push({id: s.id, h: s.h, c: s.c, t: s.t, g: s.g, pts}); }
+        if (++pm.got >= pm.m.inkParts) {
+          pendingMarks = null; resetMarks(pm.m, pm.ink);
+          const groups = new Map();                              // (drawings the room's already joined)
+          for (const s of pm.ink) if (s.g) (groups.get(s.g) || groups.set(s.g, []).get(s.g)).push(s.id);
+          for (const ids of groups.values()) ink.group(ids);
+        }
+      } else if (m.type === 'inkgroup' && Array.isArray(m.ids)) ink.group(m.ids);
       else if (m.type === 'ink') { if (m.by !== network.id) { ink.add(m); hear('scrub', m.by, {gain: .3, rate: 1.75}); } }
       else if (m.type === 'reload') { if (m.from !== network.id) { items.reload(m.id); hear('rattle', m.from, {rate: .82, gain: 1.2}); } }
       else if (m.type === 'shot') {
