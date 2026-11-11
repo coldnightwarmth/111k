@@ -727,8 +727,10 @@ function radioFace() {
   const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 4;
   return t;
 }
+const RADIO_SCALE = 1.5;     // (a 51 cm set: drawn half as big again as first made)
 function radioModel() {
-  const g = new THREE.Group(), W = .34, H = .2, D = .1, foot = .008;
+  const top = new THREE.Group(), g = new THREE.Group(), W = .34, H = .2, D = .1, foot = .008;
+  g.scale.setScalar(RADIO_SCALE); top.add(g);
   const grey = std(0x5d6064, .45, .35), black = std(0x141516, .55, .2), chrome = std(0xd8dade, .2, .95);
   const face = new THREE.MeshStandardMaterial({map: radioFace(), roughness: .5, metalness: .2});
   part(g, new THREE.BoxGeometry(W, H, D), [grey, grey, grey, grey, face, grey], [0, foot + H / 2, 0]);
@@ -743,11 +745,15 @@ function radioModel() {
   // the handle: two posts and a bar
   for (const s of [-1, 1]) part(g, new THREE.BoxGeometry(.016, .07, .022), black, [s * (W / 2 - .03), foot + H + .035, -.01]);
   part(g, new THREE.BoxGeometry(W - .03, .018, .03), black, [0, foot + H + .074, -.01]);
-  // the aerial, up and back at an angle from the right
-  const aer = part(g, new THREE.CylinderGeometry(.0025, .004, .36, 6), chrome, [W / 2 - .05, foot + H + .17, -.04], [-.25, 0, .55]);
-  part(aer, new THREE.SphereGeometry(.006, 8, 6), chrome, [0, .18, 0]);
-  g.userData = {tip: new THREE.Vector3(0, .15, 0), ground: 0, standing: true, radio: true};
-  return g;
+  // the aerial: from a swivel on the top right corner, up and back at an angle
+  const base = new THREE.Vector3(W / 2 - .035, foot + H + .004, -.03), L = .36;
+  part(g, new THREE.CylinderGeometry(.008, .009, .01, 10), chrome, [base.x, base.y, base.z]);
+  const tilt = new THREE.Euler(-.3, 0, .5), dir = new THREE.Vector3(0, 1, 0).applyEuler(tilt);
+  const mid = base.clone().addScaledVector(dir, L / 2);
+  const aer = part(g, new THREE.CylinderGeometry(.0025, .0042, L, 6), chrome, [mid.x, mid.y, mid.z], [tilt.x, tilt.y, tilt.z]);
+  part(aer, new THREE.SphereGeometry(.006, 8, 6), chrome, [0, L / 2, 0]);
+  top.userData = {tip: new THREE.Vector3(0, .15 * RADIO_SCALE, 0), ground: 0, standing: true, radio: true};
+  return top;
 }
 
 const MODELS = {flashlight: flashlightModel, paintball: paintballModel, spray: sprayModel, bucket: bucketModel, crown: crownModel, painting: paintingModel, marker: markerModel, piece: pieceModel, radio: radioModel};
@@ -1390,8 +1396,8 @@ export function createItems({scene, camera, hits, shadows = null, onImpact = nul
             m.position.set(.06, -.085 + bob - press, -.05 - press);
             m.rotation.set(.32, -.22, .1);
           } else if (s.type === 'radio') {
-            m.scale.setScalar(.8);
-            m.position.set(.12, -.3 + bob, -.42);
+            m.scale.setScalar(.9);
+            m.position.set(.16, -.42 + bob, -.5);
             m.rotation.set(.12, -.45, 0);
           } else if (s.type === 'piece') {
             m.scale.setScalar(u.handScale || 1);
@@ -1456,7 +1462,7 @@ export function createItems({scene, camera, hits, shadows = null, onImpact = nul
             else if (s.type === 'spray') m.position.y -= .07 * CAN_SCALE;
             else if (s.type === 'crown') m.position.addScaledVector(dir, .1).y -= .1;   // held by the band, out in front
             else if (s.type === 'piece') m.position.addScaledVector(dir, .07).y -= .1;
-            else if (s.type === 'radio') m.position.addScaledVector(dir, .06).y -= .2;
+            else if (s.type === 'radio') m.position.addScaledVector(dir, .08).y -= .3;
             else if (avatar.hand) {
               // a torch in a fist: the middle of the barrel sits in the closed hand, just ahead of the wrist
               avatar.hand.getWorldPosition(m.position);

@@ -459,7 +459,7 @@ def _seg_dist(p, a, b):
     return float(np.linalg.norm(p - (a + ab * t)))
 
 
-def scatter_paintings(meta, mesh, items, art, count=29, seed=1111, log=None, pool=None, per_room=1, spacing=3.0, avoid=()):
+def scatter_paintings(meta, mesh, items, art, count=29, seed=1111, log=None, pool=None, per_room=1, spacing=3.0, avoid=(), skip=()):
     """Paintings round the level: about half in the tunnel (spread round the loop), the rest in the rooms
     (`per_room` to a room on the first pass); some hung on the walls, some leant against walls or
     furniture, some lying on the floor. `art` is {art id: (w, h) pixels}, `pool` the ids to draw from
@@ -468,6 +468,7 @@ def scatter_paintings(meta, mesh, items, art, count=29, seed=1111, log=None, poo
     import numpy as np
     rng = random.Random(seed)
     placer = Placer(mesh)
+    no_rooms = NO_SCATTER | set(skip)          # (and rooms this batch keeps out of)
     # the bore's own colliders are upright slabs standing in for its curved wall (for walking): the mesh
     # check is what keeps paintings out of the wall, so they're left out of the collider check
     colliders = [c for c in meta['colliders'] if c.get('y1', 9) < 5.2]
@@ -530,7 +531,7 @@ def scatter_paintings(meta, mesh, items, art, count=29, seed=1111, log=None, poo
                 return None
             if any(_seg_dist(p * [1, 0, 1], a, b) < 1.0 for a, b in corridors):
                 return None
-            if math.hypot(p[0] - machine[0], p[2] - machine[2]) < 3.0 or room_of(p) in NO_SCATTER:
+            if math.hypot(p[0] - machine[0], p[2] - machine[2]) < 3.0 or room_of(p) in no_rooms:
                 return None
         ctr = np.array([it['x'], 0, it['z']])
         if mode != 'hang' and any(np.linalg.norm(ctr - s) < 1.5 for s in spawns):
@@ -642,7 +643,7 @@ def scatter_paintings(meta, mesh, items, art, count=29, seed=1111, log=None, poo
             k_art += 1
         else:
             missed.append(mode)
-    rooms = [i for i in range(20) if i not in NO_SCATTER] * per_room
+    rooms = [i for i in range(20) if i not in no_rooms] * per_room
     rng.shuffle(rooms)
     for mode in modes_r:
         w, ht = painting_size(art[arts[k_art]])
@@ -666,7 +667,7 @@ def scatter_paintings(meta, mesh, items, art, count=29, seed=1111, log=None, poo
                 got = place(mode, w, ht, lambda: try_tunnel(mode, a, w, ht, a - .1, a + .1))
                 where = 'tunnel'
             else:
-                i = rng.choice([i for i in range(20) if i not in NO_SCATTER])
+                i = rng.choice([i for i in range(20) if i not in no_rooms])
                 got = place(mode, w, ht, lambda: try_room(mode, i, w, ht))
                 where = f'room {i}'
             if got:
@@ -701,7 +702,7 @@ def write_spawns(path, items):
 # The scattered paintings come in batches, each with its own pictures (the next ones in ART's order,
 # after art 1 which hangs in the party room) and seed, so adding a batch leaves the earlier ones where
 # they are: (count, seed, paintings to a room on the first pass, spacing).
-PAINTING_BATCHES = [(29, 1111, 1, 3.0), (70, 2222, 2, 2.0), (33, 3333, 2, 2.0)]
+PAINTING_BATCHES = [(29, 1111, 1, 3.0), (70, 2222, 2, 2.0), (33, 3333, 2, 2.0), (17, 4444, 1, 2.0, {4})]   # (the fourth: not the bathroom)
 # ART's pictures run out after the first two batches: the third's are pieces from anywhere in the collection
 # (src/collection.js), picked at random once (seeded) with their pixel sizes: [art, w, h]
 COLLECTION_PICKS = [[14696, 932, 1006], [30931, 932, 1006], [33359, 960, 960], [10414, 932, 1006], [41139, 1254, 1254],
@@ -711,6 +712,7 @@ COLLECTION_PICKS = [[14696, 932, 1006], [30931, 932, 1006], [33359, 960, 960], [
                     [3380, 1864, 2012], [10975, 932, 1006], [20192, 932, 1006], [13502, 932, 1006], [15827, 932, 1006],
                     [6589, 1864, 2012], [26234, 932, 1006], [4551, 1864, 2012], [28535, 932, 1006], [44280, 932, 1006],
                     [40797, 1254, 1254], [19562, 932, 1006], [19471, 932, 1006]]
+COLLECTION_PICKS += [[19594, 932, 1006], [3689, 1864, 2012], [6926, 1864, 2012], [13884, 932, 1006], [17300, 932, 1006], [23776, 932, 1006], [47932, 932, 1006], [26108, 932, 1006], [36584, 932, 1006], [27662, 932, 1006], [20636, 932, 1111], [53020, 1200, 1295], [23876, 932, 1006], [29454, 932, 1006], [2756, 1864, 2012], [56070, 1200, 1295], [31727, 932, 1006]]   # (the fourth batch's)
 
 
 def add_paintings(here, items, meta, log=None):
@@ -724,10 +726,10 @@ def add_paintings(here, items, meta, log=None):
     crates_js = os.path.join(here, '..', 'src', 'crates-placed.js')
     m = re.search(r'CRATE_COLLIDERS = (\[.*?\]);', open(crates_js).read(), re.S) if os.path.exists(crates_js) else None
     with_crates = {**meta, 'colliders': meta['colliders'] + (json.loads(m.group(1)) if m else [])}
-    for k, (count, seed, per_room, spacing) in enumerate(PAINTING_BATCHES):
+    for k, (count, seed, per_room, spacing, *skip) in enumerate(PAINTING_BATCHES):
         pool, order = order[:count], order[count:]
         got, rep = scatter_paintings(meta if k < 2 else with_crates, mesh, items + paintings, art, count=count, seed=seed, log=log, pool=pool,
-                                     per_room=per_room, spacing=spacing, avoid=paintings)
+                                     per_room=per_room, spacing=spacing, avoid=paintings, skip=skip[0] if skip else ())
         paintings += got
         report += rep
     return paintings, report

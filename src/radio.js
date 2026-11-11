@@ -16,7 +16,7 @@ const loadYT = () => ytLoad ||= (window.YT?.Player ? Promise.resolve() : script(
 }));
 const loadSC = () => scLoad ||= (window.SC?.Widget ? Promise.resolve() : script('https://w.soundcloud.com/player/api.js'));
 
-const NEAR = 2.5, FAR = 24;              // full volume this close, silent this far
+const NEAR = 1.2, FAR = 34, FALL = 2.6;  // full volume this close, silent this far; how fast it drops away (a long tail)
 const CHECK_MS = 5000, DRIFT = 3;        // keep in step with the clock: every so often, jumped back if this far out (s)
 
 export function createRadio({network, onOpenChange}) {
@@ -134,7 +134,7 @@ export function createRadio({network, onOpenChange}) {
         if (!p) { start(r.id, play); p = playing.get(r.id); }
         p.play = play;
         const d = Math.hypot(r.x - from.x, r.y - from.y, r.z - from.z);
-        let v = Math.max(0, Math.min(1, (FAR - d) / (FAR - NEAR))) ** 1.6;
+        let v = Math.max(0, Math.min(1, (FAR - d) / (FAR - NEAR))) ** FALL;
         if (v > 0 && (p.muffleAt || 0) < now) { p.muffleAt = now + 250; p.muffled = muffled(r); }
         if (p.muffled) v *= .4;
         volume(p, v);

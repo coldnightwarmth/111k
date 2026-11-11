@@ -12,7 +12,8 @@ import {handleMessage, newPlayer, snapshot, freshItems, freshMarks, validItems, 
 // graffiti scrubbed off, the lap timer, king of the hill). When this changes, the room starts over once with
 // the space as it was built: bump it and deploy. (The graffiti review and the emote settings stay.)
 //   1: as it was up to the playtest  2: cleared for the playtest on 1-1-1k.online/playtest (9 Nov 2026)
-export const SCENE = 2;
+//   3: cleared for the launch (11 Nov 2026)
+export const SCENE = 3;
 
 function allowedOrigins(env) {
   const list = (env.ALLOWED_ORIGINS || '').split(',').map(s => s.trim()).filter(Boolean);
