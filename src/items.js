@@ -374,6 +374,12 @@ function previewOf(art) {
 // time and the most wanted first (prio: how far off it's wanted, less is sooner); ones nobody wants any more by
 // the time their turn comes are skipped
 const artFiles = new Map();          // `${art}/${px}` -> Promise<Blob>
+// a picture with no small copies (from anywhere in the collection): its original, fetched once for every size
+const originals = new Map();         // art -> Promise<Blob>
+function original(art, get) {
+  if (!originals.has(art)) { const p = get(artOriginal(art)); originals.set(art, p); p.catch(() => originals.delete(art)); }
+  return originals.get(art);
+}
 const fetchQueue = [];               // {key, art, px, prio, wanted(), resolve, reject}
 let fetching = 0;
 const MAX_FETCHES = 4;
@@ -385,7 +391,7 @@ function pumpFetches() {
     if (!job.wanted()) { artFiles.delete(job.key); job.reject(new Error('not wanted')); continue; }
     fetching++;
     const get = url => fetch(url).then(r => { if (!r.ok) throw new Error(`${r.status} ${url}`); return r.blob(); });
-    (ART[job.art] ? get(artFile(job.art, job.px)) : Promise.reject()).catch(() => get(artOriginal(job.art)))      // (not made small: the original)
+    (ART[job.art] ? get(artFile(job.art, job.px)) : Promise.reject()).catch(() => original(job.art, get))      // (not made small: the original)
       .then(job.resolve, e => { artFiles.delete(job.key); job.reject(e); })
       .finally(() => { fetching--; pumpFetches(); });
   }

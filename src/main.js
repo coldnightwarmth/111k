@@ -864,6 +864,7 @@ async function start() {
       if (cleanTarget) { network.send({type: 'erase', kind: cleanTarget.kind, id: cleanTarget.id}); items.scrub(h.state.id); sfx.play('scrub'); learn('scrub'); }
       return;
     }
+    if (h) return;                       // something in your hands (and nothing for it to do): no punching with it
     if (grab()) return;
     punch();
   }
