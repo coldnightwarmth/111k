@@ -64,6 +64,13 @@ body.touch #chat .log { pointer-events: auto; touch-action: pan-y; }
 #chat input { width: 100%; padding: 9px 10px; border-radius: 4px; border: 1px solid var(--line); background: rgba(8, 8, 9, .85);
   color: var(--ink); font: inherit; font-size: 16px; outline: none; }
 #chat input:focus { border-color: rgba(233, 230, 220, .4); }
+/* hide ui (mouse free, keyboard and mouse only): everything off the screen but the world, for a screenshot */
+#hideUi { display: none; margin-top: 6px; padding: 4px 9px; border-radius: 4px; border: 1px solid var(--line); background: rgba(8, 8, 9, .7);
+  color: var(--dim); font: inherit; font-size: 11px; letter-spacing: .06em; cursor: pointer; pointer-events: auto; }
+#hideUi:hover { color: var(--ink); border-color: rgba(233, 230, 220, .4); }
+body:not(.locked):not(.touch):not(.pad) #hideUi { display: inline-block; }
+body.noui > :not(#view) { visibility: hidden !important; }
+body.noui::after { display: none; }
 
 /* ---- speech bubbles ---- */
 #bubbles { position: fixed; inset: 0; pointer-events: none; overflow: hidden; }

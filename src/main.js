@@ -347,6 +347,7 @@ async function start() {
     onEmotes: () => toggleEmotes(),
     onLockChange: locked => {
       document.body.classList.toggle('locked', locked);
+      if (locked) document.body.classList.remove('noui');
       if (locked) { toggleGallery(false); return; }
       // Esc (or Tab) while holding a can opens the piece gallery (or, holding the paintball gun, the paint list)
       const byYou = !menuRelease && !chat.open && emoteMenu.hidden;
@@ -406,6 +407,18 @@ async function start() {
     onSend: text => { if (!network.online) { chat.record('not connected yet, try again in a sec', {system: true}); return false; } return network.sendChat(text); },
     onOpenChange: open => { if (!open && relock && !controls.state.touch) { relock = false; canvas.requestPointerLock?.()?.catch?.(() => {}); } },
   });
+  // hide ui (the button under the chat box while the mouse is free): nothing on screen but the world, for a
+  // screenshot, till the next click (or Esc). Keys don't bring it back: a screenshot's shortcut is keys.
+  const hideUi = document.getElementById('hideUi');
+  const showUi = () => document.body.classList.remove('noui');
+  hideUi.addEventListener('pointerdown', e => e.stopPropagation());
+  hideUi.addEventListener('click', () => {
+    document.activeElement?.blur?.();
+    toggleGallery(false);
+    requestAnimationFrame(() => document.body.classList.add('noui'));
+  });
+  addEventListener('pointerdown', showUi, true);
+  addEventListener('keydown', e => { if (e.key === 'Escape') showUi(); }, true);
   let myBubble = null, myBubbleExpires = 0;
   // the radio's link box and players (src/radio.js): made once the room's connection is (it needs its clock)
   let radioUI = null;
