@@ -22,7 +22,28 @@ export const SPRAY_RANGE = 3.2;        // metres from a player to the wall they 
 export const SPLAT_LIFE_MS = 180000;   // paint fades away after three minutes
 export const MAX_SPLATS = 700;         // paint marks the room remembers (oldest go first; they last 3 minutes now)
 export const MAX_SPRAYS = 150;
-export const ITEM_TYPES = ['flashlight', 'paintball', 'spray', 'bucket', 'crown', 'painting', 'marker', 'piece'];
+export const ITEM_TYPES = ['flashlight', 'paintball', 'spray', 'bucket', 'crown', 'painting', 'marker', 'piece', 'radio'];
+// The radio plays a YouTube or SoundCloud link, everyone at the same point in it, for five minutes at most.
+export const RADIO_MAX_MS = 5 * 60 * 1000;
+// what a link is: {kind: 'yt', id} or {kind: 'sc', url}, or null for anything else
+export function radioLink(text) {
+  if (typeof text !== 'string' || text.length > 400) return null;
+  let u;
+  try { u = new URL(text.trim()); } catch { return null; }
+  if (u.protocol !== 'https:' && u.protocol !== 'http:') return null;
+  const host = u.hostname.replace(/^(www|m|music)\./, '');
+  const id = v => (/^[A-Za-z0-9_-]{11}$/.test(v || '') ? v : null);
+  if (host === 'youtube.com') {
+    const v = u.pathname === '/watch' ? u.searchParams.get('v') : (u.pathname.match(/^\/(shorts|embed|live)\/([^/?#]+)/) || [])[2];
+    return id(v) ? {kind: 'yt', id: v} : null;
+  }
+  if (host === 'youtu.be') { const v = u.pathname.slice(1).split('/')[0]; return id(v) ? {kind: 'yt', id: v} : null; }
+  if ((host === 'soundcloud.com' || host === 'on.soundcloud.com') && u.pathname.length > 1 && /^[\w\-/.%~]+$/.test(u.pathname))
+    return {kind: 'sc', url: `https://${host}${u.pathname}`};
+  return null;
+}
+// the link as it's kept and sent: a YouTube id as 'yt:ID', SoundCloud as its address
+export const radioKey = l => (l.kind === 'yt' ? `yt:${l.id}` : l.url);
 
 // Emotes: every id the game knows (src/emotes.js); which clip plays is the settings' choice.
 export const EMOTES = Object.freeze(EMOTE_LIST.map(e => Object.freeze({id: e.id, label: e.label})));
@@ -127,6 +148,9 @@ export function cleanItem(it) {
     if (typeof it.hung === 'boolean') out.hung = it.hung;     // on its nail (held still), or free to fall
   }
   if (out.type === 'paintball') out.ammo = Number.isInteger(it.ammo) ? Math.max(0, Math.min(MAG_SIZE, it.ammo)) : MAG_SIZE;
+  // the radio: what it's playing (the link, when it started and when it stops, by the server's clock)
+  if (out.type === 'radio' && it.play && typeof it.play.u === 'string' && it.play.u.length <= 300 && Number.isFinite(it.play.at) && Number.isFinite(it.play.until))
+    out.play = {u: it.play.u, at: Math.round(it.play.at), until: Math.round(it.play.until), ...(typeof it.play.by === 'string' ? {by: it.play.by.slice(0, 40)} : {})};
   return out;
 }
 // paintings are items pt1, pt2, ...: marks on one are kept in its own space and ride along with it

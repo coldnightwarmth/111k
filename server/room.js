@@ -5,7 +5,7 @@
 // items, which the caller keeps (Durable Object storage in production).
 import {INK_HOST, INK_PER_S, MAX_INK_STROKES, MAX_STROKE_PTS, MAX_INK_PTS, cleanInkPoints, SETTLE_BYTES, SETTLE_MAX, SETTLE_PER_S, MAG_SIZE, RELOAD_MS, CROWN_HITS, CROWN_HIT_WINDOW_MS, CHAT_INTERVAL_MS, CHAT_TTL_MS, POSE_INTERVAL_MS, PICKUP_RANGE, PUNCH_RANGE, PUNCH_COOLDOWN_MS,
   SHOT_INTERVAL_MS, SPRAY_INTERVAL_MS, SPRAY_RANGE, MAX_SPLATS, MAX_SPRAYS, SPLAT_LIFE_MS, ART_MAX,
-  sanitizeChat, sanitizePose, samePose, cleanItem, cleanPath, sanitizeLook, sanitizeName, cleanSplat, cleanSpray, splatId, sprayId} from '../src/protocol.js';
+  sanitizeChat, sanitizePose, radioLink, radioKey, RADIO_MAX_MS, samePose, cleanItem, cleanPath, sanitizeLook, sanitizeName, cleanSplat, cleanSpray, splatId, sprayId} from '../src/protocol.js';
 import {ITEM_SPAWNS} from '../src/world-items.js';
 import {RACE_LAPS, RACE_TIMEOUT_MS, BUTTON, BUTTON_RANGE, MACHINE_ANGLE, LAP_LINE, BUTTON_LAP, loopAngle, freshRace, publicRace} from '../src/race.js';
 import {PANEL, USE_RANGE, BUSY_MS, inChamber, standPose, keyEntry, KEYS} from '../src/converter-spec.js';
@@ -397,6 +397,25 @@ function handle(player, data, now, room) {
         && Math.abs(q.x - item.x) < .02 && Math.abs(q.z - item.z) < .02 && Math.abs(q.y - item.y) < .05);
       if (o) item.carrying = o.id; else delete item.carrying;
     }
+    out.push({to: 'all', msg: {type: 'item', item: cleanItem(item)}});
+    return {out, changed: true, itemsChanged: true};
+  }
+  // the radio: a link to play (only while it's quiet, only from near it, only while it's put down), and how long
+  // the track turned out to be (from whoever put it on: it stops then, or at five minutes)
+  if (m.type === 'radio') {
+    if (!item || item.type !== 'radio' || item.holder || !player.pose || player.inactive) return refuse();
+    if (flat(player.pose, item) > PICKUP_RANGE + 1) return refuse();
+    if (item.play && now < item.play.until) return refuse();
+    const link = radioLink(m.url);
+    if (!link) return refuse();
+    item.play = {u: radioKey(link), at: now + 1500, until: now + 1500 + RADIO_MAX_MS, by: player.id};
+    player.lastActive = now;
+    out.push({to: 'all', msg: {type: 'item', item: cleanItem(item)}});
+    return {out, changed: true, itemsChanged: true};
+  }
+  if (m.type === 'radio-len') {
+    if (!item || item.type !== 'radio' || !item.play || item.play.by !== player.id || !Number.isFinite(m.ms) || m.ms < 1000) return refuse();
+    item.play.until = Math.min(item.play.until, item.play.at + Math.round(m.ms) + 500);
     out.push({to: 'all', msg: {type: 'item', item: cleanItem(item)}});
     return {out, changed: true, itemsChanged: true};
   }

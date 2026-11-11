@@ -914,3 +914,32 @@ test('a mon carries the mana on its square along when it is moved', async () => 
   assert.ok(r.out.some(o => o.msg.item?.id === 'mana-w1'));
   assert.equal(mon.carrying, undefined);
 });
+
+test('the radio: a YouTube or SoundCloud link, only while quiet, five minutes at most, cut to the track', async () => {
+  const {handleMessage, newPlayer, freshMarks} = await import('../room.js');
+  const {ITEM_SPAWNS} = await import('../../src/world-items.js');
+  const {radioLink, RADIO_MAX_MS} = await import('../../src/protocol.js');
+  assert.deepEqual(radioLink('https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=10'), {kind: 'yt', id: 'dQw4w9WgXcQ'});
+  assert.deepEqual(radioLink('https://youtu.be/dQw4w9WgXcQ'), {kind: 'yt', id: 'dQw4w9WgXcQ'});
+  assert.equal(radioLink('https://soundcloud.com/artist/track').kind, 'sc');
+  assert.equal(radioLink('https://example.com/x.mp3'), null);
+  assert.equal(radioLink('javascript:alert(1)'), null);
+  const items = Object.fromEntries(ITEM_SPAWNS.map(s => [s.id, {...s, holder: null, on: false}]));
+  const r = items.rd1;
+  const a = newPlayer('aaa', 0); a.pose = {x: r.x + .5, y: 1.45, z: r.z, yaw: 0, pitch: 0, g: 0};
+  const b = newPlayer('bbb', 0); b.pose = {...a.pose};
+  const room = {items, marks: freshMarks(), race: null, players: () => [a, b]};
+  let now = 10_000;
+  const send = (p, m) => { now += 400; return handleMessage(p, JSON.stringify(m), now, room); };
+  assert.equal(send(a, {type: 'radio', id: 'rd1', url: 'https://example.com/song'}).out[0].msg.refused, true);
+  send(a, {type: 'radio', id: 'rd1', url: 'https://youtu.be/dQw4w9WgXcQ'});
+  assert.equal(r.play.u, 'yt:dQw4w9WgXcQ'); assert.equal(r.play.until - r.play.at, RADIO_MAX_MS);
+  assert.equal(send(b, {type: 'radio', id: 'rd1', url: 'https://youtu.be/aaaaaaaaaaa'}).out[0].msg.refused, true);   // busy
+  send(b, {type: 'radio-len', id: 'rd1', ms: 60_000});                     // not theirs to say
+  assert.equal(r.play.until - r.play.at, RADIO_MAX_MS);
+  send(a, {type: 'radio-len', id: 'rd1', ms: 60_000});
+  assert.ok(r.play.until - r.play.at <= 61_000);
+  now = r.play.until + 1;
+  send(b, {type: 'radio', id: 'rd1', url: 'https://soundcloud.com/artist/track'});
+  assert.equal(r.play.u, 'https://soundcloud.com/artist/track');
+});

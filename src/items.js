@@ -15,7 +15,7 @@ import {eggModel} from './eggs.js';
 import {MONS, squareAt} from './pieces.js';
 
 const BEAM_COLOR = new THREE.Color(1, .93, .8);
-export const ITEM_NAMES = {flashlight: 'flashlight', paintball: 'paintball gun', spray: 'spray can', bucket: 'bucket and sponge', crown: 'golden crown', painting: 'painting', marker: 'marker', piece: 'piece'};
+export const ITEM_NAMES = {flashlight: 'flashlight', paintball: 'paintball gun', spray: 'spray can', bucket: 'bucket and sponge', crown: 'golden crown', painting: 'painting', marker: 'marker', piece: 'piece', radio: 'radio'};
 
 const std = (color, roughness = .55, metalness = .2, extra = {}) => new THREE.MeshStandardMaterial({color, roughness, metalness, ...extra});
 function part(g, geo, mat, [x, y, z] = [0, 0, 0], [rx, ry, rz] = [0, 0, 0]) {
@@ -695,7 +695,62 @@ function pieceModel(id) {
   return orbModel(id);
 }
 
-const MODELS = {flashlight: flashlightModel, paintball: paintballModel, spray: sprayModel, bucket: bucketModel, crown: crownModel, painting: paintingModel, marker: markerModel, piece: pieceModel};
+// --------------------------------------------------------------- the radio (src/radio.js plays it)
+// A portable AM/FM set: a grey case with the speaker grille on the left, the lit dial window on the right, tone,
+// volume and band knobs under it, tuning on the side, a black carry handle and a telescopic aerial. Its front
+// is its +z; it stands on its feet (y = 0).
+function radioFace() {
+  const c = document.createElement('canvas'); c.width = 680; c.height = 400;
+  const g = c.getContext('2d');
+  g.fillStyle = '#5d6064'; g.fillRect(0, 0, 680, 400);
+  // the grille: a dark panel of little holes
+  g.fillStyle = '#26282b'; g.beginPath(); g.roundRect(14, 22, 280, 356, 18); g.fill();
+  g.fillStyle = '#121314';
+  for (let y = 34; y < 368; y += 9) for (let x = 26 + (y % 18 ? 4 : 0); x < 284; x += 9) { g.beginPath(); g.arc(x, y, 2.6, 0, 7); g.fill(); }
+  // the dial window
+  g.fillStyle = '#0b0b0c'; g.beginPath(); g.roundRect(318, 26, 344, 218, 12); g.fill();
+  g.fillStyle = '#e8ebe6'; g.font = 'bold 22px Arial, sans-serif'; g.fillText('MD-T16', 332, 60);
+  g.font = '11px Arial, sans-serif'; g.fillText('AM/FM 2BAND PORTABLE RADIO', 428, 58);
+  g.font = '15px Arial, sans-serif';
+  g.fillText('FM', 332, 92); ['87', '92', '96', '100', '104', '108'].forEach((t, i) => g.fillText(t, 372 + i * 44, 92)); g.fillText('MHz', 626, 92);
+  for (const y of [102, 170]) {
+    g.fillStyle = '#d9f2cf'; g.fillRect(318, y, 344, 9); g.fillRect(318, y + 22, 344, 9);
+    g.fillStyle = '#111'; g.fillRect(370, y + 6, 262, 20);
+  }
+  g.fillStyle = '#f4e35a'; g.fillRect(540, 109, 8, 17); g.fillRect(568, 177, 8, 17);
+  g.fillStyle = '#e8ebe6'; g.fillText('AM', 332, 226); ['520', '700', '900', '1150', '1400', '1710'].forEach((t, i) => g.fillText(t, 368 + i * 44, 226)); g.fillText('kHz', 630, 226);
+  // the labels under it
+  g.fillStyle = '#eceeed'; g.font = 'bold 15px Arial, sans-serif';
+  g.fillText('TONE', 334, 282); g.fillText('VOLUME', 452, 268); g.fillText('RADIO', 584, 282);
+  g.font = '11px Arial, sans-serif'; g.fillText('LOW  HIGH', 326, 298); g.fillText('MIN', 430, 300); g.fillText('MAX', 540, 300); g.fillText('AM   FM', 584, 298);
+  g.fillText('ON', 440, 360); g.fillText('OFF', 438, 376);
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 4;
+  return t;
+}
+function radioModel() {
+  const g = new THREE.Group(), W = .34, H = .2, D = .1, foot = .008;
+  const grey = std(0x5d6064, .45, .35), black = std(0x141516, .55, .2), chrome = std(0xd8dade, .2, .95);
+  const face = new THREE.MeshStandardMaterial({map: radioFace(), roughness: .5, metalness: .2});
+  part(g, new THREE.BoxGeometry(W, H, D), [grey, grey, grey, grey, face, grey], [0, foot + H / 2, 0]);
+  // a slightly rounded look: soft edge strips
+  for (const s of [-1, 1]) part(g, new THREE.CylinderGeometry(.012, .012, H - .01, 8), grey, [s * (W / 2 - .002), foot + H / 2, D / 2 - .008]);
+  for (const x of [-W / 2 + .03, W / 2 - .03]) for (const z of [-D / 2 + .02, D / 2 - .02]) part(g, new THREE.BoxGeometry(.03, foot, .02), black, [x, foot / 2, z]);
+  // knobs: tone, volume (big), band
+  const knob = (x, y, r, h) => { part(g, new THREE.CylinderGeometry(r, r * 1.05, h, 18), black, [x, y, D / 2 + h / 2], [Math.PI / 2, 0, 0]); part(g, new THREE.BoxGeometry(r * .3, r * 1.6, .004), black, [x, y, D / 2 + h + .001]); };
+  const fx = u => -W / 2 + u * W, fy = v => foot + H - v * H;
+  knob(fx(.508), fy(.82), .016, .014); knob(fx(.7), fy(.8), .026, .02); knob(fx(.89), fy(.82), .016, .014);
+  part(g, new THREE.CylinderGeometry(.024, .024, .02, 20), black, [W / 2 + .01, foot + H * .55, 0], [0, 0, Math.PI / 2]);   // tuning
+  // the handle: two posts and a bar
+  for (const s of [-1, 1]) part(g, new THREE.BoxGeometry(.016, .07, .022), black, [s * (W / 2 - .03), foot + H + .035, -.01]);
+  part(g, new THREE.BoxGeometry(W - .03, .018, .03), black, [0, foot + H + .074, -.01]);
+  // the aerial, up and back at an angle from the right
+  const aer = part(g, new THREE.CylinderGeometry(.0025, .004, .36, 6), chrome, [W / 2 - .05, foot + H + .17, -.04], [-.25, 0, .55]);
+  part(aer, new THREE.SphereGeometry(.006, 8, 6), chrome, [0, .18, 0]);
+  g.userData = {tip: new THREE.Vector3(0, .15, 0), ground: 0, standing: true, radio: true};
+  return g;
+}
+
+const MODELS = {flashlight: flashlightModel, paintball: paintballModel, spray: sprayModel, bucket: bucketModel, crown: crownModel, painting: paintingModel, marker: markerModel, piece: pieceModel, radio: radioModel};
 export const ITEM_MODELS = MODELS;   // for previews
 
 // ------------------------------------------------------------------- falling
@@ -1334,6 +1389,10 @@ export function createItems({scene, camera, hits, shadows = null, onImpact = nul
             const press = it.drawing ? .012 : 0;
             m.position.set(.06, -.085 + bob - press, -.05 - press);
             m.rotation.set(.32, -.22, .1);
+          } else if (s.type === 'radio') {
+            m.scale.setScalar(.8);
+            m.position.set(.12, -.3 + bob, -.42);
+            m.rotation.set(.12, -.45, 0);
           } else if (s.type === 'piece') {
             m.scale.setScalar(u.handScale || 1);
             m.position.set(.13, -.2 + bob, -.34);
@@ -1369,7 +1428,7 @@ export function createItems({scene, camera, hits, shadows = null, onImpact = nul
           dir = new THREE.Vector3(-Math.sin(yaw) * Math.cos(pitch), Math.sin(pitch), -Math.cos(yaw) * Math.cos(pitch));
           // gripped in the right hand, aimed where its holder is looking
           if (s.type === 'spray') m.rotation.set(-.35 + pitch * .5, yaw, 0, 'YXZ');
-          else if (s.type === 'bucket' || s.type === 'crown' || s.type === 'piece') m.rotation.set(0, yaw, 0);
+          else if (s.type === 'bucket' || s.type === 'crown' || s.type === 'piece' || s.type === 'radio') m.rotation.set(0, yaw, 0);
           else m.rotation.set(pitch + reTip * .4, yaw, reTip * .9 + rattle, 'YXZ');
           if (u.painting) showBack(m, u, true);
           if (s.type === 'painting' && avatar?.root) {
@@ -1397,6 +1456,7 @@ export function createItems({scene, camera, hits, shadows = null, onImpact = nul
             else if (s.type === 'spray') m.position.y -= .07 * CAN_SCALE;
             else if (s.type === 'crown') m.position.addScaledVector(dir, .1).y -= .1;   // held by the band, out in front
             else if (s.type === 'piece') m.position.addScaledVector(dir, .07).y -= .1;
+            else if (s.type === 'radio') m.position.addScaledVector(dir, .06).y -= .2;
             else if (avatar.hand) {
               // a torch in a fist: the middle of the barrel sits in the closed hand, just ahead of the wrist
               avatar.hand.getWorldPosition(m.position);

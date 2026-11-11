@@ -17,6 +17,7 @@ import {createConverter} from './converter.js';
 import {createCinema, ROOM as CINEMA_ROOM} from './cinema.js';
 import {createEggs} from './eggs.js';
 import {createWetSign} from './wetsign.js';
+import {createRadio} from './radio.js';
 import {createBoard} from './board.js';
 import {roomFrame, DOOR_X} from './room-frame.js';
 import {CONVERTER_COLLIDER, PANEL as CONVERTER_PANEL, USE_RANGE as CONVERTER_RANGE, FRAME as B20, MX as B20_MX, FRONT as B20_FRONT, inChamber} from './converter-spec.js';
@@ -406,6 +407,17 @@ async function start() {
     onOpenChange: open => { if (!open && relock && !controls.state.touch) { relock = false; canvas.requestPointerLock?.()?.catch?.(() => {}); } },
   });
   let myBubble = null, myBubbleExpires = 0;
+  // the radio's link box and players (src/radio.js): made once the room's connection is (it needs its clock)
+  let radioUI = null;
+  const _radioAt = new THREE.Vector3(), _radioDir = new THREE.Vector3();
+  const radio = () => radioUI ||= createRadio({network,
+    onOpenChange: open => { if (!open && relock && !controls.state.touch) { relock = false; canvas.requestPointerLock?.()?.catch?.(() => {}); } }});
+  function openRadio(t) {
+    relock = controls.state.locked; release();
+    const play = t.state.play;
+    radio().prompt(t.state.id, !!play && network.now() < play.until);
+    learn('radio');
+  }
 
   // ------------------------------------------------------- paint & tags
   const splats = createBatch(markMaterial(level, splatAtlas(), 2));
@@ -1119,7 +1131,7 @@ async function start() {
   function secondary() {
     // hands empty, a game over and the crown still on: right-click takes it off
     const h = held() || (!kothActive(koth) && network.id ? items.wornBy(network.id) : null);
-    if (!h) return;
+    if (!h) { const t = lookTarget(); if (t?.state.type === 'radio') openRadio(t); return; }   // a radio: a link to play
     // a painting: put where it'd go with a click, but turned round, its back facing out; or just dropped
     if (h.state.type === 'painting') { const plan = planPlace(h); if (plan) { placePainting(h, reversed(plan, h.state.art)); learn('reverse'); } else dropPainting(h); return; }
     dropItem(h);
@@ -2236,7 +2248,8 @@ async function start() {
           placePlan ? ['reverse', 'right-click: the same, back out'] : drop]
         : [['spray', 'click a wall: spray'], ['pieces', 'esc or tab: pick a piece'], ['tagturn', 'ctrl + scroll: turn'], ['tagsize', 'shift + scroll: size'], drop])
       : t ? (t.state.type === 'crown' && kothActive(koth) ? [['pickup:crown:on', 'click: put on the crown']]
-        : [[`pickup:${t.state.type}`, `click: pick up ${t.state.type === 'piece' ? pieceName(t.state.id) : ITEM_NAMES[t.state.type] || 'it'}`]]) : [];
+        : [[`pickup:${t.state.type}`, `click: pick up ${t.state.type === 'piece' ? pieceName(t.state.id) : ITEM_NAMES[t.state.type] || 'it'}`],
+          ...(t.state.type === 'radio' ? [['radio', 'right-click: play a link']] : [])]) : [];
     const hint = parts.filter(([k]) => !learned.has(k)).map(([, text]) => text).join('  ·  ');
     if (prompt.textContent !== hint) prompt.textContent = hint;
     document.body.classList.toggle('holding', !!h);
@@ -2255,6 +2268,19 @@ async function start() {
     avatarLights.update(camera.position.x, camera.position.z);
     updateLights(now);
     cinema.update(dt, camera, inB04(camera.position));
+    // radios playing: louder the nearer you are, muffled through walls
+    {
+      const list = [];
+      for (const it of items.items.values()) {
+        if (it.state.type !== 'radio') continue;
+        const p = it.model.getWorldPosition(_radioAt);
+        list.push({id: it.state.id, play: it.state.play, x: p.x, y: p.y + .12, z: p.z});
+      }
+      if (list.some(r => r.play) || radioUI) radio().update(list, camera.position, r => {
+        const d = _radioDir.set(r.x - camera.position.x, r.y - camera.position.y, r.z - camera.position.z), len = d.length();
+        return len > .8 && !!hits.raycast(camera.position, d.divideScalar(len), len - .3);
+      });
+    }
     renderer.render(scene, camera);
   };
   // A thrown error mustn't stop the loop for good (that freezes the game): report it (once per kind)
