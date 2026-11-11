@@ -105,6 +105,8 @@ export function createRadio({network, onOpenChange}) {
   panel.addEventListener('submit', e => {
     e.preventDefault();
     if (!openFor) return;
+    // (SoundCloud's short on.soundcloud.com links don't play in its player: the full address does)
+    if (/^(https?:\/\/)?on\.soundcloud\.com\//i.test(input.value.trim())) { note.textContent = 'that\u2019s a short link: open it and copy the full soundcloud.com address'; return; }
     if (!radioLink(input.value)) { note.textContent = 'only YouTube or SoundCloud links'; return; }
     network.send({type: 'radio', id: openFor, url: input.value.trim()});
     close();

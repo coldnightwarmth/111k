@@ -50,10 +50,25 @@ const soon = left => `<!doctype html>
 
 // a film, or the piece of it asked for: streamed through (only the bytes wanted are passed on, never the whole
 // file held at once: a crowd at the projector ran the worker out of memory)
+// a film's size: the static files don't always say (no Content-Length), so counted once, streaming through, and
+// kept while this worker's up
+const filmSizes = new Map();
+async function filmSize(env, url, res) {
+  const said = Number(res.headers.get('Content-Length'));
+  if (said > 0) return said;
+  const key = new URL(url).pathname;
+  if (filmSizes.has(key)) return filmSizes.get(key);
+  const r = await env.ASSETS.fetch(new Request(url, {method: 'GET'}));
+  let n = 0;
+  const reader = r.body.getReader();
+  for (;;) { const {done, value} = await reader.read(); if (done) break; n += value.byteLength; }
+  filmSizes.set(key, n);
+  return n;
+}
 async function film(request, env, url, path) {
   const res = await env.ASSETS.fetch(new Request(url, {method: 'GET'}));
   if (res.status !== 200) return res;
-  const size = Number(res.headers.get('Content-Length'));
+  const size = await filmSize(env, url, res);
   const headers = new Headers({'Content-Type': res.headers.get('Content-Type') || 'video/mp4', 'Accept-Ranges': 'bytes',
     'Cache-Control': cacheFor(path), 'X-Content-Type-Options': 'nosniff'});
   const m = /^bytes=(\d*)-(\d*)$/.exec((request.headers.get('Range') || '').trim());
