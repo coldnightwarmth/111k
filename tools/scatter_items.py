@@ -16,7 +16,7 @@ VD = XF + 1.15
 ROOM_C = VD + 3.2
 DOORS = 20
 LOCKED = {8, 11, 16}                       # rooms behind locked doors
-LIT = {2, 9, 14, 17}
+LIT = {2, 9, 14, 17, 19}
 PARTY, SUPPLY, BATHROOM, CONTROL = 0, 1, 4, 10
 MACHINE_ANGLE = -0.2
 
@@ -94,7 +94,8 @@ def room_spot(rooms):
         return room_to_world(i, x, z)
     return f
 
-open_rooms = [i for i in range(2, DOORS) if i not in LOCKED and i not in (BATHROOM, CONTROL)]
+FEATURE = {3, 9, 19}                       # B-04 the cinema, B-10 the board, B-20 the converter: kept clear
+open_rooms = [i for i in range(2, DOORS) if i not in LOCKED and i not in (BATHROOM, CONTROL) and i not in FEATURE]
 dark_rooms = [i for i in open_rooms if i not in LIT]
 place('spray', 'spx', 10, tunnel_spot(2.0))
 place('spray', 'spr', 6, room_spot(open_rooms))

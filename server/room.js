@@ -4,10 +4,11 @@
 // Object being evicted between messages. The only shared state is the held
 // items, which the caller keeps (Durable Object storage in production).
 import {INK_HOST, INK_PER_S, MAX_INK_STROKES, MAX_STROKE_PTS, MAX_INK_PTS, cleanInkPoints, SETTLE_BYTES, SETTLE_MAX, SETTLE_PER_S, MAG_SIZE, RELOAD_MS, CROWN_HITS, CROWN_HIT_WINDOW_MS, CHAT_INTERVAL_MS, CHAT_TTL_MS, POSE_INTERVAL_MS, PICKUP_RANGE, PUNCH_RANGE, PUNCH_COOLDOWN_MS,
-  SHOT_INTERVAL_MS, SPRAY_INTERVAL_MS, SPRAY_RANGE, MAX_SPLATS, MAX_SPRAYS, SPLAT_LIFE_MS,
+  SHOT_INTERVAL_MS, SPRAY_INTERVAL_MS, SPRAY_RANGE, MAX_SPLATS, MAX_SPRAYS, SPLAT_LIFE_MS, ART_MAX,
   sanitizeChat, sanitizePose, samePose, cleanItem, cleanPath, sanitizeLook, sanitizeName, cleanSplat, cleanSpray, splatId, sprayId} from '../src/protocol.js';
 import {ITEM_SPAWNS} from '../src/world-items.js';
 import {RACE_LAPS, RACE_TIMEOUT_MS, BUTTON, BUTTON_RANGE, MACHINE_ANGLE, LAP_LINE, BUTTON_LAP, loopAngle, freshRace, publicRace} from '../src/race.js';
+import {PANEL, USE_RANGE, BUSY_MS, inChamber, standPose, keyEntry, KEYS} from '../src/converter-spec.js';
 import {KOTH_GRACE_MS, KOTH_WIN_MS, KOTH_UNCLAIMED_MS, freshKoth, publicKoth, kothActive, kothTime} from '../src/koth.js';
 
 // paintings settling on their own (a 'settle' message): how far from the player who sends it, and how far each can move
@@ -329,6 +330,37 @@ function handle(player, data, now, room) {
     return {out, changed: true, raceChanged: true};
   }
 
+  // ---------------------------------------------------------- the converter (B-20)
+  // the keypad: a key at a time, the entry kept for everyone to see
+  if (m.type === 'keypad') {
+    const c = room.converter;
+    if (!c || !player.pose || player.inactive || !KEYS.includes(m.k) || flat(player.pose, PANEL) > USE_RANGE) return {out, changed: false};
+    if (now - (player.lastKey || 0) < 60) return {out, changed: false};
+    player.lastKey = now; player.lastActive = now;
+    c.entry = keyEntry(c.entry || '', m.k);
+    out.push({to: 'all', msg: {type: 'keypad', entry: c.entry, k: m.k, by: player.id}});
+    return {out, changed: true};
+  }
+  // the big button: the painting in the chamber becomes the piece the keypad says
+  if (m.type === 'convert') {
+    const c = room.converter;
+    if (!c || !player.pose || player.inactive || flat(player.pose, PANEL) > USE_RANGE) return {out, changed: false};
+    player.lastActive = now;
+    const n = Number(c.entry);
+    const deny = why => { out.push({to: 'self', msg: {type: 'keypad', entry: c.entry || '', denied: why}}); return {out, changed: true}; };
+    if (now < (c.busyUntil || 0)) return deny('busy');
+    if (!c.entry || !Number.isInteger(n) || n < 1 || n > ART_MAX) return deny('number');
+    const inside = Object.values(items).filter(it => it.type === 'painting' && !it.holder && inChamber(it.x, it.y, it.z));
+    if (!inside.length) return deny('empty');
+    const it = inside[0];
+    Object.assign(it, standPose(n), {art: n, hung: true});
+    for (const k of ['x', 'y', 'z', 'yaw', 'tilt']) it[k] = r3(it[k]);
+    Object.assign(c, {busyUntil: now + BUSY_MS, id: it.id, entry: ''});
+    out.push({to: 'all', msg: {type: 'item', item: cleanItem(it), convert: {n, by: player.id, byName: player.name || ''}}});
+    out.push({to: 'all', msg: {type: 'keypad', entry: ''}});
+    return {out, changed: true, itemsChanged: true};
+  }
+
   // ---------------------------------------------------------- king of the hill
   // clicking with the crown in your hand starts a game: it goes on your head
   if (m.type === 'koth') {
@@ -349,6 +381,7 @@ function handle(player, data, now, room) {
   const refuse = () => ({out: item ? [{to: 'self', msg: {type: 'item', item: cleanItem(item), refused: true}}] : out, changed: false});
   if (m.type === 'pickup') {
     if (!item || item.holder || !player.pose || player.inactive) return refuse();
+    if (room.converter && item.id === room.converter.id && now < room.converter.busyUntil) return refuse();   // (still being converted)
     // while a game is on, the crown goes straight on your head, whatever's in your hands
     const crowning = item.type === 'crown' && kothActive(room.koth);
     if (!crowning && handsFull(items, player.id)) return refuse();

@@ -365,9 +365,9 @@ ctx = dict(W=W, P=Pr, M=M, props=M['props'], glow=M['glow'], metal=M['metal_grey
            wood=M['wood'], card=M['cardboard'], ceiling=M['ceiling_tile'], vct=M['floor_vct'], tube=M['tube'],
            PAL=PAL, Mat=Mat, T=T, rot=rot, room_wall_decal=room_wall_decal, ITEMS=ITEMS,
            X0=X0, X1=X1, Z0=Z0, Z1=Z1, CEIL=CEIL, DOOR_W=DOOR_W, DOOR_H=DOOR_H, T_W=T_W)
-VARIANTS = {1: 'empty', 2: 'office', 3: 'storage', 5: 'office', 6: 'break', 8: 'locked', 9: 'storage', 11: 'locked',
-            12: 'break', 13: 'office', 14: 'storage', 15: 'empty', 16: 'locked', 17: 'office', 18: 'empty', 19: 'office'}
-LIT = {2, 9, 14, 17}
+VARIANTS = {1: 'empty', 2: 'office', 3: 'projector', 5: 'office', 6: 'break', 8: 'locked', 9: 'board', 11: 'locked',
+            12: 'break', 13: 'office', 14: 'storage', 15: 'empty', 16: 'locked', 17: 'office', 18: 'empty', 19: 'converter'}
+LIT = {2, 9, 14, 17, 19}
 ROOM_DOOR_X = {}
 flicker_lights = []   # (position, assign_group callback) for greedy grouping below
 
@@ -449,16 +449,9 @@ def at(a, x, y=0.0):
 
 
 with W.using('props', density=1.0):
-    # generator outside the party room, cords running in
+    # a cord out of the party room, running off under the crate by the door (the crate is tools/crates.py's)
     ga = party_a + 0.045
-    with W.frame(at(ga, 1.95), ga):
-        W.box((0, 0.32, 0), (0.55, 0.5, 0.8), M['metal_red'], collide=True)
-        Pr.rbox((0, 0.62, 0), (0.6, 0.06, 0.85), 'black', ch=0.02)
-        Pr.cyl((0, 0.06, -0.3), 0.08, 0.06, 'black', axis='x', sides=8)
-        Pr.cyl((0, 0.06, 0.3), 0.08, 0.06, 'black', axis='x', sides=8)
-        Pr.tube((-0.28, 0.1, 0.4), (-0.28, 0.65, 0.4), 0.015, 'black')
-        Pr.tube((0.28, 0.1, 0.4), (0.28, 0.65, 0.4), 0.015, 'black')
-    cord = [at(ga, 1.7, 0.01), at(party_a + 0.02, 2.0, 0.01), at(party_a + 0.004, 2.8, 0.01), at(party_a, VD, 0.01)]
+    cord = [at(ga - 0.006, 1.95, 0.01), at(party_a + 0.02, 2.0, 0.01), at(party_a + 0.004, 2.8, 0.01), at(party_a, VD, 0.01)]
     for p, q in zip(cord[:-1], cord[1:]):
         Pr.tube(p, q, 0.011, 'orange', sides=4)
     Pr.camp_chair(*at(party_a - 0.05, 1.5)[[0, 2]], party_a + 1.2, 'navy')
@@ -476,9 +469,9 @@ with W.using('props', density=1.0):
         Pr.tube(e, off_wall(a, y, 0.035), 0.003, 'steel', sides=4)                 # screw eye
         Pr.box(off_wall(a, y - 0.006, 0.037), (0.012, 0.012, 0.012), 'steel')
 
-    def strand(a0, a1, y, hooks, sag, n, colors, name):
+    def strand(a0, a1, y, hooks, sag, n, colors, name, end_hooks=True):
         anchors = np.linspace(a0, a1, hooks + 1)
-        for a in anchors:
+        for a in (anchors if end_hooks else anchors[1:-1]):
             hook(a, y)
         path = []                        # (angle, height) along the wire: a dip between each pair of hooks
         for ha, hb in zip(anchors[:-1], anchors[1:]):
@@ -505,6 +498,8 @@ with W.using('props', density=1.0):
 
     strand(party_a - 0.13, party_a - half - 0.006, 3.05, 4, 0.12, 22, ['warm', 'orange', 'warm', 'red'], 'str_out_a')
     strand(party_a + half + 0.006, party_a + 0.11, 3.05, 3, 0.13, 18, ['warm', 'yellow', 'warm', 'red'], 'str_out_b')
+    # and the bit between them, over the door itself (on the same end hooks)
+    strand(party_a - half - 0.006, party_a + half + 0.006, 3.05, 2, 0.06, 9, ['red', 'warm', 'orange', 'warm'], 'str_out_c', end_hooks=False)
     # the feed: from the left-hand end, up the wall in clips, under the big service pipe and along it
     ea = party_a + 0.11
     climb = [(ea + 0.004, 3.05), (ea + 0.008, 3.35), (ea + 0.011, 3.65), (ea + 0.013, 3.93)]
@@ -904,6 +899,9 @@ if __name__ == '__main__':
             ('control', room_cam(CONTROL, 0.0, -1.8, math.pi, -0.05)),
             ('bathroom', room_cam(BATHROOM, -1.8, -1.8, math.pi * 0.8, -0.1)),
             ('squat', room_cam(SQUAT, 1.8, -1.6, math.pi * 1.2, -0.15)),
+            ('b04', room_cam(3, 0.0, -2.6, math.pi, -0.05)),
+            ('b10', room_cam(9, 0.0, -2.6, math.pi, -0.35)),
+            ('b20', room_cam(19, 1.0, -2.6, math.pi, -0.05)),
         ]
     W.build(OUT, lm_size=1024 if FAST else 2048, samples=24 if FAST else 160, ambient=(0.004, 0.004, 0.005),
             grime=grime, previews=cams, preview_dir=pr, fill=(0.03, 0.03, 0.034), group_samples=16 if FAST else 64,

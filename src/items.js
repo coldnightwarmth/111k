@@ -8,7 +8,7 @@ const BEAM_FAR = 42, BEAM_FADE = 10;   // torches on the floor: full strength to
 import {EYE_HEIGHT} from './motion.js';
 import {MAG_SIZE, RELOAD_MS} from './protocol.js';
 import {PAINT_COLORS, RANDOM_PAINT} from './decals.js';
-import {ART, ART_IDS, PREVIEW, artFile, paintingSize, paintingMatrix} from './paintings.js';
+import {ART, ART_IDS, PREVIEW, artFile, artOriginal, paintingSize, paintingMatrix} from './paintings.js';
 import {mergeVertices, mergeGeometries} from '../vendor/three/BufferGeometryUtils.js';
 
 const BEAM_COLOR = new THREE.Color(1, .93, .8);
@@ -379,7 +379,7 @@ function pumpFetches() {
     if (!job.wanted()) { artFiles.delete(job.key); job.reject(new Error('not wanted')); continue; }
     fetching++;
     const get = url => fetch(url).then(r => { if (!r.ok) throw new Error(`${r.status} ${url}`); return r.blob(); });
-    get(artFile(job.art, job.px)).catch(() => get((ART[job.art] || ART[1]).url))      // (not made small yet: the original)
+    (ART[job.art] ? get(artFile(job.art, job.px)) : Promise.reject()).catch(() => get(artOriginal(job.art)))      // (not made small: the original)
       .then(job.resolve, e => { artFiles.delete(job.key); job.reject(e); })
       .finally(() => { fetching--; pumpFetches(); });
   }
@@ -584,7 +584,8 @@ function paintingModel(id, state) {
     // its back (raw canvas, stretcher, staples): not drawn while it hangs on a wall, where nothing can see it
     backMats: [paintingMats.linen, paintingMats.wood, paintingMats.staple],
     // which picture it shows, by how far it is from you (src/items.js frame)
-    artAt: (near, far = near) => { const px = artTier(near, far, canvasMat.userData.want); setArt(art, canvasMat, preview, px, px > 512 ? near + 12 : far); },
+    artAt: (near, far = near) => { const px = artTier(near, far, canvasMat.userData.want) || (ART[art] ? 0 : 512);    // (one from the converter has no small one in the atlas)
+      setArt(art, canvasMat, preview, px, px > 512 ? near + 12 : far); },
     artReady: () => { const k = canvasMat.userData.pending; return k ? artTextures.get(k)?.ready : null; }};
   return g;
 }
@@ -856,12 +857,21 @@ export function createItems({scene, camera, hits, shadows = null, onImpact = nul
 
   function ensure(state) {
     let it = items.get(state.id);
-    if (!it || it.state.type !== state.type) {
-      if (it) it.model.removeFromParent();
+    const reart = it && state.type === 'painting' && it.state.art !== state.art;       // (the converter's made it another picture)
+    if (!it || it.state.type !== state.type || reart) {
+      const old = it?.model;
+      if (old) {
+        old.removeFromParent();
+        if (reart) { const cm = old.userData.canvas?.material; if (cm) { cm.userData.want = -1; setArt(it.state.art, cm, null, 0); } }
+      }
       const model = mergeParts((MODELS[state.type] || flashlightModel)(state.id, state));
+      // paint and tags on it come over to the new one
+      if (reart) for (const c of [...old.children]) if (c.userData.keep) model.add(c);
       // items are culled like anything else when they're out of view (they only ever move, so their bounds hold)
       model.traverse(o => { o.castShadow = false; });
+      const prev = it;
       it = {state, model, sway: 0, kick: 0, shake: 0, outline: addOutline(model), fall: null};
+      if (reart) { model.position.copy(prev.model.position); model.quaternion.copy(prev.model.quaternion); }
       // a crown dithers away with its wearer when the camera pushes into them
       if (state.type === 'crown') {
         it.ghost = {ghostAll: {value: 0}, ghostOn: {value: 0}};

@@ -10,6 +10,7 @@ Outputs per level (same contract as before, read by src/level.js):
   <name>-lightmap.png baked light (sRGB of irradiance / LM_SCALE)
   <name>.json         colliders, runtime lights for avatars, spawns, metadata
 """
+import hashlib
 import contextlib, json, math, os, re, subprocess, sys, time
 import numpy as np
 import bpy, bmesh
@@ -632,10 +633,35 @@ class World:
         bk = sc.render.bake
         bk.target = 'IMAGE_TEXTURES'; bk.margin = 4; bk.margin_type = 'EXTEND'
         bk.use_pass_direct = bk.use_pass_indirect = True; bk.use_pass_color = False
-        set_target(img)
-        res = bpy.ops.object.bake(type='DIFFUSE', uv_layer='lm')
-        if res != {'FINISHED'}:
-            raise RuntimeError(f'light bake did not finish: {res}')
+        # KIT_CACHE (a folder): each bake is kept there as it finishes and used again by a run with the very same
+        # layout and settings, so a long bake that gets cut off carries on where it was
+        cache = os.environ.get('KIT_CACHE')
+        fp = None
+        if cache:
+            os.makedirs(cache, exist_ok=True)
+            h = hashlib.sha1(f'{lm_size} {samples} {group_samples}'.encode())
+            for o in lm_objs:
+                a_ = np.zeros(len(o.data.uv_layers['lm'].data) * 2, np.float32); o.data.uv_layers['lm'].data.foreach_get('uv', a_)
+                h.update(o.name.encode()); h.update(np.round(a_, 5).tobytes())
+            fp = h.hexdigest()[:12]
+
+        def bake_into(image, tag):
+            path = os.path.join(cache, f'{tag}-{fp}.exr') if cache else None
+            if path and os.path.exists(path):
+                src = bpy.data.images.load(path)
+                px = np.empty(src.size[0] * src.size[1] * 4, np.float32); src.pixels.foreach_get(px)
+                image.pixels.foreach_set(px); bpy.data.images.remove(src)
+                print(f'  {tag}: from the cache')
+                return
+            set_target(image)
+            res = bpy.ops.object.bake(type='DIFFUSE', uv_layer='lm')
+            if res != {'FINISHED'}:
+                raise RuntimeError(f'light bake did not finish: {res}')
+            if path:
+                keep = bpy.data.images.new(f'keep-{tag}', image.size[0], image.size[1], float_buffer=True)
+                px = np.empty(image.size[0] * image.size[1] * 4, np.float32); image.pixels.foreach_get(px); keep.pixels.foreach_set(px)
+                keep.filepath_raw = path; keep.file_format = 'OPEN_EXR'; keep.save(); bpy.data.images.remove(keep)
+        bake_into(img, 'light')
         if os.environ.get('KIT_DEBUG'):
             px = np.empty(lm_size * lm_size * 4, np.float32); img.pixels.foreach_get(px)
             print('  DEBUG baked rgb max', px.reshape(-1, 4)[:, :3].max(), 'alpha>0', (px.reshape(-1, 4)[:, 3] > 0).mean())
@@ -662,8 +688,7 @@ class World:
                 for o in lamps:
                     o.hide_render = o.get('group', -1) != g
                 gi = bpy.data.images.new(f'group{g}', gsize, gsize, float_buffer=True)
-                set_target(gi)
-                bpy.ops.object.bake(type='DIFFUSE', uv_layer='lm')
+                bake_into(gi, f'group{g}')
                 group_imgs[g] = gi
                 print(f'  baked flicker group {g} ({time.time() - t0:.1f}s)')
             for o in lamps:

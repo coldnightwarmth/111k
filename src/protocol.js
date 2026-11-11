@@ -111,8 +111,9 @@ export function cleanPath(path) {
   }
   return out;
 }
-// the highest painting art id (the art is numbered 1 to 30000 on the CDN)
-export const ART_MAX = 30000;
+// the highest painting art id (the whole collection: src/collection.js)
+import {ART_MAX} from './collection.js';
+export {ART_MAX};
 // Held items (flashlights): shared room state. Positions are where they lie when nobody holds them.
 export function cleanItem(it) {
   const out = {id: it.id, type: ITEM_TYPES.includes(it.type) ? it.type : 'flashlight', x: round(it.x), y: round(it.y), z: round(it.z), yaw: round(it.yaw),

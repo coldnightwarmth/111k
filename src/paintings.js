@@ -2,6 +2,8 @@
 // art and its proportions live here (shared by the client, and by the server for ids); everything
 // else about a painting is an item like the others (where it is, which way it faces, how it tilts).
 import * as THREE from 'three';
+import {artDims, artUrl, PAINTING_LONG} from './collection.js';
+export {PAINTING_LONG};
 
 const CDN = 'https://cdn.lil.org/nft/111k/paintings/';
 // art id -> the image and its pixel size (the canvas takes the image's proportions)
@@ -109,12 +111,11 @@ export const ART = {
   29579: {url: `${CDN}29579.png`, w: 932, h: 1006},
   29805: {url: `${CDN}29805.png`, w: 932, h: 1006},
 };
-export const PAINTING_LONG = .8;     // metres along the longer side
 export const PAINTING_DEPTH = .05;   // the stretcher's depth (the canvas wraps round it)
 
 // width, height, depth in metres
 export function paintingSize(art) {
-  const a = ART[art] || ART[1], k = PAINTING_LONG / Math.max(a.w, a.h);
+  const a = ART[art] || artDims(art), k = PAINTING_LONG / Math.max(a.w, a.h);
   return {w: a.w * k, h: a.h * k, d: PAINTING_DEPTH};
 }
 
@@ -125,6 +126,8 @@ export function paintingSize(art) {
 // (512 for phones), and all of them small in one preview atlas, ART's order (ascending id), PREVIEW.cols across,
 // each squeezed into a tile-pixel square with its edges repeated pad pixels round it.
 export const artFile = (art, px) => `assets/paintings/${px}/${art}.webp`;
+// where the original picture is (any piece of the collection: src/collection.js)
+export const artOriginal = art => ART[art]?.url || artUrl(art);
 export const PREVIEW = {url: 'assets/paintings/previews.webp', tile: 128, pad: 8, cols: 10};
 export const ART_IDS = Object.keys(ART).map(Number).sort((a, b) => a - b);
 

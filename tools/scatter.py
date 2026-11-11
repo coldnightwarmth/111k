@@ -70,6 +70,8 @@ ROOM_C = VD + 3.2                    # radial offset of a room's middle
 PAINTING_LONG, PAINTING_DEPTH = 0.8, 0.05
 WALLS = {'tunnel_lining', 'office_wall', 'wall_beige', 'wall_blue', 'wall_green', 'tile_wall'}   # what a painting hangs on
 SUPPLY_ROOM = 1                      # shelving built at runtime (src/shelves.js)
+FEATURE_ROOMS = {3, 9, 19}           # B-04 the projector, B-10 the board, B-20 the converter: kept clear
+NO_SCATTER = {SUPPLY_ROOM} | FEATURE_ROOMS
 MACHINE = (-0.2, 2.6)                # the lap timer (src/race.js): loop angle, offset from the centreline
 
 
@@ -528,7 +530,7 @@ def scatter_paintings(meta, mesh, items, art, count=29, seed=1111, log=None, poo
                 return None
             if any(_seg_dist(p * [1, 0, 1], a, b) < 1.0 for a, b in corridors):
                 return None
-            if math.hypot(p[0] - machine[0], p[2] - machine[2]) < 3.0 or room_of(p) == SUPPLY_ROOM:
+            if math.hypot(p[0] - machine[0], p[2] - machine[2]) < 3.0 or room_of(p) in NO_SCATTER:
                 return None
         ctr = np.array([it['x'], 0, it['z']])
         if mode != 'hang' and any(np.linalg.norm(ctr - s) < 1.5 for s in spawns):
@@ -640,7 +642,7 @@ def scatter_paintings(meta, mesh, items, art, count=29, seed=1111, log=None, poo
             k_art += 1
         else:
             missed.append(mode)
-    rooms = [i for i in range(20) if i != SUPPLY_ROOM] * per_room
+    rooms = [i for i in range(20) if i not in NO_SCATTER] * per_room
     rng.shuffle(rooms)
     for mode in modes_r:
         w, ht = painting_size(art[arts[k_art]])
@@ -664,7 +666,7 @@ def scatter_paintings(meta, mesh, items, art, count=29, seed=1111, log=None, poo
                 got = place(mode, w, ht, lambda: try_tunnel(mode, a, w, ht, a - .1, a + .1))
                 where = 'tunnel'
             else:
-                i = rng.choice([i for i in range(20) if i != SUPPLY_ROOM])
+                i = rng.choice([i for i in range(20) if i not in NO_SCATTER])
                 got = place(mode, w, ht, lambda: try_room(mode, i, w, ht))
                 where = f'room {i}'
             if got:

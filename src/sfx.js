@@ -11,7 +11,7 @@ import {SOUNDS, make, RATE} from './sfx-synth.js';
 export const PICKS = {step: 'c', jump: 'a', land: 'c', hop: 'c', swing: 'a', hit: 'c', rattle: 'c', spray: 'a', fire: 'a',
   splat: 'c', splatBody: 'a', scrub: 'b', flashlight: 'b', grab: 'b', thunkWood: 'a', thunkMetal: 'b', thunkCan: 'a',
   thunkPlastic: 'a', place: 'b', doorOpen: 'a', doorBump: 'a', doorShut: 'b', button: 'a', raceStart: 'a', lap: 'a', finish: 'a',
-  raceCancel: 'a', crownStart: 'b', crownTake: 'b', crownLost: 'b', crownWin: 'b', chat: 'b', hum: 'a'};
+  raceCancel: 'a', crownStart: 'b', crownTake: 'b', crownLost: 'b', crownWin: 'b', chat: 'b', hum: 'a', flicker: 'a'};
 export const PICKS_KEY = '111k:sfx-picks';
 export function picks() {
   let mine = {};
@@ -23,7 +23,7 @@ export function picks() {
 
 // how loud each is, how much echo it gets, how far it carries (metres)
 export const MIX = {
-  step: [.32, .22, 22], jump: [.28, .2, 18], land: [.5, .25, 24], hop: [.42, .25, 24],
+  step: [.2, .2, 18], jump: [.28, .2, 18], land: [.5, .25, 24], hop: [.42, .25, 24],
   swing: [.32, .15, 14], hit: [.85, .3, 30],
   rattle: [.35, .15, 14], spray: [.42, .3, 22], fire: [.6, .4, 40], splat: [.5, .3, 30], splatBody: [.6, .3, 30], scrub: [.38, .2, 14],
   flashlight: [.4, .1, 10], grab: [.32, .1, 10], thunkWood: [.6, .3, 26], thunkMetal: [.5, .35, 26], thunkCan: [.5, .3, 24],
@@ -31,6 +31,7 @@ export const MIX = {
   doorOpen: [.38, .25, 22], doorBump: [.5, .3, 26], doorShut: [.6, .35, 30], button: [.55, .25, 20],
   raceStart: [.5, .35, 60], lap: [.55, .35, 60], finish: [.6, .4, 80], raceCancel: [.45, .35, 60],
   crownStart: [.32, 0, 0], crownTake: [.3, 0, 0], crownLost: [.28, 0, 0], crownWin: [.38, 0, 0], chat: [.22, 0, 0], hum: [.1, 0, 0],
+  flicker: [.14, .25, 14],
 };
 const TAKES = 6;          // different takes of each kept ready
 const MAX_PLAYING = 28;
@@ -149,6 +150,22 @@ export function createSfx(voice) {
       const g = ctx.createGain(); g.gain.value = (MIX[name]?.[0] ?? .1) * gain;
       src.connect(g); g.connect(out); src.start();
       return {gain: v => g.gain.setTargetAtTime((MIX[name]?.[0] ?? .1) * v, ctx.currentTime, .4), stop: () => { try { src.stop(); } catch {} }};
+    },
+    // a media element's sound (the projector's film), from a point in the room; returns {gain(v), muffle(on)}
+    // or null if there's no sound yet (nobody's clicked into the page)
+    stream(el, at, {level = .3, ref = 2, range = 22, wet = .25} = {}) {
+      if (!graph() || ctx.state !== 'running') return null;
+      const src = ctx.createMediaElementSource(el), g = ctx.createGain(), lp = ctx.createBiquadFilter();
+      g.gain.value = level; lp.type = 'lowpass'; lp.frequency.value = 20000; lp.Q.value = .5;
+      const p = ctx.createPanner();
+      Object.assign(p, {panningModel: 'HRTF', distanceModel: 'inverse', refDistance: ref, rolloffFactor: 1.4, maxDistance: range});
+      if (p.positionX) { p.positionX.value = at.x; p.positionY.value = at.y; p.positionZ.value = at.z; } else p.setPosition(at.x, at.y, at.z);
+      src.connect(g); g.connect(lp); lp.connect(p); p.connect(out);
+      const w = ctx.createGain(); w.gain.value = wet; p.connect(w); w.connect(wetIn);
+      return {
+        gain: v => g.gain.setTargetAtTime(level * v, ctx.currentTime, .25),
+        muffle: on => lp.frequency.setTargetAtTime(on ? 650 : 20000, ctx.currentTime, .15),
+      };
     },
     // once a frame: where you hear from, and whether you're in a room (less echo) or the tunnel
     frame({camera, hits: h, inRoom = false}) {

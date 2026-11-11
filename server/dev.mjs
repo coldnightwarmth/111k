@@ -73,6 +73,7 @@ const players = () => [...clients].map(c => c.player);
 let items = freshItems();
 const race = freshRace();
 let koth = freshKoth();
+const converter = {entry: '', busyUntil: 0, id: null};   // the B-20 keypad
 // move a king of the hill game along (grace running out, paintballs landing, a winner)
 function runKoth(cause) {
   if (cause) koth.cause = cause;
@@ -101,6 +102,7 @@ server.on('upgrade', (req, socket) => {
   send(c, marksMessage(marks));
   send(c, {type: 'race', race: publicRace(race, now)});
   send(c, {type: 'koth', koth: publicKoth(koth, now)});
+  send(c, {type: 'keypad', entry: converter.entry});
   socket.on('data', chunk => { c.buffer = Buffer.concat([c.buffer, chunk]); parse(c); });
   socket.on('close', () => close(c));
   socket.on('error', () => close(c));
@@ -137,7 +139,7 @@ function parse(c) {
 function onText(c, text) {
   if (text === 'ping') { send(c, 'pong'); return; }
   const now = Date.now();
-  const result = handleMessage(c.player, text, now, {items, marks, race, koth, players});
+  const result = handleMessage(c.player, text, now, {items, marks, race, koth, converter, players});
   if (result.report) errors = logError(errors, result.report);
   if (result.close) { close(c); return; }
   for (const {to, msg} of result.out) {

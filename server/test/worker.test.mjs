@@ -839,3 +839,46 @@ test('marker ink: kept as it is drawn, only with a marker, the oldest go, scrubb
   r = send({type: 'erase', kind: 'ink', id: victim});
   assert.equal(r.out[0].msg.kind, 'ink'); assert.ok(!room.marks.ink.some(s => s.id === victim));
 });
+
+test('the converter: keypad, a painting in the chamber, convert, busy', async () => {
+  const {ITEM_SPAWNS} = await import('../../src/world-items.js');
+  const {PANEL, standPose} = await import('../../src/converter-spec.js');
+  const {room, sockets, ctx} = makeRoom();
+  const store = new Map();
+  ctx.storage.get = async k => store.get(k);
+  ctx.storage.put = async (k, v) => { store.set(k, structuredClone(v)); };
+  await join(room, S1); await join(room, S2);
+  const [a, b] = sockets;
+  assert.equal(a.messages().find(m => m.type === 'keypad').entry, '');
+  const at = {...pose, x: PANEL.x, z: PANEL.z, emote: '', emoteTime: 0};
+  await room.webSocketMessage(a, JSON.stringify({type: 'pose', pose: at}));
+  const key = async k => { await room.webSocketMessage(a, JSON.stringify({type: 'keypad', k})); await new Promise(r => setTimeout(r, 70)); };
+  for (const k of ['0', '6', '0', '0', '0', '0', '0', '0', '<']) await key(k);
+  // a leading 0 doesn't count, and it stops at six digits
+  assert.equal(b.messages().filter(m => m.type === 'keypad').at(-1).entry, '60000');
+  // nothing in the chamber: refused
+  await room.webSocketMessage(a, JSON.stringify({type: 'convert'}));
+  assert.equal(a.messages().filter(m => m.type === 'keypad').at(-1).denied, 'empty');
+  // a painting stood in it
+  const pt = ITEM_SPAWNS.find(s => s.type === 'painting');
+  const items = await room.loadItems();
+  Object.assign(items[pt.id], standPose(items[pt.id].art), {holder: null});
+  await room.webSocketMessage(a, JSON.stringify({type: 'convert'}));
+  const msg = b.messages().filter(m => m.type === 'item').at(-1);
+  assert.equal(msg.item.id, pt.id); assert.equal(msg.item.art, 60000); assert.equal(msg.convert.n, 60000);
+  assert.equal(store.get('items')[pt.id].art, 60000);
+  assert.equal(b.messages().filter(m => m.type === 'keypad').at(-1).entry, '');
+  // it can't be taken out while the shutter's down, nor converted again at once
+  await room.webSocketMessage(b, JSON.stringify({type: 'pose', pose: {...at, x: msg.item.x, z: msg.item.z}}));
+  await room.webSocketMessage(b, JSON.stringify({type: 'pickup', id: pt.id}));
+  assert.equal(b.messages().filter(m => m.type === 'item').at(-1).refused, true);
+  for (const k of ['1', '2']) await key(k);
+  await room.webSocketMessage(a, JSON.stringify({type: 'convert'}));
+  assert.equal(a.messages().filter(m => m.type === 'keypad').at(-1).denied, 'busy');
+  // too far from the panel: the keypad does nothing
+  await room.webSocketMessage(a, JSON.stringify({type: 'pose', pose: {...at, x: at.x + 6}}));
+  await new Promise(r => setTimeout(r, 70));
+  const before = b.messages().filter(m => m.type === 'keypad').length;
+  await room.webSocketMessage(a, JSON.stringify({type: 'keypad', k: '3'}));
+  assert.equal(b.messages().filter(m => m.type === 'keypad').length, before);
+});

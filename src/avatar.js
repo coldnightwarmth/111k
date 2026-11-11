@@ -325,13 +325,21 @@ export async function createAvatar(look, {waitForEmotes = false} = {}) {
   let lastPt = -1, lastHand = 0, tail = null;
   const punchCurve = k => Math.max(0, Math.min(1, k / .08, (1 - k) / .3));
   const head = model.getObjectByName('Head');
-  let moving = false, speed = 0, walkBlend = 0, holdBlend = 0, hideHead = false, crowned = false, headParts = null;
+  let moving = false, speed = 0, walkBlend = 0, holdBlend = 0, hideHead = false, crowned = false, headParts = null, shownMode = 1;
+  // they cast a shadow (in the projector's beam: src/cinema.js) and take one
+  model.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
   const partOf = o => { for (let q = o; q && q !== model; q = q.parent) if (/^Drif_/.test(q.name)) return q.name; return ''; };
 
   return {
     root, model, socket, hand: model.getObjectByName('HandR') || model.getObjectByName('Hand.R'),
     handL: model.getObjectByName('HandL') || model.getObjectByName('Hand.L'), look, scale: AVATAR_SCALE, eye: 1.45, pitch: 0,
-    setVisible(v) { model.visible = v; },
+    // hidden (first person) can still leave a shadow: drawn only for the lights that cast them (layer 2)
+    setVisible(v, shadow = false) {
+      const mode = v ? 1 : shadow ? 2 : 0;
+      if (mode === shownMode) return;
+      if ((mode === 2) !== (shownMode === 2)) model.traverse(o => o.layers.set(mode === 2 ? 2 : 0));
+      shownMode = mode; model.visible = mode > 0;
+    },
     head,
     // wearing the crown: their hat comes off for it
     setCrowned(on) {

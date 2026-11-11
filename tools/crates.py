@@ -738,7 +738,7 @@ def read_placed():
     return json.loads(re.search(r'const PLACED = (\[.*?\]);', src, re.S).group(1))
 
 
-SKIP_ROOMS = {0, SC.SUPPLY_ROOM}
+SKIP_ROOMS = {0, SC.SUPPLY_ROOM} | SC.FEATURE_ROOMS     # (the feature rooms get theirs from fixed_crates)
 FLOORS = {'tunnel_floor', 'floor_vct', 'mosaic', 'office_floor', 'safety_paint'}     # the party room (everyone starts there) and the supply room (shelving)
 
 
@@ -863,7 +863,47 @@ def build_scene(meta, mesh, seed=2026, scenes=20, pallets=10, tunnel_pallets=3):
                 stacked += 1
     tunnel_bits(S, r, clusters=26)
     tunnel_pallets_(S, r, tunnel_pallets)
+    fixed_crates(S, r)
     return S, done
+
+
+# ------------------------------------------------------------------ crates that go in particular places
+def frame_point(i, door_x, x, z):
+    """A point in room i's own frame (x across, z toward its back wall) in the world, as the level builder lays
+    rooms out (and src/room-frame.js), and the yaw that lines a piece's x up with the room's."""
+    a = 2 * math.pi * i / 20
+    yaw = math.atan2(math.cos(a), -math.sin(a))
+    o = SC._P(a, SC.ROOM_C, 0) - door_x * SC._T(a)
+    cy, sy = math.cos(yaw), math.sin(yaw)
+    return np.array([o[0] + cy * x + sy * z, 0.0, o[2] - sy * x + cy * z]), yaw
+
+
+# B-20: open crates round the converter room, an egg in most of them (the eggs are src/eggs.js: keep these in step)
+EGG_CRATES = [(2.6, 2.25, 0.25), (2.85, 0.6, math.pi / 2 + 0.1), (-2.85, 0.55, math.pi / 2 - 0.08), (-2.65, -1.05, 1.9),
+              (1.75, 0.95, -0.35), (-1.0, -1.75, 0.5)]
+EGG_ROOM, EGG_DOOR = 19, 1.64
+# B-04: the crate the projector stands on (src/cinema.js CRATE)
+CINEMA_ROOM, CINEMA_DOOR, CINEMA_CRATE = 3, -0.67, (0.55, -2.3)
+
+
+def fixed_crates(S, r):
+    # outside the start room's door, where the generator stood
+    a = 0.045
+    crate_at(S, SC._P(a, 1.95, 0), a + math.pi / 2)
+    # the projector's crate
+    c, yaw = frame_point(CINEMA_ROOM, CINEMA_DOOR, *CINEMA_CRATE)
+    crate_at(S, c, yaw)
+    # the egg crates, lids off (a couple dropped beside them), and some splinters
+    for k, (x, z, turn) in enumerate(EGG_CRATES):
+        c, yaw = frame_point(EGG_ROOM, EGG_DOOR, x, z)
+        crate_at(S, c, yaw + turn, open_=True)
+        if k in (0, 3):
+            q, _ = frame_point(EGG_ROOM, EGG_DOOR, x + (-0.95 if x > 0 else 0.95), z + 0.2)
+            ly = yaw + turn + r.normal(0, 0.4)
+            lay_flat(S, lid(r), q, ly, 'crate')
+            S.shadow(q, ly, 0.68, 0.5, 0.8)
+        q, _ = frame_point(EGG_ROOM, EGG_DOOR, x * 0.8, z * 0.8)
+        scatter_bits(S, q, r, 2, 0.5, ('splinter', 'plank2', 'splinter'))
 
 
 def pallet_stack(S, c, yaw, n, r):

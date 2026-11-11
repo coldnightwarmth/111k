@@ -34,7 +34,7 @@ def plain_room(C, i, door_x, variant, r, lit=False, group=None):
     holes -= {(c, rr) for (c, rr) in holes if c in (3, 8) and rr in (4, 5)}  # keep the light fixtures intact
     P.shell(C.WALLS[i % 3], door_x, opened, holes=holes, exit_live=r.random() < 0.3)
     P.troffer(*TROFFERS[0], lit, name=f'room{i}', group=group, flicker='fluorescent' if group is not None else None)
-    P.troffer(*TROFFERS[1], False)
+    P.troffer(*TROFFERS[1], variant == 'converter', name=f'room{i}b' if variant == 'converter' else None)
     avoid = [(door_x, P.Z0 + 0.7, 0.9)]
     if variant == 'office':
         P.desk(-1.5, 1.6, r.uniform(-0.2, 0.2), r); avoid.append((-1.5, 1.6, 1.0))
@@ -60,6 +60,23 @@ def plain_room(C, i, door_x, variant, r, lit=False, group=None):
         W.box((P.X1 - 0.35, 0.45, 0.6), (0.6, 0.9, 1.8), M['wood'], collide=True)
         P.box((P.X1 - 0.35, 0.96, 0.3), (0.45, 0.25, 0.35), 'white')  # microwave
         avoid += [(-0.5, 1.2, 1.0), (P.X1 - 0.4, 2.4, 0.6), (P.X1 - 0.35, 0.6, 1.0)]
+    elif variant == 'projector':
+        # B-04: a screen on the back wall and a projector on a crate by the door (both added at runtime,
+        # src/cinema.js); the beam's path kept clear, a few folding chairs off to the sides facing the screen
+        for (cx, cz, yw, col) in [(-2.5, 0.2, 0.25, 'slate'), (-2.2, -1.0, 0.1, 'navy'), (2.4, 0.6, -0.3, 'beige'),
+                                  (2.6, -0.8, -0.15, 'slate')]:
+            P.folding_chair(cx, cz, math.pi + yw + r.normal(0, 0.08), color=col)
+            avoid.append((cx, cz, 0.55))
+        avoid += [(0.0, z, 1.9) for z in (-2.2, -1.0, 0.2, 1.4, 2.6)]
+    elif variant == 'board':
+        # B-10: a game board painted on the floor in the middle (src/board.js); shelving round the edges
+        for z in (-1.2, 0.4, 2.0):
+            P.shelving(P.X0 + 0.3, z, math.pi / 2, r); avoid.append((P.X0 + 0.3, z, 0.8))
+        P.shelving(1.0, 2.6, 0, r); avoid.append((1.0, 2.6, 0.8))
+        avoid += [(x, z, 1.35) for x in (-1.1, 0.0, 1.1) for z in (-1.1, 0.0, 1.1)]
+    elif variant == 'converter':
+        # B-20: the converter machine on the back wall (src/converter.js) and egg crates (tools/crates.py)
+        avoid += [(x, 2.2, 1.3) for x in (-1.8, -0.6, 0.6)] + [(-0.6, 1.0, 1.4)]
     else:  # empty: just a couple of fallen tiles and whatever got left
         for _ in range(r.integers(1, 4)):
             W.box((r.uniform(-2.5, 2.5), 0.012, r.uniform(-1.5, 2.5)), (0.6, 0.02, 0.6), M['ceiling_tile'],

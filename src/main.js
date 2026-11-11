@@ -11,6 +11,12 @@ import {createChatUI, createBubble} from './chat.js';
 import {createControls} from './controls.js';
 import {createItems, ITEM_NAMES, simulateFall} from './items.js';
 import {createMachine} from './machine.js';
+import {createConverter} from './converter.js';
+import {createCinema, ROOM as CINEMA_ROOM} from './cinema.js';
+import {createEggs} from './eggs.js';
+import {createBoard} from './board.js';
+import {roomFrame, DOOR_X} from './room-frame.js';
+import {CONVERTER_COLLIDER, PANEL as CONVERTER_PANEL, USE_RANGE as CONVERTER_RANGE, FRAME as B20, MX as B20_MX, FRONT as B20_FRONT, inChamber} from './converter-spec.js';
 import {createShelves, SHELF_COLLIDERS} from './shelves.js';
 import {loadCrates, addCrates, CRATE_COLLIDERS} from './crates.js';
 import {mergeGeometries} from '../vendor/three/BufferGeometryUtils.js';
@@ -63,6 +69,8 @@ canvas.addEventListener('webglcontextlost', e => { e.preventDefault(); });
 canvas.addEventListener('webglcontextrestored', () => location.reload());
 renderer.setPixelRatio(Math.min(devicePixelRatio, lowPower ? 1.5 : 2));
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
+// shadows: only the projector's in B-04 casts any, and only while you're near it (src/cinema.js asks for each one)
+renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFShadowMap; renderer.shadowMap.autoUpdate = false;
 renderer.toneMappingExposure = Number(params.get('exposure')) || 1.0;
 const scene = new THREE.Scene();
 scene.background = new THREE.Color('#050506');
@@ -154,7 +162,7 @@ async function start() {
     camera.far = fog.far + 5; camera.updateProjectionMatrix();
   }
   const avatarLights = createAvatarLights(level.meta, scene);
-  level.meta.colliders.push(MACHINE_COLLIDER, ...SHELF_COLLIDERS, ...CRATE_COLLIDERS);   // the lap timer, the supply shelves and the crates stand in the level too
+  level.meta.colliders.push(MACHINE_COLLIDER, CONVERTER_COLLIDER, ...SHELF_COLLIDERS, ...CRATE_COLLIDERS);   // the lap timer, the supply shelves and the crates stand in the level too
   const collider = createCollider(level.meta);
   // a door's sounds come from the middle of its leaf
   const doors = createDoors(level, collider, (what, d, k) => {
@@ -172,6 +180,17 @@ async function start() {
   }
   const shelves = createShelves(THREE, scene, mergeGeometries);
   hits.addSolid(shelves);
+  // the converter in B-20: takes paint like the lap timer (its paint borrows the back wall's light beside it)
+  const converter = createConverter(scene);
+  const cinema = createCinema(renderer, scene, sfx);
+  createEggs(scene);
+  try { createBoard(level, hits, scene); } catch (e) { console.warn('board:', e); reportError(e, 'board'); }
+  const B04 = roomFrame(CINEMA_ROOM, DOOR_X[CINEMA_ROOM]);
+  const inB04 = p => { const q = B04.toRoom(p.x, p.z); return Math.abs(q.x) < 3.5 && q.z > -3.05 && q.z < 3; };
+  {
+    const w = B20.toWorld(B20_MX + 1.7, B20_FRONT), into = B20.toWorld(B20_MX + 1.7, B20_FRONT + 1), o = new THREE.Vector3(w.x, 1.3, w.z);
+    hits.addPaintable(converter.body, hits.lightAt(o, new THREE.Vector3(into.x - w.x, 0, into.z - w.z).normalize(), 3));
+  }
   // the painting crates: they carry the level's own lightmap coordinates, so paint on them is lit like the walls
   const crates = addCrates(await cratesReady, level, scene);
   // culling (src/cull.js): the level's chunks and the crates' are fixed, so where each is is worked out once
@@ -199,7 +218,7 @@ async function start() {
   if (crates) hits.addPaintable(crates);
   // what blocks flashlight beams: the level (doors included), the lap timer and the shelving
   for (const m of level.meshes) if (!m.material.transparent) castsBeamShadow(m);
-  castsBeamShadow(machine.root); castsBeamShadow(shelves);
+  castsBeamShadow(machine.root); castsBeamShadow(shelves); castsBeamShadow(converter.root); castsBeamShadow(cinema.root);
   if (crates) crates.traverse(o => { if (o.isMesh && !o.material.transparent) castsBeamShadow(o); });
   const beamShadows = createBeamShadows(renderer, scene);
   const cleaning = createCleaning({level, scene, hits});
@@ -248,14 +267,13 @@ async function start() {
     if (air) b.fall = Math.min(b.fall, vy);
     if (air && !b.air) {                                      // off the ground
       if (lift > .02) {
-        if (now - b.landAt < 220) b.chain++;                   // straight back up: a hop (its sound's at the touchdown)
-        else { b.chain = 0; sfx.play('jump', {at, key}); }
+        b.chain = now - b.landAt < 220 ? b.chain + 1 : 0;      // straight back up: a hop (sounds like any jump)
+        sfx.play('jump', {at, key});
       }
       b.fall = 0;
     } else if (!air && b.air) {                               // down again
       const hard = Math.min(1.5, Math.max(.35, -b.fall / 4));
-      if (b.chain) sfx.play('hop', {at, key, gain: .9, rate: 1 + Math.min(b.chain, 12) * .015});
-      else sfx.play('land', {at, key, gain: hard, rate: 1.08 - hard * .1});
+      sfx.play('land', {at, key, gain: hard, rate: 1.08 - hard * .1});
       b.landAt = now; b.d = 0;
     } else if (!air) {
       if (hs < .4) b.d = Math.min(b.d, .35);                  // standing: the first step comes soon after setting off
@@ -460,7 +478,7 @@ async function start() {
       if (!paintingMats.has(key)) paintingMats.set(key, new THREE.MeshStandardMaterial({map, transparent: true, depthWrite: false, vertexColors: true,
         roughness: .82, metalness: 0, flatShading: true, polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -4}));
       const b = createBatch(paintingMats.get(key), 2000);
-      b.mesh.renderOrder = layer === null ? 3 : layerOrder(layer); items.items.get(pi).model.add(b.mesh);   // (splats: 3; tags by layer)
+      b.mesh.renderOrder = layer === null ? 3 : layerOrder(layer); b.mesh.userData.keep = true; items.items.get(pi).model.add(b.mesh);   // (splats: 3; tags by layer)
       paintingBatches.set(k, b);
     }
     return paintingBatches.get(k);
@@ -741,8 +759,18 @@ async function start() {
   function lookTarget() {
     camera.updateMatrixWorld();
     const o = camera.getWorldPosition(new THREE.Vector3()), d = camera.getWorldDirection(new THREE.Vector3());
-    return items.target(player, o, d, dist => { const w = hits.raycast(o, d, dist); return !w || w.distance > dist - .05; });
+    const t = items.target(player, o, d, dist => { const w = hits.raycast(o, d, dist); return !w || w.distance > dist - .05; });
+    if (t && converter.busy && inChamber(t.state.x, t.state.y, t.state.z)) return null;      // (behind the converter's shutter)
+    return t;
   }
+  // a key on the converter's keypad (or its big button: 'go') under the crosshair, in reach
+  function converterKey() {
+    if (Math.hypot(player.x - CONVERTER_PANEL.x, player.z - CONVERTER_PANEL.z) > CONVERTER_RANGE - .1) return null;
+    camera.updateMatrixWorld();
+    const o = camera.getWorldPosition(new THREE.Vector3()), d = camera.getWorldDirection(new THREE.Vector3());
+    return converter.aimed(o, d, (boom ? camDist : 0) + 2.6);
+  }
+  const CONVERTER_AT = {...CONVERTER_PANEL, y: 1.3};
   // Picked up: in your hand this frame, not after the server's answered (it says yes, as a rule; if not, it
   // goes back where it was: src/items.js predict)
   function grab() {
@@ -773,6 +801,13 @@ async function start() {
   function primary() {
     if (chat.open || !emoteMenu.hidden) return;
     if (onButton()) { machine.press(); sfx.play('button', {at: MACHINE_AT}); network.send({type: 'button'}); learn('button'); return; }
+    const key = converterKey();
+    if (key) {
+      converter.pressKey(key); learn('keypad');
+      if (key === 'go') { sfx.play('button', {at: CONVERTER_AT}); network.send({type: 'convert'}); }
+      else { sfx.play('button', {at: CONVERTER_AT, rate: 1.7, gain: .45}); network.send({type: 'keypad', k: key}); }
+      return;
+    }
     const h = held();
     if (!h && !lookTarget()) {
       const door = doorTarget();
@@ -1560,7 +1595,15 @@ async function start() {
     },
     onPose: m => applyPose(m.id, m.pose, m.time),
     onLeave: id => removePeer(id),
-    onItem: (it, fall, path, refused) => {
+    onItem: (it, fall, path, refused, msg) => {
+      // the converter's done its work on a painting: the shutter comes down, then the new picture goes on
+      if (msg?.convert) {
+        const n = msg.convert.n, c = {x: it.x, y: it.y, z: it.z};
+        sfx.play('doorShut', {at: CONVERTER_AT, rate: .7, gain: .7});
+        if (msg.convert.by === network.id) chat.record(`converting to #${n}...`, {system: true});
+        converter.start(n, () => items.update(it, null, null, false, false), () => items.artNear(c));
+        return;
+      }
       const prev = items.items.get(it.id)?.state, before = prev?.holder;
       // what others did with it (yours made its sound as you did it)
       if (prev && !refused) {
@@ -1654,6 +1697,10 @@ async function start() {
           say(`${at} lost the crown${how}`);
         } else if (m.event === 'win') { say(`${who} won the king's crown!`); kothWonAt = performance.now(); }
         else if (m.event === 'cancel') say('we wait another day for our king...');
+      } else if (m.type === 'keypad') {
+        converter.setEntry(m.entry, {k: m.by && m.by !== network.id ? m.k : null, denied: m.denied || null});
+        if (m.by && m.by !== network.id) sfx.play('button', {at: CONVERTER_AT, rate: 1.7, gain: .45});
+        if (m.denied) sfx.play('raceCancel', {at: CONVERTER_AT, gain: .5});
       } else if (m.type === 'race') {
         machine.setRace(m.race);
         if (m.by && m.by !== network.id) { machine.press(); sfx.play('button', {at: MACHINE_AT}); }
@@ -1699,8 +1746,20 @@ async function start() {
   });
 
   // --------------------------------------------------------- flicker
+  // each flickering group's lamps (for its tick and buzz, from the nearest one)
+  const groupLamps = [0, 1, 2, 3].map(g => (level.meta.lights || []).filter(l => l.group === g).map(l => ({x: l.pos[0], y: l.pos[1], z: l.pos[2]})));
+  const lastK = [1, 1, 1, 1], tickAt = [0, 0, 0, 0];
+  function flickerSound(g, delta, now) {
+    if (delta < .22 || now - tickAt[g] < 70) return;
+    let best = null, bd = 16;
+    for (const p of groupLamps[g]) { const d = Math.hypot(p.x - camera.position.x, p.y - camera.position.y, p.z - camera.position.z); if (d < bd) { bd = d; best = p; } }
+    if (!best) return;
+    tickAt[g] = now;
+    sfx.play('flicker', {at: best, gain: Math.min(1, .35 + delta * .8), rate: .94 + Math.random() * .12});
+  }
   function updateLights(now) {
     const k = flickers.map(f => f.update(now));
+    for (let g = 0; g < 4; g++) { flickerSound(g, Math.abs(k[g] - lastK[g]), now); lastK[g] = k[g]; }
     lighting.flickerK.value.set(k[0], k[1], k[2], k[3]);
     lens.forEach((m, g) => m?.color.setScalar(.15 + .85 * k[g]));
     const blink = Math.floor(now / 530) % 2, slow = Math.floor(now / 1700) % 3;
@@ -1915,7 +1974,7 @@ async function start() {
       meView.root.visible = false;
     } else {
       camera.position.set(player.x, player.y, player.z);
-      me.setVisible(false);
+      me.setVisible(false, cinema.near(camera.position));
       // your punch, seen from inside your head
       meView.root.visible = player.punchTime >= 0;
       if (meView.root.visible) {
@@ -2086,7 +2145,10 @@ async function start() {
     const pushable = !frozen && onButton();
     machine.highlight(pushable);
     machine.update(dt);
-    const t = !h && !frozen && !pushable ? lookTarget() : null;
+    const keyAim = !frozen && !pushable ? converterKey() : null;
+    converter.highlight(keyAim);
+    converter.update(dt);
+    const t = !h && !frozen && !pushable && !keyAim ? lookTarget() : null;
     items.highlight(t ? t.state.id : null);
     // a painting in your sights: its number (unless the speedometer's up there)
     const artNo = t?.state.type === 'painting' && !speedoShown ? t.state.art : null;
@@ -2097,7 +2159,8 @@ async function start() {
     const type = h?.state.type;
     // what you can do right now, leaving out whatever you've already done at least once
     const drop = ['drop', 'right-click: drop'];
-    const parts = isTouch ? [] : pushable ? [['button', 'click: push the button']] : doorAim !== null ? [['door', 'click: close the door']]
+    const parts = isTouch ? [] : pushable ? [['button', 'click: push the button']] : keyAim ? [['keypad', keyAim === 'go' ? 'click: convert the canvas in the chamber' : 'click: press']]
+      : doorAim !== null ? [['door', 'click: close the door']]
       : h ? (type === 'flashlight' ? [['flashlight', `click: ${h.state.on ? 'turn off' : 'turn on'}`], drop]
         : type === 'paintball' ? [['fire', 'click: fire'], drop]
         : type === 'marker' ? [['draw', 'hold click: draw'], ['paints', 'esc or tab: pick a colour'], drop]
@@ -2115,7 +2178,7 @@ async function start() {
     paintLabel.hidden = type !== 'paintball' && type !== 'marker';
     const galleryLabel = type === 'paintball' || type === 'marker' ? 'paint' : 'tags';
     if (btnGallery.textContent !== galleryLabel) btnGallery.textContent = galleryLabel;
-    const act = pushable ? 'push' : doorAim !== null ? 'close' : h ? (type === 'flashlight' ? (h.state.on ? 'light off' : 'light on')
+    const act = pushable ? 'push' : keyAim ? 'press' : doorAim !== null ? 'close' : h ? (type === 'flashlight' ? (h.state.on ? 'light off' : 'light on')
       : type === 'paintball' ? 'fire' : type === 'marker' ? 'draw' : type === 'bucket' ? 'scrub' : type === 'crown' ? 'start' : type === 'painting' ? 'place' : 'spray') : t ? 'grab' : 'punch';
     if (btnAct.textContent !== act) btnAct.textContent = act;
     document.body.classList.toggle('can-grab', !!t);
@@ -2125,6 +2188,7 @@ async function start() {
 
     avatarLights.update(camera.position.x, camera.position.z);
     updateLights(now);
+    cinema.update(dt, camera.position, inB04(camera.position));
     renderer.render(scene, camera);
   };
   // A thrown error mustn't stop the loop for good (that freezes the game): report it (once per kind)
@@ -2157,7 +2221,7 @@ async function start() {
     // anyone puts a painting down (it never touches the page's own thread)
     (window.requestIdleCallback || (f => setTimeout(f, 1500)))(() => warmPhysics(), {timeout: 4000});
   }
-  window.__111k = {scene, camera, player, peers, network, renderer, items, controls, hits, doors, me, meView, vertical, sfx,
+  window.__111k = {scene, camera, player, peers, network, renderer, items, controls, hits, doors, me, meView, vertical, sfx, converter, cinema,
     voice, cleaning, mimic, ink, inkTarget: () => inkTarget(), inkStrokes: () => ink.marks().reduce((s, k) => s.add(k.id), new Set()).size, inkHosts: () => [...new Set(ink.marks().map(k => k.batch.mesh.parent?.type || '?'))], planPlace, settlePaintings, culler, cullNow: () => { cullStaticNow(); items.frame(frameArgs(0)); }, get cleanTarget() { return cleanTarget; }, splatMarks, sprayMarks, addSplat, doorBatches, setView: v => { thirdPerson = v; }, primary, secondary, shoot, spray, choosePiece, choosePaint, toggleGallery, get pieces() { return pieces; }};
 }
 

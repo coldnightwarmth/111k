@@ -176,6 +176,7 @@ export class Room {
     this.send(server, marksMessage(await this.loadMarks()));
     this.send(server, {type: 'race', race: publicRace(await this.loadRace(), now)});
     this.send(server, {type: 'koth', koth: publicKoth(await this.loadKoth(), now)});
+    this.send(server, {type: 'keypad', entry: this.converter?.entry || ''});
     this.send(server, {type: 'emotes', config: await this.loadEmotes()});
     this.send(server, {type: 'graffiti', hidden: hiddenPieces(await this.loadReview())});
     await this.scheduleAlarm();
@@ -188,7 +189,8 @@ export class Room {
     const now = Date.now();
     const items = await this.loadItems(), marks = await this.loadMarks();
     const race = await this.loadRace(), koth = await this.loadKoth();
-    const result = handleMessage(player, data, now, {items, marks, race, koth, players: () => this.players()});
+    this.converter ||= {entry: '', busyUntil: 0, id: null};     // (the keypad: kept while the room's awake)
+    const result = handleMessage(player, data, now, {items, marks, race, koth, converter: this.converter, players: () => this.players()});
     if (result.close) { ws.close(1009, result.close); return; }
     if (result.changed) ws.serializeAttachment(player);
     for (const {to, msg} of result.out) {

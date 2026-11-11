@@ -425,6 +425,23 @@ sound('chat', 'chat', 'someone says something', {
   c: {label: 'tick', make: r => knock(r, [[1800, .012, .6], [3100, .006, .3]], {noise: 3000, hard: .2})},
 });
 
+// ---- a fluorescent lamp flickering: the starter's tick and a short buzz of the ballast as the tube catches
+function flick(r, {buzz = .09, tick = 1, f = 120}) {
+  const x = buf(buzz + .06);
+  ring(x, 2600 * v(r, .15), .006, .35 * tick, 0, r);                              // the starter's contacts
+  add(x, burst(.02, r, 'bp', 3800 * v(r, .2), 1.2, .0005, .004), 0, .4 * tick);
+  const z = buf(buzz);                                                            // mains buzz, a little rough
+  for (let i = 0; i < z.length; i++) { const t = i / RATE; z[i] = Math.sign(Math.sin(TAU * f * t)) * .5 + Math.sin(TAU * f * 2 * t) * .3 + (r() * 2 - 1) * .15; }
+  filter(z, 'bp', 700 * v(r, .2), .8); env(z, .004, buzz * .45);
+  add(x, z, .004, .55);
+  return done(x, .7);
+}
+sound('flicker', 'ambience', 'a lamp flickering', {
+  a: {label: 'tick + buzz', make: r => flick(r, {})},
+  b: {label: 'tick', make: r => flick(r, {buzz: .03})},
+  c: {label: 'buzz', make: r => flick(r, {tick: .3, buzz: .16})},
+});
+
 // ---- the tunnel, always there (looped; the end fades into the start)
 function loop(make, len = 8) {
   const fade = 1, x = make(len + fade), out = buf(len), n = out.length, f = Math.round(fade * RATE);

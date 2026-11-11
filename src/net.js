@@ -77,7 +77,7 @@ export function connectRoom({url, onState, onPose, onLeave, onChat, onStatus, on
       else if (m.type === 'pose') onPose(m);
       else if (m.type === 'leave') onLeave(m.id);
       else if (m.type === 'chat') onChat(m);
-      else if (m.type === 'item') onItem?.(m.item, m.fall, m.path, m.refused === true);
+      else if (m.type === 'item') onItem?.(m.item, m.fall, m.path, m.refused === true, m);
       else if (m.type === 'punch') onPunch?.(m);
       else onMessage?.(m);
     };
