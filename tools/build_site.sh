@@ -62,6 +62,8 @@ cat > _site/_headers <<'EOF'
   Cache-Control: public, max-age=604800, immutable
 /assets/env/*
   Cache-Control: public, max-age=604800, immutable
+/assets/mons/*
+  Cache-Control: public, max-age=86400, stale-while-revalidate=604800
 /assets/paintings/*
   Cache-Control: public, max-age=86400, stale-while-revalidate=604800
 /assets/avatars/*
