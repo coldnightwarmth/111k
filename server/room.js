@@ -3,7 +3,7 @@
 // hibernation "attachment" in Cloudflare), so the room survives the Durable
 // Object being evicted between messages. The only shared state is the held
 // items, which the caller keeps (Durable Object storage in production).
-import {INK_HOST, INK_PER_S, MAX_INK_STROKES, MAX_STROKE_PTS, MAX_INK_PTS, cleanInkPoints, SETTLE_BYTES, SETTLE_MAX, SETTLE_PER_S, MAG_SIZE, RELOAD_MS, CROWN_HITS, CROWN_HIT_WINDOW_MS, CHAT_INTERVAL_MS, CHAT_TTL_MS, POSE_INTERVAL_MS, PICKUP_RANGE, PUNCH_RANGE, PUNCH_COOLDOWN_MS,
+import {INK_HOST, INK_PER_S, MAX_INK_STROKES, MAX_STROKE_PTS, MAX_INK_PTS, INK_PART_PTS, packInk, cleanInkPoints, SETTLE_BYTES, SETTLE_MAX, SETTLE_PER_S, MAG_SIZE, RELOAD_MS, CROWN_HITS, CROWN_HIT_WINDOW_MS, CHAT_INTERVAL_MS, CHAT_TTL_MS, POSE_INTERVAL_MS, PICKUP_RANGE, PUNCH_RANGE, PUNCH_COOLDOWN_MS,
   SHOT_INTERVAL_MS, SPRAY_INTERVAL_MS, SPRAY_RANGE, MAX_SPLATS, MAX_SPRAYS, SPLAT_LIFE_MS, ART_MAX,
   sanitizeChat, sanitizePose, radioLink, radioKey, RADIO_MAX_MS, samePose, cleanItem, cleanPath, sanitizeLook, sanitizeName, cleanSplat, cleanSpray, splatId, sprayId} from '../src/protocol.js';
 import {ITEM_SPAWNS} from '../src/world-items.js';
@@ -80,8 +80,52 @@ export function pruneSplats(marks, now) {
 export const marksMessage = (marks, now = Date.now()) => ({type: 'marks',
   splats: marks.splats.filter(s => now - s.at < SPLAT_LIFE_MS).map(({at, ...s}) => ({...s, age: Math.max(0, now - at)})),
   sprays: marks.sprays, erased: marks.erased || [], ink: marks.ink || []});
+// the same for someone joining, in messages under a WebSocket's 1 MiB: the marks, then the ink in parts (packed),
+// which they put up once they've all come (inkParts: how many)
+export function marksMessages(marks, now = Date.now()) {
+  const parts = [];
+  let part = [], n = 0;
+  for (const s of marks.ink || []) {
+    if (n + s.pts.length > INK_PART_PTS && part.length) { parts.push(part); part = []; n = 0; }
+    part.push({id: s.id, h: s.h, c: s.c, t: s.t, p: packInk(s.pts)}); n += s.pts.length;
+  }
+  if (part.length) parts.push(part);
+  return [{...marksMessage(marks, now), ink: [], inkParts: parts.length}, ...parts.map((ink, i) => ({type: 'inkpart', i, n: parts.length, ink}))];
+}
 
 const flat = (a, b) => Math.hypot(a.x - b.x, a.z - b.z);
+
+// a stroke's bounds (kept with it, made again when it's grown), and the one to let go when there's too much ink:
+// among the oldest half, the one with the fewest others near it (within NEAR of its bounds, on the same surface),
+// the oldest of those
+const inkBounds = new WeakMap();
+function boundsOf(s) {
+  let b = inkBounds.get(s);
+  if (b && b.n === s.pts.length) return b;
+  b = {n: s.pts.length, lo: [Infinity, Infinity, Infinity], hi: [-Infinity, -Infinity, -Infinity]};
+  for (const q of s.pts) for (let k = 0; k < 3; k++) { if (q[k] < b.lo[k]) b.lo[k] = q[k]; if (q[k] > b.hi[k]) b.hi[k] = q[k]; }
+  inkBounds.set(s, b);
+  return b;
+}
+const NEAR = .35;
+export function loneliest(ink, keep) {
+  const span = Math.max(1, Math.ceil(ink.length / 2));
+  let best = 0, bestN = Infinity;
+  for (let i = 0; i < span; i++) {
+    const s = ink[i];
+    if (s === keep) continue;
+    const a = boundsOf(s);
+    let n = 0;
+    for (const o of ink) {
+      if (o === s || o.h !== s.h) continue;
+      const b = boundsOf(o);
+      if (a.lo[0] - NEAR <= b.hi[0] && b.lo[0] - NEAR <= a.hi[0] && a.lo[1] - NEAR <= b.hi[1] && b.lo[1] - NEAR <= a.hi[1]
+        && a.lo[2] - NEAR <= b.hi[2] && b.lo[2] - NEAR <= a.hi[2] && ++n >= bestN) break;
+    }
+    if (n < bestN) { best = i; bestN = n; if (!n) break; }
+  }
+  return best;
+}
 
 // Put an item down where a player stands (or stood).
 function dropAt(item, pose, dx = 0, dz = 0, y = null) {
@@ -283,10 +327,11 @@ function handle(player, data, now, room) {
     if (!stroke) { stroke = {id, h, c, t: now, pts: []}; ink.push(stroke); }
     stroke.at = now;
     stroke.pts.push(...pts.slice(0, Math.max(0, MAX_STROKE_PTS - stroke.pts.length)));
-    // too much ink: the oldest strokes go (everyone's told)
+    // too much ink: a stroke goes (everyone's told): not the newest, and the loneliest of the older ones first
+    // (on its own, away from any others: the detailed drawings, lots of strokes together, are kept longest)
     let total = ink.reduce((t, s) => t + s.pts.length, 0);
     while (ink.length > MAX_INK_STROKES || total > MAX_INK_PTS) {
-      const old = ink.shift(); total -= old.pts.length;
+      const k = loneliest(ink, stroke), old = ink.splice(k, 1)[0]; total -= old.pts.length;
       out.push({to: 'all', msg: {type: 'erase', kind: 'ink', id: old.id, by: ''}});
     }
     return {out, changed: true, marksChanged: true};

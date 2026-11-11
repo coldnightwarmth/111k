@@ -90,8 +90,8 @@ test('flashlights: pick up, toggle, drop, punched out of your hand', async () =>
   const {ITEM_SPAWNS} = await import('../../src/world-items.js');
   const {room, sockets, ctx} = makeRoom();
   const store = new Map();
-  ctx.storage.get = async k => store.get(k);
-  ctx.storage.put = async (k, v) => { store.set(k, structuredClone(v)); };
+  ctx.storage.get = async k => (Array.isArray(k) ? new Map(k.map(x => [x, store.get(x)])) : store.get(k));
+  ctx.storage.put = async (k, v) => { if (typeof k === 'object') for (const [kk, vv] of Object.entries(k)) store.set(kk, structuredClone(vv)); else store.set(k, structuredClone(v)); };
   await join(room, S1); await join(room, S2);
   const [a, b] = sockets;
   const spawn = ITEM_SPAWNS[0];
@@ -132,8 +132,8 @@ test('a refresh keeps what you hold (not the crown); items go home if the last p
   const {ITEM_SPAWNS} = await import('../../src/world-items.js');
   const {room, sockets, ctx} = makeRoom();
   const store = new Map();
-  ctx.storage.get = async k => store.get(k);
-  ctx.storage.put = async (k, v) => { store.set(k, structuredClone(v)); };
+  ctx.storage.get = async k => (Array.isArray(k) ? new Map(k.map(x => [x, store.get(x)])) : store.get(k));
+  ctx.storage.put = async (k, v) => { if (typeof k === 'object') for (const [kk, vv] of Object.entries(k)) store.set(kk, structuredClone(vv)); else store.set(k, structuredClone(v)); };
   ctx.storage.delete = async k => store.delete(k);
   await join(room, S1);
   const spawn = ITEM_SPAWNS.find(s => s.type !== 'crown'), crown = ITEM_SPAWNS.find(s => s.type === 'crown');
@@ -186,8 +186,8 @@ test('paintball and spray: holder checks, marks kept and sent to newcomers, hits
   const {ITEM_SPAWNS} = await import('../../src/world-items.js');
   const {room, sockets, ctx} = makeRoom();
   const store = new Map();
-  ctx.storage.get = async k => store.get(k);
-  ctx.storage.put = async (k, v) => { store.set(k, structuredClone(v)); };
+  ctx.storage.get = async k => (Array.isArray(k) ? new Map(k.map(x => [x, store.get(x)])) : store.get(k));
+  ctx.storage.put = async (k, v) => { if (typeof k === 'object') for (const [kk, vv] of Object.entries(k)) store.set(kk, structuredClone(vv)); else store.set(k, structuredClone(v)); };
   await join(room, S1); await join(room, S2);
   const [a, b] = sockets;
   const idA = a.messages()[0].id, idB = b.messages()[0].id;
@@ -626,8 +626,8 @@ test('paintings: hung on a nail or settled by physics, with the tumble passed on
 test('emote settings: saved from /anim, cleaned, sent to everyone here and to newcomers', async () => {
   const {room, sockets, ctx} = makeRoom();
   const store = new Map();
-  ctx.storage.get = async k => store.get(k);
-  ctx.storage.put = async (k, v) => { store.set(k, structuredClone(v)); };
+  ctx.storage.get = async k => (Array.isArray(k) ? new Map(k.map(x => [x, store.get(x)])) : store.get(k));
+  ctx.storage.put = async (k, v) => { if (typeof k === 'object') for (const [kk, vv] of Object.entries(k)) store.set(kk, structuredClone(vv)); else store.set(k, structuredClone(v)); };
   await join(room, S1);
   const first = sockets[0].messages().find(m => m.type === 'emotes');
   assert.ok(first && Array.isArray(first.config.off), 'a newcomer gets the settings');
@@ -646,8 +646,8 @@ test('emote settings: saved from /anim, cleaned, sent to everyone here and to ne
 test('graffiti review: saved from /graffiti, cleaned, removed pieces sent to everyone here and to newcomers', async () => {
   const {room, sockets, ctx} = makeRoom();
   const store = new Map();
-  ctx.storage.get = async k => store.get(k);
-  ctx.storage.put = async (k, v) => { store.set(k, structuredClone(v)); };
+  ctx.storage.get = async k => (Array.isArray(k) ? new Map(k.map(x => [x, store.get(x)])) : store.get(k));
+  ctx.storage.put = async (k, v) => { if (typeof k === 'object') for (const [kk, vv] of Object.entries(k)) store.set(kk, structuredClone(vv)); else store.set(k, structuredClone(v)); };
   await join(room, S1);
   assert.deepEqual(sockets[0].messages().find(m => m.type === 'graffiti').hidden, [], 'nothing is removed to start with');
   const body = JSON.stringify({pieces: {tu_loop: {s: 'remove'}, pl_walmart: {s: 'kern', note: 'R and T touch'}, 'bad name!': {s: 'remove'},
@@ -845,8 +845,8 @@ test('the converter: keypad, a painting in the chamber, convert, busy', async ()
   const {PANEL, standPose} = await import('../../src/converter-spec.js');
   const {room, sockets, ctx} = makeRoom();
   const store = new Map();
-  ctx.storage.get = async k => store.get(k);
-  ctx.storage.put = async (k, v) => { store.set(k, structuredClone(v)); };
+  ctx.storage.get = async k => (Array.isArray(k) ? new Map(k.map(x => [x, store.get(x)])) : store.get(k));
+  ctx.storage.put = async (k, v) => { if (typeof k === 'object') for (const [kk, vv] of Object.entries(k)) store.set(kk, structuredClone(vv)); else store.set(k, structuredClone(v)); };
   await join(room, S1); await join(room, S2);
   const [a, b] = sockets;
   assert.equal(a.messages().find(m => m.type === 'keypad').entry, '');
@@ -970,4 +970,48 @@ test('someone gone quiet (no word, not even a ping, for 20 s) is let go: everyon
   const before = a.messages().length;
   await room.webSocketClose(b);
   assert.equal(a.messages().filter(m => m.type === 'leave').length, a.messages().slice(0, before).filter(m => m.type === 'leave').length);
+});
+
+test('ink: kept apart and packed, sent to a joiner in parts, and the loneliest strokes go first', async () => {
+  const {marksMessages, loneliest, freshMarks} = await import('../room.js');
+  const {packInk, unpackInk, INK_PART_PTS} = await import('../../src/protocol.js');
+  const pt = (x, y, z) => [x, y, z, 0, 0, 1, .25, .5];
+  const q = [pt(12.345, 1.2, -3.456)];
+  assert.deepEqual(unpackInk(packInk(q)), q);
+  // lots of ink: in parts, each a fair size, all of it there
+  const marks = freshMarks();
+  for (let i = 0; i < 60; i++) marks.ink.push({id: 'a:' + i, h: 'w', c: 1, t: i, pts: Array.from({length: 500}, (_, k) => pt(i, 1, k / 100))});
+  const msgs = marksMessages(marks);
+  assert.equal(msgs[0].type, 'marks'); assert.equal(msgs[0].ink.length, 0); assert.equal(msgs[0].inkParts, msgs.length - 1);
+  assert.ok(msgs.length > 2);
+  for (const m of msgs.slice(1)) assert.ok(JSON.stringify(m).length < 900 * 1024, 'a part under 1 MiB');
+  assert.equal(msgs.slice(1).reduce((n, m) => n + m.ink.length, 0), 60);
+  // the loneliest of the older half goes: a cluster of three, a stroke on its own, then newer ones
+  const s = (id, x) => ({id, h: 'w', pts: [pt(x, 1, 0), pt(x + .2, 1, 0)]});
+  const ink = [s('c1', 0), s('c2', .3), s('alone', 20), s('c3', .6), s('n1', 40), s('n2', 40.3), s('n3', 40.6), s('n4', 41)];
+  assert.equal(ink[loneliest(ink, null)].id, 'alone');
+  // with nothing on its own, the oldest
+  const all = [s('a', 0), s('b', .1), s('c', .2), s('d', .3)];
+  assert.equal(all[loneliest(all, null)].id, 'a');
+});
+
+test('ink is kept across the room going to sleep: packed in chunks, all of it back', async () => {
+  const {room, ctx} = makeRoom();
+  const store = new Map();
+  ctx.storage.get = async k => (Array.isArray(k) ? new Map(k.map(x => [x, store.get(x)])) : store.get(k));
+  ctx.storage.put = async (k, v) => { if (typeof k === 'object') for (const [kk, vv] of Object.entries(k)) store.set(kk, structuredClone(vv)); else store.set(k, structuredClone(v)); };
+  ctx.storage.delete = async k => { for (const x of [].concat(k)) store.delete(x); };
+  const marks = await room.loadMarks();
+  const pt = (x, k) => [x, 1.5, k / 1000, 0, 0, 1, .5, .25];
+  for (let i = 0; i < 120; i++) marks.ink.push({id: 'aaaaaaaaaaaaaaaa:' + i, h: 'w', c: 0xff0000, t: 1000 + i, pts: Array.from({length: 500}, (_, k) => pt(i / 10, k))});
+  await room.saveMarks();
+  assert.ok(store.get('inkChunks') >= 2, 'in more than one chunk');
+  const again = new Room(ctx);
+  const back = await again.loadMarks();
+  assert.equal(back.ink.length, 120);
+  assert.deepEqual(back.ink[37].pts[123], pt(3.7, 123));
+  // fewer afterwards: the spare chunks go
+  marks.ink.splice(10);
+  await room.saveMarks();
+  assert.equal(store.get('inkChunks'), 1); assert.equal(store.has('ink1'), false);
 });

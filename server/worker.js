@@ -1,12 +1,13 @@
 // Cloudflare Worker + Durable Object for the shared hangout (free tier).
 // One Durable Object instance ("public-v1") holds every socket. Hibernating
 // WebSockets plus automatic ping/pong mean an idle room costs nothing.
-import {INACTIVE_MS, IDLE_RESET_MS, MAX_PLAYERS} from '../src/protocol.js';
-const QUIET_MS = 20000, QUIET_CHECK_MS = 7000;     // let go after this long without a word (pages ping every 6 s)
+import {INACTIVE_MS, IDLE_RESET_MS, MAX_PLAYERS, packInk, unpackInk} from '../src/protocol.js';
+const QUIET_MS = 20000, QUIET_CHECK_MS = 7000;
+const INK_CHUNK_PTS = 40000;      // points to a stored chunk (packed as 32-bit numbers: about 1.3 MB, under a value's 2 MiB)     // let go after this long without a word (pages ping every 6 s)
 import {cleanEmoteConfig} from '../src/emotes.js';
 import {cleanReview, hiddenPieces} from '../src/review.js';
 import {freshRace, publicRace} from '../src/race.js';
-import {handleMessage, newPlayer, snapshot, freshItems, freshMarks, validItems, releaseItems, letGo, validMarks, marksMessage, itemsAtSpawn,
+import {handleMessage, newPlayer, snapshot, freshItems, freshMarks, validItems, releaseItems, letGo, validMarks, marksMessage, marksMessages, itemsAtSpawn,
   kothTick, kothNext, freshKoth, publicKoth, logError} from './room.js';
 
 // The scene: everything players have done to the space (items moved, pieces sprayed, paint, the level's own
@@ -75,7 +76,16 @@ export class Room {
   // paint marks change often; write them at most every few seconds
   async loadMarks() {
     await this.sceneReady();
-    if (!this.marks) this.marks = validMarks(await this.ctx.storage.get?.('marks'));
+    if (!this.marks) {
+      const stored = await this.ctx.storage.get?.('marks'), chunks = (await this.ctx.storage.get?.('inkChunks')) || 0;
+      // the ink's kept apart from the rest, packed, in chunks (one value can't be over 2 MiB); before, it was in 'marks'
+      if (stored && chunks > 0) {
+        const got = await this.ctx.storage.get?.(Array.from({length: chunks}, (_, i) => `ink${i}`));
+        stored.ink = [];
+        for (let i = 0; i < chunks; i++) for (const s of got?.get?.(`ink${i}`) || []) stored.ink.push({id: s.id, h: s.h, c: s.c, t: s.t, pts: unpackInk(s.p) || []});
+      }
+      this.marks = validMarks(stored);
+    }
     return this.marks;
   }
   // the lap timer's state (survives the room sleeping)
@@ -103,7 +113,22 @@ export class Room {
   }
   saveMarksSoon() {
     if (this.marksTimer) return;
-    this.marksTimer = setTimeout(() => { this.marksTimer = null; this.ctx.storage.put?.('marks', this.marks, {allowUnconfirmed: true}); }, 4000);
+    this.marksTimer = setTimeout(() => { this.marksTimer = null; this.saveMarks().catch(() => {}); }, 4000);
+  }
+  async saveMarks() {
+    const m = this.marks, put = {marks: {...m, ink: []}}, chunk = [];
+    let n = 0, k = 0;
+    const flush = () => { put[`ink${k++}`] = chunk.splice(0); n = 0; };
+    for (const s of m.ink || []) {
+      if (n + s.pts.length > INK_CHUNK_PTS && chunk.length) flush();
+      chunk.push({id: s.id, h: s.h, c: s.c, t: s.t, p: Int32Array.from(packInk(s.pts))}); n += s.pts.length;
+    }
+    if (chunk.length) flush();
+    const before = (await this.ctx.storage.get?.('inkChunks')) || 0;
+    put.inkChunks = k;
+    const entries = Object.entries(put);
+    for (let i = 0; i < entries.length; i += 100) await this.ctx.storage.put?.(Object.fromEntries(entries.slice(i, i + 100)), {allowUnconfirmed: true});
+    if (before > k) await this.ctx.storage.delete?.(Array.from({length: before - k}, (_, i) => `ink${k + i}`));
   }
   // (not one that's been let go for going quiet: it can linger in the list a moment while it closes)
   sockets() { return this.ctx.getWebSockets().filter(ws => !ws.deserializeAttachment()?.gone); }
@@ -177,7 +202,7 @@ export class Room {
     server.serializeAttachment(newPlayer(id, now));
     this.send(server, {type: 'welcome', id, now});
     this.send(server, snapshot(this.players(), now, await this.loadItems()));
-    this.send(server, marksMessage(await this.loadMarks()));
+    for (const msg of marksMessages(await this.loadMarks())) this.send(server, msg);
     this.send(server, {type: 'race', race: publicRace(await this.loadRace(), now)});
     this.send(server, {type: 'koth', koth: publicKoth(await this.loadKoth(), now)});
     this.send(server, {type: 'keypad', entry: this.converter?.entry || ''});

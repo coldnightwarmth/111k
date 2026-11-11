@@ -39,7 +39,7 @@ import {createSfx} from './sfx.js';
 import {randomLook, cleanLook} from './looks.js';
 import {cleanEmoteConfig, offeredEmotes} from './emotes.js';
 import {EMOTES, EMOTE_DURATION, PUNCH_COOLDOWN_MS, PUNCH_DURATION, PUNCH_COMBO_MS, SHOT_INTERVAL_MS, SPRAY_INTERVAL_MS, SPRAY_RANGE,
-  MAX_SPLATS, MAX_SPRAYS, SPLAT_LIFE_MS, SETTLE_BYTES, SETTLE_MAX, MAG_SIZE, INK_PTS, MAX_STROKE_PTS, sanitizePose, sanitizeName, PUNCH_REACH, PUNCH_REACH_FAST, cleanSplat, cleanSpray, splatId, sprayId} from './protocol.js';
+  MAX_SPLATS, MAX_SPRAYS, SPLAT_LIFE_MS, SETTLE_BYTES, SETTLE_MAX, MAG_SIZE, INK_PTS, MAX_STROKE_PTS, sanitizePose, sanitizeName, PUNCH_REACH, PUNCH_REACH_FAST, unpackInk, cleanSplat, cleanSpray, splatId, sprayId} from './protocol.js';
 import {paintingSize, paintingMatrix, paintingTris} from './paintings.js';
 import {settle as settlePaintings, warmPhysics, reversed} from './settle.js';
 
@@ -636,6 +636,7 @@ async function start() {
     if (i >= 0) { list[i].batch.remove(list[i].m); list.splice(i, 1); }
     cleaning.forget(kind, id);
   }
+  let pendingMarks = null;    // (the marks while the ink's still coming in)
   function resetMarks(list, inkList = []) {
     cleaning.setErased(list.erased || []);
     splats.clear(); splatMarks.length = 0;
@@ -1728,7 +1729,16 @@ async function start() {
         return;
       }
       if (m.type === 'look' && m.id !== network.id) setLook(peer(m.id), m.look);
-      else if (m.type === 'marks') resetMarks(m, m.ink || []);
+      // joining: the marks, then the ink in parts (packed): all put up once it's all here
+      else if (m.type === 'marks') {
+        if (m.inkParts > 0) { pendingMarks = {m, ink: [], got: 0}; return; }
+        pendingMarks = null; resetMarks(m, m.ink || []);
+      } else if (m.type === 'inkpart') {
+        const pm = pendingMarks;
+        if (!pm || !Array.isArray(m.ink)) return;
+        for (const s of m.ink) { const pts = unpackInk(s.p); if (pts?.length) pm.ink.push({id: s.id, h: s.h, c: s.c, t: s.t, pts}); }
+        if (++pm.got >= pm.m.inkParts) { pendingMarks = null; resetMarks(pm.m, pm.ink); }
+      }
       else if (m.type === 'ink') { if (m.by !== network.id) { ink.add(m); hear('scrub', m.by, {gain: .3, rate: 1.75}); } }
       else if (m.type === 'reload') { if (m.from !== network.id) { items.reload(m.id); hear('rattle', m.from, {rate: .82, gain: 1.2}); } }
       else if (m.type === 'shot') {
