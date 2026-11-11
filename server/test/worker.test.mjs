@@ -1050,7 +1050,8 @@ test('ink is kept across the room going to sleep: packed in chunks, all of it ba
   const again = new Room(ctx);
   const back = await again.loadMarks();
   assert.equal(back.ink.length, 120);
-  assert.deepEqual(back.ink[37].pts[123], pt(3.7, 123));
+  const {unpackInk} = await import('../../src/protocol.js');
+  assert.deepEqual(unpackInk(Array.from(back.ink[37].q))[123], pt(3.7, 123));
   // fewer afterwards: the spare chunks go
   marks.ink.splice(10);
   await room.saveMarks();
@@ -1093,13 +1094,72 @@ test('ink: over the limit, trimmed a little under it in one go, lone strokes fir
   const pt = (x, y, z) => [x, y, z, 0, 0, 1, .5, .5];
   // a big drawing (joined) of 30,000 points, then lone strokes of 1,000 points spread far apart, filling it up
   for (let i = 0; i < 60; i++) marks.ink.push({id: `${a.id}:d${i}`, h: 'w', c: 1, t: i, at: i, g: `${a.id}:d0`, pts: Array.from({length: 500}, (_, k) => pt(0, 1 + i * .001, k * .001))});
-  for (let i = 0; i < 70; i++) marks.ink.push({id: `${a.id}:l${i}`, h: 'w', c: 1, t: 100 + i, at: 100 + i, pts: Array.from({length: 1000}, (_, k) => pt(10 + i * 3, 1, k * .001))});
+  for (let i = 0, n = Math.ceil((MAX_INK_PTS - 30000) / 1000); i < n; i++) marks.ink.push({id: `${a.id}:l${i}`, h: 'w', c: 1, t: 100 + i, at: 100 + i, pts: Array.from({length: 1000}, (_, k) => pt(10 + i * 3, 1, k * .001))});
   let now = 10_000;
   const r = handleMessage(a, JSON.stringify({type: 'ink', id: `${a.id}:new`, h: 'w', c: 1, p: [pt(mk.x, 1, mk.z)]}), now, room);
   const total = marks.ink.reduce((t, s) => t + s.pts.length, 0);
   assert.ok(total <= MAX_INK_PTS * .98, 'a little under');
   assert.equal(marks.ink.filter(s => s.g === `${a.id}:d0`).length, 60, 'the drawing is all still there');
   assert.ok(r.out.filter(o => o.msg.type === 'erase').length >= 2);
+});
+
+test('ink for someone joining: binary (packed, deflated) or JSON, the same strokes either way; finished strokes made lighter', async () => {
+  const {joinMarks, freshMarks, finishInk, inkCount} = await import('../room.js');
+  const {decodeInk, inflate, inkFloats, unpackInk} = await import('../../src/protocol.js');
+  const marks = freshMarks();
+  const pt = (x, y, z) => [x, y, z, 0, 0, 1, .5, .5];
+  for (let i = 0; i < 300; i++) marks.ink.push({id: 'aaaaaaaaaaaaaaaa:' + i, h: i % 7 ? 'w' : 'd3', c: 0x123456 + i, t: i, ...(i % 5 ? {} : {g: 'aaaaaaaaaaaaaaaa:0'}),
+    pts: Array.from({length: 400}, (_, k) => pt(i * .1 + Math.sin(k / 9) * .2, 1 + k * .002, Math.cos(k / 7) * .1))});
+  // a finished one: lighter (a wiggle keeps more of its points than a straight line would), and the same shape
+  const before = marks.ink[3].pts.slice();
+  finishInk(marks.ink[3]);
+  assert.ok(inkCount(marks.ink[3]) < 400 && inkCount(marks.ink[3]) > 20, `${inkCount(marks.ink[3])} points`);
+  const after = unpackInk(Array.from(marks.ink[3].q));
+  const {packInk} = await import('../../src/protocol.js'), mm = q => unpackInk(packInk([q]))[0];
+  assert.deepEqual(after[0], mm(before[0])); assert.deepEqual(after.at(-1), mm(before.at(-1)));
+  const json = joinMarks(marks, false), bin = joinMarks(marks, true);
+  const jsonInk = json.head.filter(m => m.type === 'inkpart').flatMap(m => m.ink);
+  const parts = await bin.parts;
+  assert.equal(bin.head[0].inkParts, parts.length); assert.ok(bin.head[0].inkBin);
+  const binInk = [];
+  for (const b of parts) { assert.equal(b[0], 1); binInk.push(...decodeInk(await inflate(b.subarray(5)))); }
+  assert.equal(binInk.length, 300); assert.equal(jsonInk.length, 300);
+  for (let i = 0; i < 300; i += 37) {
+    const a = jsonInk[i], b = binInk[i];
+    assert.equal(a.id, b.id); assert.equal(a.h, b.h); assert.equal(a.c, b.c); assert.equal(a.g, b.g);
+    assert.deepEqual(Array.from(inkFloats(a.p)), Array.from(inkFloats(b.q)));
+  }
+  const jsonBytes = JSON.stringify(json.head).length, binBytes = parts.reduce((t, b) => t + b.length, 0);
+  assert.ok(binBytes * 4 < jsonBytes, `binary ${binBytes} vs JSON ${jsonBytes}`);
+});
+
+test('a room full of ink: new strokes and trimming stay quick', async () => {
+  const {handleMessage, newPlayer, freshMarks, finishInk} = await import('../room.js');
+  const {ITEM_SPAWNS} = await import('../../src/world-items.js');
+  const {MAX_INK_PTS, MAX_INK_STROKES} = await import('../../src/protocol.js');
+  const items = Object.fromEntries(ITEM_SPAWNS.map(s => [s.id, {...s, holder: null, on: false}]));
+  const mk = Object.values(items).find(it => it.type === 'marker');
+  const a = newPlayer('aaaaaaaaaaaaaaaa', 0); a.pose = {x: mk.x, y: 1.45, z: mk.z, yaw: 0, pitch: 0, g: 0};
+  mk.holder = a.id;
+  const marks = freshMarks(), room = {items, marks, race: null, players: () => [a]};
+  // full: strokes all round the loop, each finished (packed)
+  let seed = 3; const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+  const per = Math.ceil(MAX_INK_PTS / (MAX_INK_STROKES - 10));
+  for (let i = 0; i < MAX_INK_STROKES - 10; i++) {
+    const ang = rnd() * 6.28, y = 1 + rnd(), wig = rnd() * 9;
+    const s = {id: `${a.id}:f${i}`, h: 'w', c: 1, t: i, at: i, joined: true, pts: Array.from({length: per}, (_, k) => [Math.cos(ang) * 41.4 + Math.sin(k / wig) * .05, y + k * .01, -Math.sin(ang) * 41.4, -Math.cos(ang), 0, Math.sin(ang), .5, .5])};
+    finishInk(s); marks.ink.push(s);
+  }
+  let now = 10_000, worst = 0;
+  const pt = k => [mk.x + k * .01, 1, mk.z, 0, 0, 1, .5, .5];
+  for (let k = 0; k < 400; k++) {
+    now += 41;
+    const t0 = performance.now();
+    handleMessage(a, JSON.stringify({type: 'ink', id: `${a.id}:n${k >> 6}`, h: 'w', c: 1, p: [pt(k % 64), pt(k % 64 + .5)]}), now, room);
+    worst = Math.max(worst, performance.now() - t0);
+  }
+  assert.ok(worst < 250, `slowest message ${worst.toFixed(1)} ms`);
+  console.log(`# full room: slowest ink message ${worst.toFixed(1)} ms`);
 });
 
 test('the radio: a track that will not play is called off by whoever put it on, or two others', async () => {

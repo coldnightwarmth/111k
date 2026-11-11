@@ -39,7 +39,7 @@ import {createSfx} from './sfx.js';
 import {randomLook, cleanLook} from './looks.js';
 import {cleanEmoteConfig, offeredEmotes} from './emotes.js';
 import {EMOTES, EMOTE_DURATION, PUNCH_COOLDOWN_MS, PUNCH_DURATION, PUNCH_COMBO_MS, SHOT_INTERVAL_MS, SPRAY_INTERVAL_MS, SPRAY_RANGE,
-  MAX_SPLATS, MAX_SPRAYS, SPLAT_LIFE_MS, SETTLE_BYTES, SETTLE_MAX, MAG_SIZE, INK_PTS, MAX_STROKE_PTS, sanitizePose, sanitizeName, PUNCH_REACH, PUNCH_REACH_FAST, unpackInk, radioNow, cleanSplat, cleanSpray, splatId, sprayId} from './protocol.js';
+  MAX_SPLATS, MAX_SPRAYS, SPLAT_LIFE_MS, SETTLE_BYTES, SETTLE_MAX, MAG_SIZE, INK_PTS, MAX_STROKE_PTS, sanitizePose, sanitizeName, PUNCH_REACH, PUNCH_REACH_FAST, inkFloats, radioNow, cleanSplat, cleanSpray, splatId, sprayId} from './protocol.js';
 import {paintingSize, paintingMatrix, paintingTris} from './paintings.js';
 import {settle as settlePaintings, warmPhysics, reversed} from './settle.js';
 
@@ -219,6 +219,7 @@ async function start() {
   function cullStaticNow() {
     culler.update(camera);
     for (const c of cullStatic) c.mesh.visible = culler.visible(c.x, c.z, c.r, c.room);
+    ink.cull(culler.visible);
   }
   if (crates) hits.addPaintable(crates);
   // what blocks flashlight beams: the level (doors included), the lap timer and the shelving
@@ -233,12 +234,23 @@ async function start() {
     : h[0] === 'a' ? (h.slice(1) === network.id ? me.root : peers.get(h.slice(1))?.avatar?.root || null) : null),
     // in among the tags: a stroke goes over the older tags and strokes it overlaps on its surface, and newer tags
     // go over it (src/ink.js); the same layers as the tags' (addSpray)
-    layerFor: (h, box) => {
-      let top = ink.overlapLayer(h, box);
+    // (strokes it crosses it's drawn after in their batch, on their layer: only a tag between lifts it a layer)
+    layerFor: (h, box, inkTop) => {
+      let top = -1;
       for (const k of sprayMarks) if (k.host === h && k.layer > top && k.box.intersectsBox(box)) top = k.layer;
-      return top + 1;
+      return Math.max(top + 1, inkTop, 0);
     },
-    order: layer => layerOrder(layer) + LAYER_STEP / 2});
+    order: layer => layerOrder(layer) + LAYER_STEP / 2,
+    // which chunk of the world a stroke on the walls goes in, for culling (src/cull.js): a room's own, or a
+    // slice of the tunnel round the loop (one that reaches from the tunnel into a room: by the angle alone)
+    zoneOf: box => {
+      const c = box.getCenter(_zc), r = box.getSize(_zs).length() / 2, RL = level.meta.loop.radius;
+      const k = culler.roomOf(c.x, c.z), out = Math.hypot(c.x, c.z) - RL;
+      const room = k >= 0 && out - r >= 3.7 ? k : k < 0 && out + r < 3.7 ? -1 : MIXED;
+      const slice = Math.floor((Math.atan2(-c.z, c.x) + Math.PI) / INK_SLICE);
+      return {key: room >= 0 ? `r${room}` : `${room === MIXED ? 'm' : 't'}${slice}`, room};
+    }});
+  const INK_SLICE = 8 * Math.PI / 180, _zc = new THREE.Vector3(), _zs = new THREE.Vector3();
   const mimic = createMimic(level, scene);   // the control room's ring board: occupied rooms light up
   let mimicAt = 0;
   const bore = level.meta.bore;
@@ -664,7 +676,7 @@ async function start() {
       .sort((a, b) => a.t - b.t || a.i - b.i);
     for (const e of order) {
       if (e.s) { const c = cleanSpray(e.s); if (c) addSpray(c); }
-      else ink.add({id: e.k.id, h: e.k.h, c: e.k.c, p: e.k.pts});
+      else ink.add({id: e.k.id, h: e.k.h, c: e.k.c, p: e.k.pts, f: e.k.f}, false);   // (built over the next frames: ink.tick)
     }
   }
 
@@ -1732,7 +1744,9 @@ async function start() {
       if (!target) { bubble.dispose(); return; }
       target.bubble?.dispose(); target.bubble = bubble; target.bubbleExpires = m.expiresAt;
     },
-    onMessage: m => {
+    onMessage: function handleMessage(m) {
+      // (while the room's ink is still coming in, what's drawn, rubbed out or joined waits for it: below)
+      if (pendingMarks && (m.type === 'ink' || m.type === 'inkgroup' || m.type === 'erase')) { pendingMarks.later.push(m); return; }
       if (m.type === 'emotes') { emoteConfig = cleanEmoteConfig(m.config); emoteButtons(); return; }
       if (m.type === 'graffiti') { setHiddenPieces(Array.isArray(m.hidden) ? m.hidden.filter(n => typeof n === 'string') : []); return; }
       if (m.type === 'rtc') { voice.signal(m.from, m.d); return; }
@@ -1743,19 +1757,25 @@ async function start() {
         return;
       }
       if (m.type === 'look' && m.id !== network.id) setLook(peer(m.id), m.look);
-      // joining: the marks, then the ink in parts (packed): all put up once it's all here
+      // joining: the marks, then the ink in parts (packed; binary and deflated if this page can take it: src/net.js):
+      // all put up once it's all here. Ink drawn, rubbed out or joined meanwhile waits for it, then goes on top.
       else if (m.type === 'marks') {
-        if (m.inkParts > 0) { pendingMarks = {m, ink: [], got: 0}; return; }
+        // (a second one while the first's ink is still coming: the room's started over; what's waiting still waits)
+        const later = pendingMarks?.later || [];
+        if (m.inkParts > 0) { pendingMarks = {m, parts: [], got: 0, later}; return; }
         pendingMarks = null; resetMarks(m, m.ink || []);
+        for (const msg of later) handleMessage(msg);
       } else if (m.type === 'inkpart') {
         const pm = pendingMarks;
-        if (!pm || !Array.isArray(m.ink)) return;
-        for (const s of m.ink) { const pts = unpackInk(s.p); if (pts?.length) pm.ink.push({id: s.id, h: s.h, c: s.c, t: s.t, g: s.g, pts}); }
+        if (!pm || !Array.isArray(m.ink) || !(m.i >= 0 && m.i < pm.m.inkParts) || pm.parts[m.i]) return;
+        pm.parts[m.i] = m.ink.map(s => ({id: s.id, h: s.h, c: s.c, t: s.t, g: s.g, f: inkFloats(s.q || s.p || [])})).filter(s => s.f.length >= 8);
         if (++pm.got >= pm.m.inkParts) {
-          pendingMarks = null; resetMarks(pm.m, pm.ink);
+          const list = pm.parts.flat();
+          pendingMarks = null; resetMarks(pm.m, list);
           const groups = new Map();                              // (drawings the room's already joined)
-          for (const s of pm.ink) if (s.g) (groups.get(s.g) || groups.set(s.g, []).get(s.g)).push(s.id);
+          for (const s of list) if (s.g) (groups.get(s.g) || groups.set(s.g, []).get(s.g)).push(s.id);
           for (const ids of groups.values()) ink.group(ids);
+          for (const later of pm.later) handleMessage(later);
         }
       } else if (m.type === 'inkgroup' && Array.isArray(m.ids)) ink.group(m.ids);
       else if (m.type === 'ink') { if (m.by !== network.id) { ink.add(m); hear('scrub', m.by, {gain: .3, rate: 1.75}); } }
@@ -2179,6 +2199,7 @@ async function start() {
     doors.update(dt);
 
     drawInk(now);
+    ink.tick();
     if (now - inkRefreshAt > 500) { inkRefreshAt = now; ink.refresh(); }   // (ink waiting for a player or painting that's arrived)
 
     // paintballs, paint puffs, fresh tags

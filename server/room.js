@@ -3,7 +3,7 @@
 // hibernation "attachment" in Cloudflare), so the room survives the Durable
 // Object being evicted between messages. The only shared state is the held
 // items, which the caller keeps (Durable Object storage in production).
-import {INK_HOST, INK_PER_S, MAX_INK_STROKES, MAX_STROKE_PTS, MAX_INK_PTS, INK_PART_PTS, packInk, cleanInkPoints, SETTLE_BYTES, SETTLE_MAX, SETTLE_PER_S, MAG_SIZE, RELOAD_MS, CROWN_HITS, CROWN_HIT_WINDOW_MS, CHAT_INTERVAL_MS, CHAT_TTL_MS, POSE_INTERVAL_MS, PICKUP_RANGE, PUNCH_RANGE, PUNCH_COOLDOWN_MS,
+import {INK_HOST, INK_PER_S, MAX_INK_STROKES, MAX_STROKE_PTS, MAX_INK_PTS, INK_PART_PTS, INK_BIN_PTS, packInk, cleanInkPoints, encodeInk, simplifyInk, deflate, SETTLE_BYTES, SETTLE_MAX, SETTLE_PER_S, MAG_SIZE, RELOAD_MS, CROWN_HITS, CROWN_HIT_WINDOW_MS, CHAT_INTERVAL_MS, CHAT_TTL_MS, POSE_INTERVAL_MS, PICKUP_RANGE, PUNCH_RANGE, PUNCH_COOLDOWN_MS,
   SHOT_INTERVAL_MS, SPRAY_INTERVAL_MS, SPRAY_RANGE, MAX_SPLATS, MAX_SPRAYS, SPLAT_LIFE_MS, ART_MAX,
   sanitizeChat, sanitizePose, radioLink, radioKey, RADIO_MAX_MS, RADIO_GAP_MS, samePose, cleanItem, cleanPath, sanitizeLook, sanitizeName, cleanSplat, cleanSpray, splatId, sprayId} from '../src/protocol.js';
 import {ITEM_SPAWNS} from '../src/world-items.js';
@@ -94,8 +94,49 @@ export function validMarks(stored) {
   return {splats: splats.filter(Boolean).slice(-MAX_SPLATS),
     sprays: stored.sprays.map(cleanSpray).filter(Boolean).slice(-MAX_SPRAYS),
     erased: Array.isArray(stored.erased) ? stored.erased.filter(id => typeof id === 'string' && id.length <= 80).slice(-MAX_ERASED) : [],
-    ink: Array.isArray(stored.ink) ? stored.ink.filter(s => s && typeof s.id === 'string' && INK_HOST.test(s.h) && Array.isArray(s.pts)).slice(-MAX_INK_STROKES * 20) : []};   // (a drawing counts as one)
+    ink: Array.isArray(stored.ink) ? stored.ink.filter(s => s && typeof s.id === 'string' && INK_HOST.test(s.h) && (Array.isArray(s.pts) || s.q instanceof Int32Array)).slice(-MAX_INK_STROKES * 20) : []};   // (a drawing counts as one)
 }
+// A stroke's points: a list of [x, y, z, nx, ny, nz, u, v] while it's being drawn (s.pts); once it's done (left a
+// minute: joinInk), made lighter (simplifyInk) and packed (s.q: packInk's numbers, 8 a point), which takes a
+// tenth of the memory (a room can hold a lot of ink)
+export const inkCount = s => (s.q ? s.q.length >> 3 : s.pts.length);
+export const inkPacked = s => s.q || Int32Array.from(packInk(s.pts));
+function eachInkPoint(s, fn) {
+  if (s.q) { const q = s.q; for (let i = 0; i < q.length; i += 8) fn(q[i] / 1000, q[i + 1] / 1000, q[i + 2] / 1000); }
+  else for (const p of s.pts) fn(p[0], p[1], p[2]);
+}
+// along the line, no more than `step` apart (a stroke made lighter has long straight runs between its points)
+function eachInkStep(s, step, fn) {
+  let px = null, py = 0, pz = 0;
+  eachInkPoint(s, (x, y, z) => {
+    if (px !== null) {
+      const k = Math.ceil(Math.hypot(x - px, y - py, z - pz) / step);
+      for (let j = 1; j < k; j++) fn(px + (x - px) * j / k, py + (y - py) * j / k, pz + (z - pz) * j / k);
+    }
+    fn(x, y, z); px = x; py = y; pz = z;
+  });
+}
+export function finishInk(s) {
+  if (s.q) return 0;
+  const before = s.pts.length;
+  s.q = Int32Array.from(packInk(simplifyInk(s.pts)));
+  s.lite = 1;
+  delete s.pts;
+  inkBounds.delete(s);
+  return before - (s.q.length >> 3);
+}
+// the room's ink looked up by id, and its points and drawings counted, without going through it all each time
+// (kept with the list; made again if the list's been replaced, or it's been changed some other way: inkTouched)
+const inkIndexes = new WeakMap();
+export function inkIndex(ink) {
+  let x = inkIndexes.get(ink);
+  if (x && !x.stale) return x;
+  x = {byId: new Map(), total: 0, units: new Set(), stale: false};
+  for (const s of ink) { x.byId.set(s.id, s); x.total += inkCount(s); x.units.add(s.g || s.id); }
+  inkIndexes.set(ink, x);
+  return x;
+}
+export function inkTouched(ink) { const x = inkIndexes.get(ink); if (x) x.stale = true; }
 // paint lasts a minute; sprayed pieces stay
 export function pruneSplats(marks, now) {
   const before = marks.splats.length;
@@ -111,11 +152,42 @@ export function marksMessages(marks, now = Date.now()) {
   const parts = [];
   let part = [], n = 0;
   for (const s of marks.ink || []) {
-    if (n + s.pts.length > INK_PART_PTS && part.length) { parts.push(part); part = []; n = 0; }
-    part.push({id: s.id, h: s.h, c: s.c, t: s.t, ...(s.g ? {g: s.g} : {}), p: packInk(s.pts)}); n += s.pts.length;
+    const k = inkCount(s);
+    if (n + k > INK_PART_PTS && part.length) { parts.push(part); part = []; n = 0; }
+    part.push({id: s.id, h: s.h, c: s.c, t: s.t, ...(s.g ? {g: s.g} : {}), p: Array.from(inkPacked(s))}); n += k;
   }
   if (part.length) parts.push(part);
   return [{...marksMessage(marks, now), ink: [], inkParts: parts.length}, ...parts.map((ink, i) => ({type: 'inkpart', i, n: parts.length, ink}))];
+}
+// the same, the ink in binary parts (src/protocol.js encodeInk; deflated by the room before it's sent): the marks
+// message, then [{i, n, bytes}] for a page that can take them
+export function marksBinary(marks, now = Date.now()) {
+  const parts = [];
+  let part = [], n = 0;
+  for (const s of marks.ink || []) {
+    const k = inkCount(s);
+    if (n + k > INK_BIN_PTS && part.length) { parts.push(part); part = []; n = 0; }
+    part.push({id: s.id, h: s.h, c: s.c, t: s.t, ...(s.g ? {g: s.g} : {}), q: inkPacked(s)}); n += k;
+  }
+  if (part.length) parts.push(part);
+  return {head: {...marksMessage(marks, now), ink: [], inkParts: parts.length, inkBin: true}, parts: parts.map((p, i) => ({i, n: parts.length, bytes: encodeInk(p)}))};
+}
+
+// what someone joining is sent, the ink in binary (deflated) if their page can take it: {head: [messages, sent
+// at once: the marks as they are now], parts: a promise of the ink's binary messages (the same moment's: only
+// the deflating waits)}. A binary message: [1][part i: 2 bytes][parts n: 2 bytes][the part, deflated] (src/net.js)
+// cache: {parts} kept by the room till the marks change, so a run of people joining doesn't do it all again
+export function joinMarks(marks, binary, now = Date.now(), cache = null) {
+  if (!binary) return {head: marksMessages(marks, now), parts: Promise.resolve([])};
+  if (cache?.parts) return {head: [{...marksMessage(marks, now), ink: [], inkParts: cache.n, inkBin: true}], parts: cache.parts};
+  const {head, parts} = marksBinary(marks, now);
+  const out = Promise.all(parts.map(async ({i, n, bytes}) => {
+    const z = await deflate(bytes), msg = new Uint8Array(5 + z.length);
+    msg[0] = 1; msg[1] = i >> 8; msg[2] = i & 255; msg[3] = n >> 8; msg[4] = n & 255; msg.set(z, 5);
+    return msg;
+  }));
+  if (cache) { cache.parts = out; cache.n = parts.length; }
+  return {head: [head], parts: out};
 }
 
 const flat = (a, b) => Math.hypot(a.x - b.x, a.z - b.z);
@@ -126,9 +198,13 @@ const flat = (a, b) => Math.hypot(a.x - b.x, a.z - b.z);
 const inkBounds = new WeakMap();
 function boundsOf(s) {
   let b = inkBounds.get(s);
-  if (b && b.n === s.pts.length) return b;
-  b = {n: s.pts.length, lo: [Infinity, Infinity, Infinity], hi: [-Infinity, -Infinity, -Infinity]};
-  for (const q of s.pts) for (let k = 0; k < 3; k++) { if (q[k] < b.lo[k]) b.lo[k] = q[k]; if (q[k] > b.hi[k]) b.hi[k] = q[k]; }
+  const n = inkCount(s);
+  if (b && b.n === n) return b;
+  b = {n, lo: [Infinity, Infinity, Infinity], hi: [-Infinity, -Infinity, -Infinity]};
+  const lo = b.lo, hi = b.hi;
+  eachInkPoint(s, (x, y, z) => {
+    if (x < lo[0]) lo[0] = x; if (x > hi[0]) hi[0] = x; if (y < lo[1]) lo[1] = y; if (y > hi[1]) hi[1] = y; if (z < lo[2]) lo[2] = z; if (z > hi[2]) hi[2] = z;
+  });
   inkBounds.set(s, b);
   return b;
 }
@@ -143,20 +219,25 @@ function crosses(a, b) {
   const A = boundsOf(a), B = boundsOf(b);
   for (let k = 0; k < 3; k++) if (A.lo[k] - JOIN > B.hi[k] || B.lo[k] - JOIN > A.hi[k]) return false;
   const cell = new Map(), key = (x, y, z) => `${Math.floor(x / JOIN)},${Math.floor(y / JOIN)},${Math.floor(z / JOIN)}`;
-  for (const q of a.pts) cell.set(key(q[0], q[1], q[2]), q);
-  for (const q of b.pts) {
-    const cx = Math.floor(q[0] / JOIN), cy = Math.floor(q[1] / JOIN), cz = Math.floor(q[2] / JOIN);
-    for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) for (let dz = -1; dz <= 1; dz++) {
+  eachInkStep(a, JOIN / 2, (x, y, z) => cell.set(key(x, y, z), [x, y, z]));
+  let hit = false;
+  eachInkStep(b, JOIN / 2, (x, y, z) => {
+    if (hit) return;
+    const cx = Math.floor(x / JOIN), cy = Math.floor(y / JOIN), cz = Math.floor(z / JOIN);
+    for (let dx = -1; dx <= 1 && !hit; dx++) for (let dy = -1; dy <= 1 && !hit; dy++) for (let dz = -1; dz <= 1 && !hit; dz++) {
       const p = cell.get(`${cx + dx},${cy + dy},${cz + dz}`);
-      if (p && Math.hypot(p[0] - q[0], p[1] - q[1], p[2] - q[2]) < JOIN) return true;
+      if (p && Math.hypot(p[0] - x, p[1] - y, p[2] - z) < JOIN) hit = true;
     }
-  }
-  return false;
+  });
+  return hit;
 }
 export function joinInk(ink, now) {
   const ready = ink.filter(s => s.h[0] !== 'a' && now - (s.at || s.t || 0) >= JOIN_AFTER);
   const fresh = ready.filter(s => !s.joined);                  // (not looked at yet: each is, once)
   if (!fresh.length) return [];
+  // (each done now: made lighter and packed)
+  for (const s of fresh) finishInk(s);
+  inkTouched(ink);
   const changed = new Set();
   const groupOf = s => s.g || s.id, oldest = new Map();
   for (const s of ready) { const g = groupOf(s), o = oldest.get(g); if (!o || (s.t || 0) < (o.t || 0)) oldest.set(g, s); }
@@ -173,7 +254,9 @@ export function joinInk(ink, now) {
       changed.add(keep); changed.delete(drop);
     }
   }
-  return [...changed].map(g => ({g, ids: ready.filter(x => (x.g || x.id) === g).map(x => x.id)})).filter(d => d.ids.length > 1);
+  const out = [...changed].map(g => ({g, ids: ready.filter(x => (x.g || x.id) === g).map(x => x.id)})).filter(d => d.ids.length > 1);
+  out.finished = fresh.length;             // (strokes made lighter: worth keeping as they are now)
+  return out;
 }
 export function inkUnits(ink) {
   const by = new Map();
@@ -188,20 +271,36 @@ const unitBounds = u => {
 };
 // the order to let them go in (units), worked out once: of all but the newest tenth, the lowest scores first (the
 // others near it and the strokes in it, as loneliest), the oldest first among equals
+// (the others near each found through a grid of TRIM_CELL cells, not by looking at every one)
+const TRIM_CELL = 1;
 export function trimOrder(units, keep) {
   const span = Math.max(1, Math.ceil(units.length * .9)), bounds = units.map(unitBounds), scored = [];
+  const grid = new Map(), big = [];
+  const cells = (b, pad, fn) => {
+    const x0 = Math.floor((b.lo[0] - pad) / TRIM_CELL), x1 = Math.floor((b.hi[0] + pad) / TRIM_CELL), y0 = Math.floor((b.lo[1] - pad) / TRIM_CELL);
+    const y1 = Math.floor((b.hi[1] + pad) / TRIM_CELL), z0 = Math.floor((b.lo[2] - pad) / TRIM_CELL), z1 = Math.floor((b.hi[2] + pad) / TRIM_CELL);
+    if ((x1 - x0 + 1) * (y1 - y0 + 1) * (z1 - z0 + 1) > 64) return false;
+    for (let x = x0; x <= x1; x++) for (let y = y0; y <= y1; y++) for (let z = z0; z <= z1; z++) fn(`${x},${y},${z}`);
+    return true;
+  };
+  units.forEach((u, j) => { if (!cells(bounds[j], 0, k => { let c = grid.get(k); if (!c) grid.set(k, c = []); c.push(j); })) big.push(j); });
+  const stamp = new Int32Array(units.length).fill(-1);
   for (let i = 0; i < span; i++) {
     const u = units[i];
     if (u === keep) continue;
     const a = bounds[i];
     let n = u.strokes ? u.strokes.length : 1;
-    for (let j = 0; j < units.length; j++) {
+    const near = j => {
+      if (stamp[j] === i) return;
+      stamp[j] = i;
       const o = units[j];
-      if (o === u || o.h !== u.h) continue;
+      if (o === u || o.h !== u.h) return;
       const b = bounds[j];
       if (a.lo[0] - NEAR <= b.hi[0] && b.lo[0] - NEAR <= a.hi[0] && a.lo[1] - NEAR <= b.hi[1] && b.lo[1] - NEAR <= a.hi[1]
         && a.lo[2] - NEAR <= b.hi[2] && b.lo[2] - NEAR <= a.hi[2]) n++;
-    }
+    };
+    if (!cells(a, NEAR, k => { for (const j of grid.get(k) || []) near(j); })) for (let j = 0; j < units.length; j++) near(j);
+    else for (const j of big) near(j);
     scored.push({u, n, i});
   }
   return scored.sort((a, b) => a.n - b.n || a.i - b.i).map(x => x.u);
@@ -418,33 +517,40 @@ function handle(player, data, now, room) {
     if (h === 'w' && pts.some(q => Math.hypot(q[0] - player.pose.x, q[2] - player.pose.z) > 4)) return {out, changed: false};
     if (h[0] === 'p' && items[h.slice(1)]?.type !== 'painting') return {out, changed: false};
     const ink = room.marks.ink ||= [];
-    let stroke = ink.find(s => s.id === id);
+    const index = inkIndex(ink);
+    let stroke = index.byId.get(id);
     // a stroke that's done (nothing added for a while) doesn't take more: that's a page from before the stroke ids
     // were made unique reusing one after a refresh (it'd be drawn joined on with a long line)
-    if (stroke && h !== stroke.h || stroke && !(now - (stroke.at || 0) < 10000)) return {out, changed: false};
+    if (stroke && h !== stroke.h || stroke && (stroke.q || !(now - (stroke.at || 0) < 10000))) return {out, changed: false};
     player.lastActive = now;
     out.push({to: 'all', msg: {type: 'ink', id, h, c, p: pts, by: player.id}});
     if (h[0] === 'a') return {out, changed: true};
-    if (!stroke) { stroke = {id, h, c, t: now, pts: []}; ink.push(stroke); }
+    if (!stroke) { stroke = {id, h, c, t: now, pts: []}; ink.push(stroke); index.byId.set(id, stroke); index.units.add(id); }
     stroke.at = now;
-    stroke.pts.push(...pts.slice(0, Math.max(0, MAX_STROKE_PTS - stroke.pts.length)));
+    const more = pts.slice(0, Math.max(0, MAX_STROKE_PTS - stroke.pts.length));
+    stroke.pts.push(...more); index.total += more.length;
     // too much ink: a stroke goes (everyone's told): not the newest, and the loneliest of the older ones first
     // (on its own, away from any others: the detailed drawings, lots of strokes together, are kept longest)
     // (a drawing the room's joined from crossing strokes counts as one, and goes whole)
     // (trimmed a little under the limit in one go, so it isn't worked out again for every few points drawn)
-    let total = ink.reduce((t, s) => t + s.pts.length, 0);
-    const units = inkUnits(ink);
-    if (units.length > MAX_INK_STROKES || total > MAX_INK_PTS) {
+    if (index.units.size > MAX_INK_STROKES || index.total > MAX_INK_PTS) {
+      const units = inkUnits(ink);
       const order = trimOrder(units, units.find(u => u.strokes.includes(stroke)));
-      let left = units.length;
-      for (const gone of order) {
+      let left = units.length, total = index.total;
+      const gone = new Set();
+      for (const unit of order) {
         if (left <= MAX_INK_STROKES * .98 && total <= MAX_INK_PTS * .98) break;
         left--;
-        for (const old of gone.strokes) {
-          ink.splice(ink.indexOf(old), 1); total -= old.pts.length;
+        for (const old of unit.strokes) {
+          gone.add(old); total -= inkCount(old);
           out.push({to: 'all', msg: {type: 'erase', kind: 'ink', id: old.id, by: ''}});
         }
       }
+      // (out of the list in one go, in place)
+      let w = 0;
+      for (const s of ink) if (!gone.has(s)) ink[w++] = s;
+      ink.length = w;
+      inkTouched(ink);
     }
     return {out, changed: true, marksChanged: true};
   }

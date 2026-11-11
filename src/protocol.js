@@ -116,7 +116,7 @@ export const SETTLE_BYTES = 14000, SETTLE_MAX = 16, SETTLE_PER_S = 12;
 // MAX_INK_STROKES strokes, each up to MAX_STROKE_PTS points, MAX_INK_PTS in all (oldest go first). A point is
 // [x, y, z, nx, ny, nz, u, v]: where it is and which way the surface faces (in its host's own space: the world,
 // a door 'd<k>', a painting 'p<id>', or a player 'a<id>', whose ink isn't kept), and the level's lightmap there.
-export const INK_PTS = 64, MAX_INK_STROKES = 1000, MAX_STROKE_PTS = 500, MAX_INK_PTS = 100000, INK_PER_S = 25;
+export const INK_PTS = 64, MAX_INK_STROKES = 8000, MAX_STROKE_PTS = 500, MAX_INK_PTS = 400000, INK_PER_S = 25;
 // a stroke's points packed flat as whole numbers (positions in mm, normals in hundredths, uv in 1e-4), for keeping
 // and for sending to someone joining (in parts: a WebSocket message can't be over 1 MiB)
 const INK_SCALE = [1000, 1000, 1000, 100, 100, 100, 1e4, 1e4];
@@ -128,6 +128,89 @@ export function unpackInk(flat) {
   return out;
 }
 export const INK_PART_PTS = 9000;     // points to a part (about 350 KB of JSON)
+
+// Ink packed small, for keeping and for sending to someone joining: each stroke's points as whole numbers
+// (packInk's), each one the difference from the point before (zigzagged into a varint: a byte or two each, as a
+// line's points are close together and its surface rarely turns). [varint: bytes of meta][meta: JSON, one entry a
+// stroke, its n points][the strokes' numbers, in order]. The page asks for it deflated (binary messages:
+// src/net.js); without that, it's sent as JSON as before.
+export const INK_BIN_PTS = 60000;     // points to a binary part (deflated, a few hundred KB)
+function writer(size = 1 << 16) {
+  let buf = new Uint8Array(size), n = 0;
+  const need = k => { if (n + k > buf.length) { const b = new Uint8Array(Math.max(n + k, buf.length * 2)); b.set(buf.subarray(0, n)); buf = b; } };
+  return {
+    varint(v) { need(5); v >>>= 0; while (v > 127) { buf[n++] = (v & 127) | 128; v >>>= 7; } buf[n++] = v; },
+    bytes(b) { need(b.length); buf.set(b, n); n += b.length; },
+    done: () => buf.slice(0, n),
+  };
+}
+const zig = v => ((v << 1) ^ (v >> 31)) >>> 0, unzig = v => (v >>> 1) ^ -(v & 1);
+// strokes: [{...fields, q: Int32Array of packInk numbers (8 a point)}] -> Uint8Array. Meta keeps every field but q.
+export function encodeInk(strokes) {
+  const w = writer(64 + strokes.reduce((t, s) => t + s.q.length * 1.4, 0) | 0);
+  const meta = new TextEncoder().encode(JSON.stringify(strokes.map(s => { const {q, ...rest} = s; return {...rest, n: q.length / 8 | 0}; })));
+  w.varint(meta.length); w.bytes(meta);
+  const prev = new Int32Array(8);
+  for (const s of strokes) {
+    const q = s.q;
+    for (let i = 0; i + 8 <= q.length; i += 8) for (let k = 0; k < 8; k++) { const v = q[i + k]; w.varint(zig(i ? v - prev[k] : v)); prev[k] = v; }
+  }
+  return w.done();
+}
+// -> [{...fields, q: Int32Array}] (null if it's not ink)
+export function decodeInk(bytes) {
+  try {
+    let at = 0;
+    const varint = () => { let v = 0, shift = 0, b; do { b = bytes[at++]; v |= (b & 127) << shift; shift += 7; } while (b & 128 && shift < 35); return v >>> 0; };
+    const len = varint(), meta = JSON.parse(new TextDecoder().decode(bytes.subarray(at, at + len))); at += len;
+    if (!Array.isArray(meta)) return null;
+    const out = [];
+    for (const m of meta) {
+      const n = Math.max(0, Math.min(1e6, m.n | 0)), q = new Int32Array(n * 8);
+      for (let i = 0; i < n * 8; i += 8) for (let k = 0; k < 8; k++) q[i + k] = unzig(varint()) + (i ? q[i - 8 + k] : 0);
+      if (at > bytes.length) return null;
+      const {n: _, ...rest} = m;
+      out.push({...rest, q});
+    }
+    return out;
+  } catch { return null; }
+}
+// packed numbers -> floats, 8 a point (what src/ink.js keeps)
+export function inkFloats(q) { const f = new Float32Array(q.length); for (let i = 0; i < q.length; i++) f[i] = q[i] / INK_SCALE[i & 7]; return f; }
+// deflate/inflate (deflate-raw: CompressionStream, in browsers, Workers and Node alike)
+export async function deflate(bytes) { return new Uint8Array(await new Response(new Blob([bytes]).stream().pipeThrough(new CompressionStream('deflate-raw'))).arrayBuffer()); }
+export async function inflate(bytes) { return new Uint8Array(await new Response(new Blob([bytes]).stream().pipeThrough(new DecompressionStream('deflate-raw'))).arrayBuffer()); }
+
+// A finished stroke made lighter: points that sit on the line between their neighbours (within SIMPLIFY_TOL, the
+// surface turning hardly at all) dropped. It looks the same; most strokes lose half their points or more.
+export const SIMPLIFY_TOL = .0015;
+export function simplifyInk(pts, tol = SIMPLIFY_TOL) {
+  const n = pts.length;
+  if (n < 3) return pts;
+  const keep = new Uint8Array(n); keep[0] = keep[n - 1] = 1;
+  const stack = [[0, n - 1]];
+  while (stack.length) {
+    const [a, b] = stack.pop();
+    if (b - a < 2) continue;
+    const A = pts[a], B = pts[b], dx = B[0] - A[0], dy = B[1] - A[1], dz = B[2] - A[2], L2 = dx * dx + dy * dy + dz * dz;
+    let far = -1, worst = tol * tol;
+    for (let i = a + 1; i < b; i++) {
+      const P = pts[i];
+      let t = L2 > 0 ? ((P[0] - A[0]) * dx + (P[1] - A[1]) * dy + (P[2] - A[2]) * dz) / L2 : 0;
+      t = Math.max(0, Math.min(1, t));
+      const ex = A[0] + dx * t - P[0], ey = A[1] + dy * t - P[1], ez = A[2] + dz * t - P[2];
+      let d = ex * ex + ey * ey + ez * ez;
+      // (and where the surface turns: a point whose normal is off both ends' stays)
+      const turn = 1 - Math.min(P[3] * A[3] + P[4] * A[4] + P[5] * A[5], P[3] * B[3] + P[4] * B[4] + P[5] * B[5]);
+      if (turn > .002) d = Math.max(d, worst + 1e-9);
+      if (d > worst) { worst = d; far = i; }
+    }
+    if (far >= 0) { keep[far] = 1; stack.push([a, far], [far, b]); }
+  }
+  const out = [];
+  for (let i = 0; i < n; i++) if (keep[i]) out.push(pts[i]);
+  return out;
+}
 const inkNum = (v, k) => Math.round(v * k) / k;
 export function cleanInkPoints(pts, localHost) {
   if (!Array.isArray(pts) || !pts.length || pts.length > INK_PTS) return null;

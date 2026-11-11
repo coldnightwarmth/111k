@@ -1,13 +1,13 @@
 // Cloudflare Worker + Durable Object for the shared hangout (free tier).
 // One Durable Object instance ("public-v1") holds every socket. Hibernating
 // WebSockets plus automatic ping/pong mean an idle room costs nothing.
-import {INACTIVE_MS, IDLE_RESET_MS, MAX_PLAYERS, cleanItem, packInk, unpackInk} from '../src/protocol.js';
+import {INACTIVE_MS, IDLE_RESET_MS, MAX_PLAYERS, cleanItem, unpackInk, encodeInk, decodeInk} from '../src/protocol.js';
 const QUIET_MS = 20000, QUIET_CHECK_MS = 7000;
 const INK_CHUNK_PTS = 40000;      // points to a stored chunk (packed as 32-bit numbers: about 1.3 MB, under a value's 2 MiB)     // let go after this long without a word (pages ping every 6 s)
 import {cleanEmoteConfig} from '../src/emotes.js';
 import {cleanReview, hiddenPieces} from '../src/review.js';
 import {freshRace, publicRace} from '../src/race.js';
-import {handleMessage, newPlayer, snapshot, freshItems, freshMarks, validItems, releaseItems, letGo, validMarks, marksMessage, marksMessages, joinInk, itemsAtSpawn,
+import {handleMessage, newPlayer, snapshot, freshItems, freshMarks, validItems, releaseItems, letGo, validMarks, marksMessage, joinMarks, joinInk, itemsAtSpawn, inkPacked, inkCount, finishInk,
   kothTick, kothNext, freshKoth, publicKoth, logError, RADIO_LOG_PREFIX, radioLogKey, patchRadioEntry, promoteRadio} from './room.js';
 
 // The scene: everything players have done to the space (items moved, pieces sprayed, paint, the level's own
@@ -79,12 +79,21 @@ export class Room {
     if (!this.marks) {
       const stored = await this.ctx.storage.get?.('marks'), chunks = (await this.ctx.storage.get?.('inkChunks')) || 0;
       // the ink's kept apart from the rest, packed, in chunks (one value can't be over 2 MiB); before, it was in 'marks'
+      // (each chunk: encodeInk's bytes; before, a list of strokes with their numbers in p)
+      let old = false;
       if (stored && chunks > 0) {
         const got = await this.ctx.storage.get?.(Array.from({length: chunks}, (_, i) => `ink${i}`));
         stored.ink = [];
-        for (let i = 0; i < chunks; i++) for (const s of got?.get?.(`ink${i}`) || []) stored.ink.push({id: s.id, h: s.h, c: s.c, t: s.t, at: s.at, g: s.g, joined: s.joined, pts: unpackInk(s.p) || []});
+        for (let i = 0; i < chunks; i++) {
+          const v = got?.get?.(`ink${i}`);
+          if (v instanceof Uint8Array) for (const s of decodeInk(v) || []) stored.ink.push(s);
+          else for (const s of v || []) { old = true; stored.ink.push({id: s.id, h: s.h, c: s.c, t: s.t, at: s.at, g: s.g, joined: s.joined, pts: unpackInk(s.p) || []}); }
+        }
       }
       this.marks = validMarks(stored);
+      // ink from before strokes were made lighter once done: made so now, and kept that way
+      for (const s of this.marks.ink) if (s.joined && !s.lite) { if (s.q) { s.pts = unpackInk(Array.from(s.q)); delete s.q; } finishInk(s); old = true; }
+      if (old) this.saveMarksSoon();
     }
     return this.marks;
   }
@@ -112,18 +121,30 @@ export class Room {
     if (r.kothChanged) await this.saveKoth();
   }
   saveMarksSoon() {
+    this.inkSent = null;                       // (what's sent to someone joining, made again)
     if (this.marksTimer) return;
     this.marksTimer = setTimeout(() => { this.marksTimer = null; this.saveMarks().catch(() => {}); }, 4000);
   }
+  // the marks, the ink in chunks (encodeInk's bytes), only the chunks that have changed since they were last
+  // written (new ink goes on the end: mostly just the last one)
   async saveMarks() {
     const m = this.marks, put = {marks: {...m, ink: []}}, chunk = [];
-    let n = 0, k = 0;
-    const flush = () => { put[`ink${k++}`] = chunk.splice(0); n = 0; };
+    let n = 0, k = 0, sig = '';
+    const saved = this.savedChunks ||= [];
+    const flush = () => {
+      if (saved[k] !== sig) {
+        put[`ink${k}`] = encodeInk(chunk.map(s => ({id: s.id, h: s.h, c: s.c, t: s.t, at: s.at, g: s.g, joined: s.joined, lite: s.lite, q: inkPacked(s)})));
+        saved[k] = sig;
+      }
+      k++; chunk.length = 0; n = 0; sig = '';
+    };
     for (const s of m.ink || []) {
-      if (n + s.pts.length > INK_CHUNK_PTS && chunk.length) flush();
-      chunk.push({id: s.id, h: s.h, c: s.c, t: s.t, at: s.at, g: s.g, joined: s.joined, p: Int32Array.from(packInk(s.pts))}); n += s.pts.length;
+      const c = inkCount(s);
+      if (n + c > INK_CHUNK_PTS && chunk.length) flush();
+      chunk.push(s); n += c; sig += `${s.id}|${c}|${s.g || ''}|${s.joined ? 1 : 0}|${s.lite ? 1 : 0};`;
     }
     if (chunk.length) flush();
+    saved.length = k;
     const before = (await this.ctx.storage.get?.('inkChunks')) || 0;
     put.inkChunks = k;
     const entries = Object.entries(put);
@@ -133,7 +154,7 @@ export class Room {
   // (not one that's been let go for going quiet: it can linger in the list a moment while it closes)
   sockets() { return this.ctx.getWebSockets().filter(ws => !ws.deserializeAttachment()?.gone); }
   players() { return this.sockets().map(ws => ws.deserializeAttachment()).filter(Boolean); }
-  send(ws, msg) { try { ws.send(typeof msg === 'string' ? msg : JSON.stringify(msg)); } catch {} }
+  send(ws, msg) { try { ws.send(typeof msg === 'string' || msg instanceof Uint8Array ? msg : JSON.stringify(msg)); } catch {} }
   broadcast(msg) { const data = JSON.stringify(msg); for (const ws of this.sockets()) this.send(ws, data); }
   async scheduleAlarm() {
     const everyone = this.players(), live = everyone.filter(p => !p.inactive);
@@ -248,12 +269,20 @@ export class Room {
     server.serializeAttachment(newPlayer(id, now));
     this.send(server, {type: 'welcome', id, now});
     this.send(server, snapshot(this.players(), now, await this.loadItems()));
-    for (const msg of marksMessages(await this.loadMarks())) this.send(server, msg);
+    // (the ink in binary for a page that can take it; made once and kept till the marks change. The marks go
+    // now, the ink as it's ready: anything drawn meanwhile comes after, and the page holds it till the ink's in)
+    const binary = new URL(request.url).searchParams.get('z') === '1';
+    if (binary) this.inkSent ||= {parts: null};
+    const join = joinMarks(await this.loadMarks(), binary, now, binary ? this.inkSent : null);
+    for (const msg of join.head) this.send(server, msg);
     this.send(server, {type: 'race', race: publicRace(await this.loadRace(), now)});
     this.send(server, {type: 'koth', koth: publicKoth(await this.loadKoth(), now)});
     this.send(server, {type: 'keypad', entry: this.converter?.entry || ''});
     this.send(server, {type: 'emotes', config: await this.loadEmotes()});
     this.send(server, {type: 'graffiti', hidden: hiddenPieces(await this.loadReview())});
+    // (if it can't be deflated, the lot again as JSON: the page starts over with that)
+    try { for (const msg of await join.parts) this.send(server, msg); }
+    catch { this.inkSent = null; for (const msg of joinMarks(await this.loadMarks(), false).head) this.send(server, msg); }
     await this.scheduleAlarm();
     return new Response(null, {status: 101, webSocket: client});
   }
@@ -310,7 +339,7 @@ export class Room {
     const marks = await this.loadMarks();
     const joined = joinInk(marks.ink || [], now);
     for (const d of joined) this.broadcast({type: 'inkgroup', g: d.g, ids: d.ids});
-    if (joined.length) this.saveMarksSoon();
+    if (joined.length || joined.finished) this.saveMarksSoon();
     for (const ws of this.sockets()) {
       const p = ws.deserializeAttachment();
       if (!p || p.inactive || now - p.lastActive < INACTIVE_MS) continue;

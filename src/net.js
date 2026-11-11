@@ -1,9 +1,19 @@
 // WebSocket client with reconnect/backoff, heartbeats and latest-pose-only
 // sending. Ported from the cards.art showroom client.
+import {decodeInk, inflate} from './protocol.js';
 const POSE_BUFFER_LIMIT = 64 * 1024;
 const POSE_RETRY_MS = 100;
 const HEARTBEAT_MS = 6000;      // (the server lets a page go after 20 s without a word: server/worker.js)
 const PONG_TIMEOUT_MS = 15000;
+const BINARY = typeof DecompressionStream === 'function';
+// a binary message, as the room sends them (server/room.js joinMarks): [1][part i][parts n][deflated ink] -> an
+// 'inkpart' message whose ink is [{id, h, c, t, g, q}] (q: packed numbers, 8 a point)
+async function binaryMessage(buf) {
+  const b = new Uint8Array(buf);
+  if (b.length < 5 || b[0] !== 1) return null;
+  const ink = decodeInk(await inflate(b.subarray(5)));
+  return ink ? {type: 'inkpart', i: (b[1] << 8) | b[2], n: (b[3] << 8) | b[4], ink, bin: true} : null;
+}
 
 export function connectRoom({url, onState, onPose, onLeave, onChat, onStatus, onItem, onPunch, onMessage}) {
   // the session lives as long as the tab: a refresh reconnects as the same player
@@ -61,12 +71,33 @@ export function connectRoom({url, onState, onPose, onLeave, onChat, onStatus, on
     if (closed) return;
     onStatus('connecting');
     let current;
-    try { current = new WebSocket(`${url}?session=${session}`); } catch { retry(); return; }
+    // (z=1: the room's ink, when joining, comes packed and deflated, in binary messages, if this browser can
+    // inflate it; protocol.js encodeInk)
+    try { current = new WebSocket(`${url}?session=${session}${BINARY ? '&z=1' : ''}`); } catch { retry(); return; }
     socket = current;
+    current.binaryType = 'arraybuffer';
+    // messages are handled in the order they came: one in binary has to be inflated first (a moment), and the
+    // ones behind it wait for it
+    let behind = null;
     current.onmessage = event => {
       if (closed || current !== socket) return;
       if (event.data === 'pong') { clearTimeout(pongTimer); pongTimer = undefined; return; }
-      let m; try { m = JSON.parse(event.data); } catch { return; }
+      if (behind || typeof event.data !== 'string') {
+        const data = event.data;
+        const run = (behind || Promise.resolve()).then(async () => {
+          if (closed || current !== socket) return;
+          if (typeof data === 'string') handle(data);
+          else { const m = await binaryMessage(data); if (m && !closed && current === socket) handle(m); }
+        }).catch(() => {});
+        behind = run.then(() => { if (behind === next) behind = null; });
+        const next = behind;
+        return;
+      }
+      handle(event.data);
+    };
+    const handle = data => {
+      let m = data;
+      if (typeof data === 'string') { try { m = JSON.parse(data); } catch { return; } }
       if (!m || typeof m !== 'object') return;
       if (m.type === 'welcome') { id = m.id; offset = m.now - Date.now(); }
       else if (m.type === 'state') {

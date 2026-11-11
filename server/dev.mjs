@@ -9,7 +9,7 @@ import {extname, join, normalize, resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {INACTIVE_MS, IDLE_RESET_MS, MAX_PLAYERS, cleanItem} from '../src/protocol.js';
 import {freshRace, publicRace} from '../src/race.js';
-import {handleMessage, newPlayer, snapshot, freshItems, releaseItems, letGo, freshMarks, marksMessage, marksMessages, joinInk, itemsAtSpawn, kothTick, freshKoth, publicKoth, logError, promoteRadio} from './room.js';
+import {handleMessage, newPlayer, snapshot, freshItems, releaseItems, letGo, freshMarks, marksMessage, joinMarks, joinInk, itemsAtSpawn, kothTick, freshKoth, publicKoth, logError, promoteRadio, finishInk} from './room.js';
 import {cleanEmoteConfig} from '../src/emotes.js';
 import {cleanReview, hiddenPieces} from '../src/review.js';
 
@@ -65,13 +65,13 @@ const server = createServer(async (req, res) => {
 // ---------------------------------------------------------------- websocket
 const clients = new Set();
 function frame(text) {
-  const payload = Buffer.from(text);
+  const bin = text instanceof Uint8Array, payload = bin ? Buffer.from(text) : Buffer.from(text), op = bin ? 0x82 : 0x81;
   const n = payload.length;
-  const head = n < 126 ? Buffer.from([0x81, n]) : n < 65536 ? Buffer.from([0x81, 126, n >> 8, n & 255])
-    : Buffer.concat([Buffer.from([0x81, 127]), (() => { const b = Buffer.alloc(8); b.writeBigUInt64BE(BigInt(n)); return b; })()]);
+  const head = n < 126 ? Buffer.from([op, n]) : n < 65536 ? Buffer.from([op, 126, n >> 8, n & 255])
+    : Buffer.concat([Buffer.from([op, 127]), (() => { const b = Buffer.alloc(8); b.writeBigUInt64BE(BigInt(n)); return b; })()]);
   return Buffer.concat([head, payload]);
 }
-function send(c, msg) { if (!c.closed) c.socket.write(frame(typeof msg === 'string' ? msg : JSON.stringify(msg))); }
+function send(c, msg) { if (!c.closed) c.socket.write(frame(typeof msg === 'string' || msg instanceof Uint8Array ? msg : JSON.stringify(msg))); }
 function broadcast(msg) { const data = JSON.stringify(msg); for (const c of clients) send(c, data); }
 const players = () => [...clients].map(c => c.player);
 let items = freshItems();
@@ -84,6 +84,21 @@ function runKoth(cause) {
   for (const {msg} of kothTick({items, koth, players}, Date.now()).out) broadcast(msg);
 }
 const marks = freshMarks();
+// INK_FILL=n: start with n points of made-up ink on the tunnel walls all round the loop (to try a lot of it)
+if (Number(process.env.INK_FILL) > 0) {
+  let seed = 7; const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+  const R = 38 + 3.4, r3 = v => Math.round(v * 1000) / 1000;
+  for (let i = 0, n = 0; n < Number(process.env.INK_FILL); i++) {
+    let a = rnd() * Math.PI * 2, y = .8 + rnd() * 1.4;
+    const da = (rnd() - .5) * .0006, dy = (rnd() - .5) * .01, pts = [];
+    for (let k = 0; k < 120; k++) {
+      a += da + (rnd() - .5) * .0004; y += dy + (rnd() - .5) * .006;
+      pts.push([r3(Math.cos(a) * R), r3(y), r3(-Math.sin(a) * R), -Math.round(Math.cos(a) * 100) / 100, 0, Math.round(Math.sin(a) * 100) / 100, .5, .5]);
+    }
+    const s = {id: `fill:${i}`, h: 'w', c: [0xff4400, 0x22aaff, 0xffffff, 0x33dd55][i % 4], t: i, at: i, joined: true, pts};
+    finishInk(s); marks.ink.push(s); n += s.q.length / 8;
+  }
+}
 
 server.on('upgrade', (req, socket) => {
   const url = new URL(req.url, 'http://x');
@@ -103,7 +118,9 @@ server.on('upgrade', (req, socket) => {
   send(c, {type: 'emotes', config: emotes});
   send(c, {type: 'graffiti', hidden: hiddenPieces(review)});
   send(c, snapshot(players(), now, items));
-  for (const msg of marksMessages(marks)) send(c, msg);
+  const join = joinMarks(marks, url.searchParams.get('z') === '1');
+  for (const msg of join.head) send(c, msg);
+  join.parts.then(list => { for (const msg of list) send(c, msg); }, () => { for (const msg of joinMarks(marks, false).head) send(c, msg); });
   send(c, {type: 'race', race: publicRace(race, now)});
   send(c, {type: 'koth', koth: publicKoth(koth, now)});
   send(c, {type: 'keypad', entry: converter.entry});
