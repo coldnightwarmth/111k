@@ -18,7 +18,8 @@ try {
   const page = await browser.newPage(), errors = [];
   page.on('pageerror', e => errors.push(`pageerror: ${e.message}`));
   page.on('console', m => { if (m.type() === 'error') errors.push(`console: ${m.text()}`); });
-  page.on('requestfailed', r => { if (!/favicon/.test(r.url())) errors.push(`request failed: ${r.url()} ${r.failure()?.errorText}`); });
+  // (a request the page itself called off, ERR_ABORTED, isn't a failure: the browser dropping a preload, a fetch cancelled)
+  page.on('requestfailed', r => { if (!/favicon/.test(r.url()) && !/ERR_ABORTED/.test(r.failure()?.errorText || '')) errors.push(`request failed: ${r.url()} ${r.failure()?.errorText}`); });
   page.on('response', r => { if (r.status() >= 400 && !/favicon/.test(r.url())) errors.push(`HTTP ${r.status()}: ${r.url()}`); });
   await page.setViewport({width: 640, height: 400});
   const t0 = Date.now();
