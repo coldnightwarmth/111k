@@ -5,7 +5,7 @@
 // items, which the caller keeps (Durable Object storage in production).
 import {INK_HOST, INK_PER_S, MAX_INK_STROKES, MAX_STROKE_PTS, MAX_INK_PTS, INK_PART_PTS, packInk, cleanInkPoints, SETTLE_BYTES, SETTLE_MAX, SETTLE_PER_S, MAG_SIZE, RELOAD_MS, CROWN_HITS, CROWN_HIT_WINDOW_MS, CHAT_INTERVAL_MS, CHAT_TTL_MS, POSE_INTERVAL_MS, PICKUP_RANGE, PUNCH_RANGE, PUNCH_COOLDOWN_MS,
   SHOT_INTERVAL_MS, SPRAY_INTERVAL_MS, SPRAY_RANGE, MAX_SPLATS, MAX_SPRAYS, SPLAT_LIFE_MS, ART_MAX,
-  sanitizeChat, sanitizePose, radioLink, radioKey, RADIO_MAX_MS, samePose, cleanItem, cleanPath, sanitizeLook, sanitizeName, cleanSplat, cleanSpray, splatId, sprayId} from '../src/protocol.js';
+  sanitizeChat, sanitizePose, radioLink, radioKey, RADIO_MAX_MS, RADIO_GAP_MS, samePose, cleanItem, cleanPath, sanitizeLook, sanitizeName, cleanSplat, cleanSpray, splatId, sprayId} from '../src/protocol.js';
 import {ITEM_SPAWNS} from '../src/world-items.js';
 import {RACE_LAPS, RACE_TIMEOUT_MS, BUTTON, BUTTON_RANGE, MACHINE_ANGLE, LAP_LINE, BUTTON_LAP, loopAngle, freshRace, publicRace} from '../src/race.js';
 import {PANEL, USE_RANGE, BUSY_MS, inChamber, standPose, keyEntry, KEYS} from '../src/converter-spec.js';
@@ -35,6 +35,18 @@ export const radioLogKey = at => RADIO_LOG_PREFIX + String(at).padStart(15, '0')
 export function radioEntry(item, player, url) {
   const p = item.play;
   return {at: p.at, u: p.u, url: typeof url === 'string' ? url.trim().slice(0, 400) : '', radio: item.id, by: p.by, name: player?.name || ''};
+}
+// the one queued, made the play once the one playing has stopped (it starts RADIO_GAP_MS after: every page has
+// already worked that out: src/protocol.js radioNow). Returns its log record, or null if nothing changed. (The
+// room does this before each message and when the one playing stops: server/worker.js)
+export function promoteRadio(item, now) {
+  if (item?.type !== 'radio') return null;
+  const p = item.play, q = item.next;
+  if (!q || !p || now < p.until) return null;
+  const at = p.until + RADIO_GAP_MS;
+  item.play = {u: q.u, at, until: at + RADIO_MAX_MS, by: q.by};
+  delete item.next;
+  return {at, set: {at, u: q.u, url: q.url || '', radio: item.id, by: q.by, name: q.name || ''}};
 }
 // a log record brought up to date (how long the track was, whether it was called off)
 export function patchRadioEntry(entry, patch) {
@@ -547,16 +559,23 @@ function handle(player, data, now, room) {
   }
   // the radio: a link to play (only while it's quiet, only from near it, only while it's put down), and how long
   // the track turned out to be (from whoever put it on: it stops then, or at five minutes)
+  const logs = [];
   if (m.type === 'radio') {
     if (!item || item.type !== 'radio' || item.holder || !player.pose || player.inactive) return refuse();
     if (flat(player.pose, item) > PICKUP_RANGE + 1) return refuse();
-    if (item.play && now < item.play.until) return refuse();
+    const busy = item.play && now < item.play.until;
+    if (busy && item.next) return refuse();                       // (one playing and one waiting: that's all)
     const link = radioLink(m.url);
     if (!link) return refuse();
-    item.play = {u: radioKey(link), at: now + 1500, until: now + 1500 + RADIO_MAX_MS, by: player.id};
     player.lastActive = now;
+    if (busy) {
+      item.next = {u: radioKey(link), by: player.id, url: typeof m.url === 'string' ? m.url.trim().slice(0, 400) : '', name: player.name || ''};
+    } else {
+      item.play = {u: radioKey(link), at: now + 1500, until: now + 1500 + RADIO_MAX_MS, by: player.id};
+      logs.push({at: item.play.at, set: radioEntry(item, player, m.url)});
+    }
     out.push({to: 'all', msg: {type: 'item', item: cleanItem(item)}});
-    return {out, changed: true, itemsChanged: true, radioLog: {at: item.play.at, set: radioEntry(item, player, m.url)}};
+    return {out, changed: true, itemsChanged: true, radioLogs: logs};
   }
   // a track that won't play (an error, or nothing coming out for half a minute): off, so another can go on. Said
   // by whoever put it on, or (if they've gone) anyone, or else by two different people
@@ -564,16 +583,16 @@ function handle(player, data, now, room) {
     if (!item || item.type !== 'radio' || !item.play || now >= item.play.until) return refuse();
     const play = item.play, setterHere = room.players().some(p => p && p.id === play.by && !p.inactive);
     play.dead = [...new Set([...(play.dead || []), player.id])];
-    if (player.id !== play.by && setterHere && play.dead.length < 2) return {out, changed: true, itemsChanged: true};
+    if (player.id !== play.by && setterHere && play.dead.length < 2) return {out, changed: true, itemsChanged: true, radioLogs: logs};
     play.until = now;
     out.push({to: 'all', msg: {type: 'item', item: cleanItem(item)}});
-    return {out, changed: true, itemsChanged: true, radioLog: {at: play.at, patch: {dead: true, ended: now}}};
+    return {out, changed: true, itemsChanged: true, radioLogs: [...logs, {at: play.at, patch: {dead: true, ended: now}}]};
   }
   if (m.type === 'radio-len') {
     if (!item || item.type !== 'radio' || !item.play || item.play.by !== player.id || !Number.isFinite(m.ms) || m.ms < 1000) return refuse();
     item.play.until = Math.min(item.play.until, item.play.at + Math.round(m.ms) + 500);
     out.push({to: 'all', msg: {type: 'item', item: cleanItem(item)}});
-    return {out, changed: true, itemsChanged: true, radioLog: {at: item.play.at, patch: {ms: Math.round(m.ms)}}};
+    return {out, changed: true, itemsChanged: true, radioLogs: [...logs, {at: item.play.at, patch: {ms: Math.round(m.ms)}}]};
   }
   if (m.type === 'drop') {
     if (!item || item.holder !== player.id || !player.pose) return refuse();

@@ -39,7 +39,7 @@ import {createSfx} from './sfx.js';
 import {randomLook, cleanLook} from './looks.js';
 import {cleanEmoteConfig, offeredEmotes} from './emotes.js';
 import {EMOTES, EMOTE_DURATION, PUNCH_COOLDOWN_MS, PUNCH_DURATION, PUNCH_COMBO_MS, SHOT_INTERVAL_MS, SPRAY_INTERVAL_MS, SPRAY_RANGE,
-  MAX_SPLATS, MAX_SPRAYS, SPLAT_LIFE_MS, SETTLE_BYTES, SETTLE_MAX, MAG_SIZE, INK_PTS, MAX_STROKE_PTS, sanitizePose, sanitizeName, PUNCH_REACH, PUNCH_REACH_FAST, unpackInk, cleanSplat, cleanSpray, splatId, sprayId} from './protocol.js';
+  MAX_SPLATS, MAX_SPRAYS, SPLAT_LIFE_MS, SETTLE_BYTES, SETTLE_MAX, MAG_SIZE, INK_PTS, MAX_STROKE_PTS, sanitizePose, sanitizeName, PUNCH_REACH, PUNCH_REACH_FAST, unpackInk, radioNow, cleanSplat, cleanSpray, splatId, sprayId} from './protocol.js';
 import {paintingSize, paintingMatrix, paintingTris} from './paintings.js';
 import {settle as settlePaintings, warmPhysics, reversed} from './settle.js';
 
@@ -427,8 +427,9 @@ async function start() {
     onOpenChange: open => { if (!open && relock && !controls.state.touch) { relock = false; canvas.requestPointerLock?.()?.catch?.(() => {}); } }});
   function openRadio(t) {
     relock = controls.state.locked; release();
-    const play = t.state.play;
-    radio().prompt(t.state.id, !!play && network.now() < play.until);
+    const now = network.now(), play = radioNow(t.state, now);
+    const playing = !!play && now < play.until, queued = playing && !!t.state.next && t.state.play && now < t.state.play.until;
+    radio().prompt(t.state.id, playing, queued);
     learn('radio');
   }
 
@@ -2310,7 +2311,7 @@ async function start() {
       for (const it of items.items.values()) {
         if (it.state.type !== 'radio') continue;
         const p = it.model.getWorldPosition(_radioAt);
-        list.push({id: it.state.id, play: it.state.play, x: p.x, y: p.y + .12, z: p.z});
+        list.push({id: it.state.id, play: radioNow(it.state, network.now()), x: p.x, y: p.y + .12, z: p.z});
       }
       if (list.some(r => r.play) || radioUI) radio().update(list, camera.position, r => {
         const d = _radioDir.set(r.x - camera.position.x, r.y - camera.position.y, r.z - camera.position.z), len = d.length();

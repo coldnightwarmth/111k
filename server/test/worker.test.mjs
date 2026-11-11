@@ -941,11 +941,21 @@ test('the radio: a YouTube or SoundCloud link, only while quiet, five minutes at
   assert.equal(send(a, {type: 'radio', id: 'rd1', url: 'https://example.com/song'}).out[0].msg.refused, true);
   send(a, {type: 'radio', id: 'rd1', url: 'https://youtu.be/dQw4w9WgXcQ'});
   assert.equal(r.play.u, 'yt:dQw4w9WgXcQ'); assert.equal(r.play.until - r.play.at, RADIO_MAX_MS);
-  assert.equal(send(b, {type: 'radio', id: 'rd1', url: 'https://youtu.be/aaaaaaaaaaa'}).out[0].msg.refused, true);   // busy
+  // busy: one more waits its turn, and that's all
+  assert.ok(!send(b, {type: 'radio', id: 'rd1', url: 'https://youtu.be/aaaaaaaaaaa'}).out[0].msg.refused);
+  assert.equal(r.next.u, 'yt:aaaaaaaaaaa'); assert.equal(r.play.u, 'yt:dQw4w9WgXcQ');
+  assert.equal(send(a, {type: 'radio', id: 'rd1', url: 'https://youtu.be/bbbbbbbbbbb'}).out[0].msg.refused, true);
   send(b, {type: 'radio-len', id: 'rd1', ms: 60_000});                     // not theirs to say
   assert.equal(r.play.until - r.play.at, RADIO_MAX_MS);
   send(a, {type: 'radio-len', id: 'rd1', ms: 60_000});
   assert.ok(r.play.until - r.play.at <= 61_000);
+  // when it stops, the queued one's on (as every page has already worked out)
+  const {promoteRadio} = await import('../room.js'), {radioNow, RADIO_GAP_MS} = await import('../../src/protocol.js');
+  now = r.play.until + 1;
+  const expected = radioNow(r, now);
+  assert.equal(expected.u, 'yt:aaaaaaaaaaa'); assert.equal(expected.at, r.play.until + RADIO_GAP_MS);
+  assert.equal(promoteRadio(r, now).set.u, 'yt:aaaaaaaaaaa');
+  assert.deepEqual(r.play, expected); assert.equal(r.next, undefined);
   now = r.play.until + 1;
   send(b, {type: 'radio', id: 'rd1', url: 'https://soundcloud.com/artist/track'});
   assert.equal(r.play.u, 'https://soundcloud.com/artist/track');

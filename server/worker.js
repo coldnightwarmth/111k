@@ -1,14 +1,14 @@
 // Cloudflare Worker + Durable Object for the shared hangout (free tier).
 // One Durable Object instance ("public-v1") holds every socket. Hibernating
 // WebSockets plus automatic ping/pong mean an idle room costs nothing.
-import {INACTIVE_MS, IDLE_RESET_MS, MAX_PLAYERS, packInk, unpackInk} from '../src/protocol.js';
+import {INACTIVE_MS, IDLE_RESET_MS, MAX_PLAYERS, cleanItem, packInk, unpackInk} from '../src/protocol.js';
 const QUIET_MS = 20000, QUIET_CHECK_MS = 7000;
 const INK_CHUNK_PTS = 40000;      // points to a stored chunk (packed as 32-bit numbers: about 1.3 MB, under a value's 2 MiB)     // let go after this long without a word (pages ping every 6 s)
 import {cleanEmoteConfig} from '../src/emotes.js';
 import {cleanReview, hiddenPieces} from '../src/review.js';
 import {freshRace, publicRace} from '../src/race.js';
 import {handleMessage, newPlayer, snapshot, freshItems, freshMarks, validItems, releaseItems, letGo, validMarks, marksMessage, marksMessages, joinInk, itemsAtSpawn,
-  kothTick, kothNext, freshKoth, publicKoth, logError, RADIO_LOG_PREFIX, radioLogKey, patchRadioEntry} from './room.js';
+  kothTick, kothNext, freshKoth, publicKoth, logError, RADIO_LOG_PREFIX, radioLogKey, patchRadioEntry, promoteRadio} from './room.js';
 
 // The scene: everything players have done to the space (items moved, pieces sprayed, paint, the level's own
 // graffiti scrubbed off, the lap timer, king of the hill). When this changes, the room starts over once with
@@ -142,6 +142,8 @@ export class Room {
     if (live.length) times.push(Math.min(...live.map(p => p.lastActive)) + INACTIVE_MS + 1000);
     // items out of place: put them back once the room has been idle long enough
     if (everyone.length && !itemsAtSpawn(await this.loadItems())) times.push(Math.max(...everyone.map(p => p.lastActive)) + IDLE_RESET_MS + 500);
+    // a queued link due on (a radio's play stopping with another waiting)
+    for (const it of Object.values(await this.loadItems())) if (it.type === 'radio' && it.next && it.play) times.push(Math.max(Date.now() + 50, it.play.until));
     const koth = kothNext(await this.loadKoth());
     if (koth !== null && everyone.length) times.push(koth + 20);
     if (!times.length) return;
@@ -197,6 +199,19 @@ export class Room {
       await this.ctx.storage.put?.({...seed, radioLogSeeded: Date.now()});
     })();
   }
+  // a radio's queued link on, once the one playing has stopped (before each message, and by the alarm then)
+  async promoteRadios(now) {
+    const items = await this.loadItems();
+    let any = false;
+    for (const it of Object.values(items)) {
+      const log = promoteRadio(it, now);
+      if (!log) continue;
+      any = true;
+      this.broadcast({type: 'item', item: cleanItem(it)});
+      await this.logRadio(log);
+    }
+    if (any) { await this.saveItems(); await this.scheduleAlarm(); }
+  }
   async logRadio({at, set, patch}) {
     await this.radioLogReady();
     const key = radioLogKey(at);
@@ -251,6 +266,7 @@ export class Room {
     await this.radioLogReady();           // (before anything's put on over what the radio last played)
     const race = await this.loadRace(), koth = await this.loadKoth();
     this.converter ||= {entry: '', busyUntil: 0, id: null};     // (the keypad: kept while the room's awake)
+    await this.promoteRadios(now);
     const result = handleMessage(player, data, now, {items, marks, race, koth, converter: this.converter, players: () => this.players()});
     if (result.close) { ws.close(1009, result.close); return; }
     const quiet = now - (player.heard || 0) > 4000;            // (heard from: kept now and then, not every message)
@@ -261,7 +277,7 @@ export class Room {
       else if (to === 'self') this.send(ws, msg);
       else for (const other of this.sockets()) if (other.deserializeAttachment()?.id === to) this.send(other, msg);
     }
-    if (result.radioLog) await this.logRadio(result.radioLog);
+    for (const l of result.radioLogs || []) await this.logRadio(l);
     if (result.report) await this.ctx.storage.put?.('errors', logError((await this.ctx.storage.get?.('errors')) || [], result.report), {allowUnconfirmed: true});
     if (result.itemsChanged) { await this.saveItems(); await this.scheduleAlarm(); }
     if (result.marksChanged) this.saveMarksSoon();
@@ -289,6 +305,7 @@ export class Room {
       try { ws.close(4000, 'Gone quiet'); } catch {}
     }
     await this.releaseOrphans();
+    await this.promoteRadios(now);
     // marker strokes that cross, left a minute: one drawing (kept or let go whole; drawn as one)
     const marks = await this.loadMarks();
     const joined = joinInk(marks.ink || [], now);

@@ -7,9 +7,9 @@ import {createHash} from 'node:crypto';
 import {readFile, stat} from 'node:fs/promises';
 import {extname, join, normalize, resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
-import {INACTIVE_MS, IDLE_RESET_MS, MAX_PLAYERS} from '../src/protocol.js';
+import {INACTIVE_MS, IDLE_RESET_MS, MAX_PLAYERS, cleanItem} from '../src/protocol.js';
 import {freshRace, publicRace} from '../src/race.js';
-import {handleMessage, newPlayer, snapshot, freshItems, releaseItems, letGo, freshMarks, marksMessage, marksMessages, joinInk, itemsAtSpawn, kothTick, freshKoth, publicKoth, logError} from './room.js';
+import {handleMessage, newPlayer, snapshot, freshItems, releaseItems, letGo, freshMarks, marksMessage, marksMessages, joinInk, itemsAtSpawn, kothTick, freshKoth, publicKoth, logError, promoteRadio} from './room.js';
 import {cleanEmoteConfig} from '../src/emotes.js';
 import {cleanReview, hiddenPieces} from '../src/review.js';
 
@@ -140,12 +140,24 @@ function parse(c) {
   }
 }
 
+// a radio's queued link on, once the one playing has stopped (before each message, and every second)
+function promoteRadios(now) {
+  for (const it of Object.values(items)) {
+    const log = promoteRadio(it, now);
+    if (!log) continue;
+    broadcast({type: 'item', item: cleanItem(it)});
+    radioLog.set(log.at, log.set);
+  }
+}
+setInterval(() => promoteRadios(Date.now()), 1000);
+
 function onText(c, text) {
   if (text === 'ping') { send(c, 'pong'); return; }
   const now = Date.now();
+  promoteRadios(now);
   const result = handleMessage(c.player, text, now, {items, marks, race, koth, converter, players});
   if (result.report) errors = logError(errors, result.report);
-  if (result.radioLog) { const {at, set, patch} = result.radioLog; const e = set || (radioLog.has(at) && {...radioLog.get(at), ...patch}); if (e) radioLog.set(at, e); }
+  for (const {at, set, patch} of result.radioLogs || []) { const e = set || (radioLog.has(at) && {...radioLog.get(at), ...patch}); if (e) radioLog.set(at, e); }
   if (result.close) { close(c); return; }
   for (const {to, msg} of result.out) {
     if (to === 'all') broadcast(msg);
