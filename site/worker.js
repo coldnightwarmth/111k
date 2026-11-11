@@ -46,6 +46,25 @@ const soon = left => `<!doctype html>
 </body>
 </html>`;
 
+async function film(request, env, url, path) {
+  const res = await env.ASSETS.fetch(new Request(url, {method: 'GET'}));
+  if (res.status !== 200) return res;
+  const buf = await res.arrayBuffer(), size = buf.byteLength;
+  const headers = new Headers({'Content-Type': res.headers.get('Content-Type') || 'video/mp4', 'Accept-Ranges': 'bytes',
+    'Cache-Control': cacheFor(path), 'X-Content-Type-Options': 'nosniff'});
+  const m = /^bytes=(\d*)-(\d*)$/.exec((request.headers.get('Range') || '').trim());
+  if (!m || (m[1] === '' && m[2] === '')) {
+    headers.set('Content-Length', String(size));
+    return new Response(request.method === 'HEAD' ? null : buf, {status: 200, headers});
+  }
+  let start, end;
+  if (m[1] === '') { start = Math.max(0, size - Number(m[2])); end = size - 1; }
+  else { start = Number(m[1]); end = m[2] === '' ? size - 1 : Math.min(Number(m[2]), size - 1); }
+  if (start >= size || start > end) { headers.set('Content-Range', `bytes */${size}`); return new Response(null, {status: 416, headers}); }
+  headers.set('Content-Range', `bytes ${start}-${end}/${size}`); headers.set('Content-Length', String(end - start + 1));
+  return new Response(request.method === 'HEAD' ? null : buf.slice(start, end + 1), {status: 206, headers});
+}
+
 // "lost in the tunnels" (404.html), as for any other address that isn't on the site
 async function lost(request, env) {
   const page = await env.ASSETS.fetch(new Request(new URL('/404.html', request.url)));
@@ -68,6 +87,9 @@ export default {
     if (left > 0 && (request.method === 'GET' || request.method === 'HEAD') && !path.startsWith('/assets/'))
       return new Response(request.method === 'HEAD' ? null : soon(left),
         {headers: {'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'X-Robots-Tag': 'noindex'}});
+    // the films (B-04's projector): served in pieces as the player asks (the static files don't do ranges, and
+    // Safari won't play a film without them, nor will any browser jump into the middle of one)
+    if (path.startsWith('/assets/cinema/') && (request.method === 'GET' || request.method === 'HEAD')) return film(request, env, url, path);
     const res = await env.ASSETS.fetch(request);
     if (res.status !== 200 || !path.startsWith('/assets/')) return res;
     const headers = new Headers(res.headers);

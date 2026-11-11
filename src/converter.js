@@ -168,13 +168,13 @@ export function createConverter(scene) {
   for (const [x, y] of [[-hx + .06, .2], [-hx + .06, MH - .12], [hx - .06, .2], [hx - .06, MH - .12], [cx0 - .2, .2], [cx0 - .2, MH - .12]])
     part(body, new THREE.CylinderGeometry(.012, .012, .01, 8), steel, [x, y, .006], [Math.PI / 2, 0, 0]);
   // a beacon on top (spins while it's working)
-  const beacon = new THREE.Group(); beacon.position.set(-hx + .25, MH + .02, -.3); root.add(beacon);
+  const beacon = new THREE.Group(); beacon.position.set(-hx + .25, MH + .02, -.3); body.add(beacon);
   part(beacon, new THREE.CylinderGeometry(.07, .08, .04, 16), black, [0, .02, 0]);
   const beaconGlass = std(0xffa020, .2, 0, {transparent: true, opacity: .75, emissive: 0x401800});
   part(beacon, new THREE.CylinderGeometry(.055, .06, .11, 16), beaconGlass, [0, .095, 0]);
   const beaconLamp = part(beacon, new THREE.BoxGeometry(.05, .04, .02), new THREE.MeshBasicMaterial({color: 0xffc040, toneMapped: false}), [0, .095, .02]);
   // pipes from the back of the top into the wall
-  for (const x of [cx0 + .25, cx1 - .25]) part(root, new THREE.CylinderGeometry(.05, .05, .5, 12), steel, [x, MH + .25, -MD + .15]);
+  for (const x of [cx0 + .25, cx1 - .25]) part(body, new THREE.CylinderGeometry(.05, .05, .5, 12), steel, [x, MH + .25, -MD + .15]);
 
   // ---- the shutter: rolls down from a slot over the chamber's mouth
   const shutterH = CH.y1 - CH.y0, shutterW = cx1 - cx0 + .04;
@@ -198,7 +198,7 @@ export function createConverter(scene) {
   setShutter(0);
 
   // ---- the panel: display, keypad, big button
-  const panel = new THREE.Group(); panel.position.set(px, 0, 0); root.add(panel);
+  const panel = new THREE.Group(); panel.position.set(px, 0, 0); body.add(panel);     // (solid: balls and paint stop on it)
   const noPaint = o => { o.traverse(q => { q.userData.noPaint = true; }); return o; };
   slab(panel, trim, -.36, .36, DISPLAY_Y - .2, DISPLAY_Y + .2, 0, .05);                // the display's bezel
   const display = createDisplay();

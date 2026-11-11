@@ -40,6 +40,20 @@ you hold · right click (or F) drops it.
 
 On phones: left stick moves, drag to look, buttons for the rest.
 
+Three rooms do something of their own:
+- **B-04, the cinema:** a pull-down screen and a projector on a crate, playing the films in `assets/cinema/`
+  round and round (`src/cinema-films.js`; everyone sees the same moment, by the clock). The projector is a
+  real light carrying the film, so whoever walks into the beam gets it across them and throws a shadow on
+  the screen; the beam, the glow round the screen and the light back into the room follow the film's colour,
+  and its sound plays softly from the screen (`src/cinema.js`).
+- **B-10:** a Super Metal Mons board, 11 x 11 in its starting position, sprayed on the floor (`src/board.js`).
+- **B-20, the converter:** stand a painting in its chamber, type a piece number (1 to 111,111) on the keypad
+  and hit CONVERT: a shutter comes down and the canvas comes back as that piece of the collection
+  (`src/converter.js`; the server does it, `server/room.js`). Open crates round the room hold big painted eggs
+  (`src/eggs.js`). The numbering across the CDN's folders is `src/collection.js` (paintings, then 3D,
+  animated and eggs), with every painting's proportions in `src/collection-dims.js`
+  (`tools/collection_dims.py`).
+
 Voice chat (the mic button, top left, or the start screen): you always hear players near you, from where they
 stand. Your mic (M) is opt-in. So is text-to-speech, which reads your chat messages out from your avatar like
 your mic would, in one of two voices each: Hugo (higher) or Bruno (lower) for a Drifella, Kiki or Rosie for a
@@ -48,7 +62,7 @@ only downloaded (about 35 MB) when someone turns it on.
 
 Sounds: footsteps, jumps and landings, punches, the spray can, the paintball gun and its splats, the sponge,
 flashlight clicks, picking things up and putting them down, things (paintings especially) clattering as they
-fall, doors, the lap timer, the crown, incoming chat and the tunnel's hum. They're all made in code, nothing
+fall, doors, the lap timer, the crown, incoming chat, lamps flickering and the tunnel's hum. They're all made in code, nothing
 recorded (`src/sfx-synth.js`), a few fresh takes of each, and play from where they happen like voices do,
 muffled through walls, with some of the tunnel's echo (`src/sfx.js`). "sounds" in the voice box sets their
 volume. `/sfx` (on the GitHub copy) plays every version of every sound; pick one there to hear it in the game
@@ -98,6 +112,7 @@ Python module (`pip install bpy`, plus numpy, Pillow, scipy and scikit-image).
 ```sh
 npm run build:world              # full bake, about 10 minutes
 python3 tools/build_world.py --fast --preview   # quick bake + preview renders in tools/previews/
+KIT_CACHE=/tmp/bakes npm run build:world         # keeps each bake as it finishes: a run that's cut off carries on
 ```
 
 1. `tools/build_world.py` lays out the loop and the door passages;

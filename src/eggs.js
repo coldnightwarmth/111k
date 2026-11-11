@@ -9,7 +9,7 @@ const CRATES = [[2.6, 2.25, .25], [2.85, .6, Math.PI / 2 + .1], [-2.85, .55, Mat
   [1.75, .95, -.35], [-1.0, -1.75, .5]];
 const FILLED = [0, 1, 2, 3, 4];
 const FLOOR = .11;                                    // the crate's deck
-const EGG_H = .64, EGG_R = .21;
+const EGG_H = .7, EGG_R = .21;
 
 // ground, spots, stars, dots
 const LOOKS = [
@@ -84,19 +84,19 @@ function eggGeometry() {
 
 export function createEggs(scene) {
   const f = roomFrame(ROOM, DOOR_X[ROOM]), geo = eggGeometry(), root = new THREE.Group(); root.name = 'eggs';
-  const strawGeo = new THREE.BoxGeometry(.9, .09, .56), strawMat = new THREE.MeshStandardMaterial({map: strawTexture(), roughness: 1, color: 0xd8b768});
+  const strawGeo = new THREE.BoxGeometry(.9, .2, .56), strawMat = new THREE.MeshStandardMaterial({map: strawTexture(), roughness: 1, color: 0xd8b768});
   FILLED.forEach((k, i) => {
     const [x, z, turn] = CRATES[k], p = f.toWorld(x, z);
     const map = eggTexture(LOOKS[i % LOOKS.length], 911 + i * 77);
     const mat = new THREE.MeshStandardMaterial({map, roughness: .32, metalness: 0, emissiveMap: map, emissive: 0xffffff, emissiveIntensity: .14});
     const egg = new THREE.Mesh(geo, mat);
     // sat in the straw a little off upright, turned any which way
-    egg.position.set(p.x, FLOOR - .02, p.z);
+    egg.position.set(p.x, FLOOR + .12, p.z);
     egg.rotation.set((i % 2 ? 1 : -1) * (.08 + .04 * i), f.yaw + turn + i * 1.7, (i % 3 - 1) * .07, 'YXZ');
     root.add(egg);
     // a bed of straw filling the crate's floor
     const bed = new THREE.Mesh(strawGeo, strawMat);
-    bed.position.set(p.x, FLOOR + .045, p.z); bed.rotation.y = f.yaw + turn; root.add(bed);
+    bed.position.set(p.x, FLOOR + .1, p.z); bed.rotation.y = f.yaw + turn; root.add(bed);
   });
   root.traverse(o => { if (o.isMesh) { o.matrixAutoUpdate = false; o.updateMatrix(); } });
   scene.add(root);

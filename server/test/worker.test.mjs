@@ -882,3 +882,17 @@ test('the converter: keypad, a painting in the chamber, convert, busy', async ()
   await room.webSocketMessage(a, JSON.stringify({type: 'keypad', k: '3'}));
   assert.equal(b.messages().filter(m => m.type === 'keypad').length, before);
 });
+
+test('the collection: numbers across the CDN folders, and each piece its own proportions', async () => {
+  const {artUrl, artDims, piece, ART_MAX} = await import('../../src/collection.js');
+  assert.equal(ART_MAX, 111111);
+  assert.equal(artUrl(1), 'https://cdn.lil.org/nft/111k/paintings/1.png');
+  assert.equal(artUrl(56329), 'https://cdn.lil.org/nft/111k/paintings/56329.png');
+  assert.equal(artUrl(56330), 'https://cdn.lil.org/nft/111k/3d/1.png');
+  assert.equal(artUrl(59330), 'https://cdn.lil.org/nft/111k/animated/1.png');
+  assert.equal(artUrl(59751), 'https://cdn.lil.org/nft/111k/eggs/1.png');
+  assert.equal(artUrl(111111), 'https://cdn.lil.org/nft/111k/eggs/51361.png');
+  assert.equal(piece(111112), null);
+  assert.deepEqual(artDims(20637), {w: 932, h: 1111});
+  assert.deepEqual(artDims(70000), {w: 1024, h: 1024});
+});

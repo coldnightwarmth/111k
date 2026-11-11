@@ -162,7 +162,7 @@ export function createCinema(renderer, scene, sfx) {
   scene.add(bounce, bounce.target);
 
   // ---- the beam
-  const apex = proj.worldToLocal(lensW.clone()), local = c => root.worldToLocal(c.clone());
+  const local = c => root.worldToLocal(c.clone());
   const beamGeo = new THREE.BufferGeometry();
   {
     const L = root.worldToLocal(lensW.clone()), C = corners.map(local), pos = [], acr = [];
@@ -175,7 +175,6 @@ export function createCinema(renderer, scene, sfx) {
     beamGeo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
     beamGeo.setAttribute('across', new THREE.Float32BufferAttribute(acr, 3));
   }
-  void apex;
   const beamMat = beamMaterial();
   const beam = part(root, beamGeo, beamMat);
   beam.renderOrder = 5; beam.userData.noHit = true; beam.frustumCulled = false;

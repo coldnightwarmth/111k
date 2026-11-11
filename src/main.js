@@ -771,6 +771,7 @@ async function start() {
     return converter.aimed(o, d, (boom ? camDist : 0) + 2.6);
   }
   const CONVERTER_AT = {...CONVERTER_PANEL, y: 1.3};
+  let convPhase = null;
   // Picked up: in your hand this frame, not after the server's answered (it says yes, as a rule; if not, it
   // goes back where it was: src/items.js predict)
   function grab() {
@@ -2148,6 +2149,11 @@ async function start() {
     const keyAim = !frozen && !pushable ? converterKey() : null;
     converter.highlight(keyAim);
     converter.update(dt);
+    if (converter.phase !== convPhase) {                 // the shutter going back up, and a chime when it's done
+      if (converter.phase === 'up') sfx.play('doorOpen', {at: CONVERTER_AT, rate: .75, gain: .7});
+      if (converter.phase === 'open') sfx.play('lap', {at: CONVERTER_AT, gain: .6});
+      convPhase = converter.phase;
+    }
     const t = !h && !frozen && !pushable && !keyAim ? lookTarget() : null;
     items.highlight(t ? t.state.id : null);
     // a painting in your sights: its number (unless the speedometer's up there)
