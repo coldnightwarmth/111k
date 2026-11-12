@@ -26,6 +26,7 @@ const GRID = .5;                    // the overlap grid's cells (m); a stroke bi
 const BIG = 64;
 const BUILD_MS = 5;                 // a frame's share of building ink that's come in all at once
 const SETTLE_MS = 1500;             // a stroke left this long after being drawn live is rebuilt as one piece
+const MIXED = -2;                   // (src/cull.js: in the tunnel and a room both, shown by its angle round the loop)
 const _ray = new THREE.Ray(), _inv = new THREE.Matrix4(), _v = new THREE.Vector3(), _w = new THREE.Vector3();
 
 // the line's look: left half its cross-section (soft edges), right half a round dot
@@ -230,7 +231,7 @@ function inkBatch(material, vcap = 2048) {
 // layerFor(host, box, inkTop): the layer a new stroke goes on (over the tags it overlaps; inkTop is the highest of
 // the strokes it overlaps: src/main.js); order(layer): that layer's draw order
 // zoneOf(box) -> {key, room}: which chunk of the world a stroke on the walls goes in (src/main.js, from src/cull.js)
-export function createInk({level, scene, hostOf, layerFor = (h, box, top) => Math.max(0, top), order = () => 3.5, zoneOf = () => ({key: '', room: -2})}) {
+export function createInk({level, scene, hostOf, layerFor = (h, box, top) => Math.max(0, top), order = () => 3.5, zoneOf = () => ({key: '', room: MIXED})}) {
   const tex = inkTexture();
   const levelMat = markMaterial(level, tex, 3);
   const ownMat = new THREE.MeshStandardMaterial({map: tex, transparent: true, depthWrite: false, vertexColors: true, roughness: .55, metalness: 0,
@@ -286,9 +287,11 @@ export function createInk({level, scene, hostOf, layerFor = (h, box, top) => Mat
       batch.mesh.renderOrder = order(st.layer);   // in among the tags: over the older ones it overlaps, under newer
       parent.add(batch.mesh);
       if (h === 'w') batch.mesh.updateMatrix();
-      e = {batch, parent, h, room: st.room ?? -2};
+      e = {batch, parent, h, room: st.room ?? MIXED};
       batches.set(key, e);
     }
+    // (a chunk with strokes from more than one part of the level is shown by where it is round the loop alone)
+    if (h === 'w' && st.room !== e.room) e.room = MIXED;
     return e.batch;
   }
   function draw(st) {
@@ -343,9 +346,13 @@ export function createInk({level, scene, hostOf, layerFor = (h, box, top) => Mat
         let top = -1, under = null;
         overlapping(h, st.box, o => { if (o.layer > top || (o.layer === top && under && o.seq > under.seq)) { top = o.layer; under = o; } });
         st.layer = layerFor(h, st.box, top);
+        // (only if it's in the same part of the level as that one: the tunnel, a room, or both; otherwise a chunk
+        // grows from one to the next through a doorway, and is hidden from inside the room when the doorway
+        // isn't in sight)
         if (h === 'w') {
-          if (under && under.layer === st.layer) { st.zone = under.zone; st.room = under.room; }
-          else { const z = zoneOf(st.box); st.zone = z.key; st.room = z.room; }
+          const z = zoneOf(st.box);
+          st.room = z.room;
+          st.zone = under && under.layer === st.layer && under.room === z.room ? under.zone : z.key;
         }
         st.seq = ++seq;
         strokes.set(id, st);
@@ -458,5 +465,12 @@ export function createInk({level, scene, hostOf, layerFor = (h, box, top) => Mat
       return {strokes: strokes.size, pts, batches: batches.size, shown, indices: verts, queued: queue.length - queued, MB: Math.round(bytes / 1e6)};
     },
     has: id => strokes.has(id),
+    // the batches, for checks: [{key, room, shown, strokes, centre, radius}]
+    batches() {
+      return [...batches].map(([key, e]) => { const sp = e.batch.mesh.geometry.boundingSphere; return {key, room: e.room, shown: e.batch.mesh.visible, empty: e.batch.empty,
+        centre: [+sp.center.x.toFixed(2), +sp.center.y.toFixed(2), +sp.center.z.toFixed(2)], radius: +sp.radius.toFixed(2)}; });
+    },
+    // which batch a stroke's in
+    batchOf(id) { const st = strokes.get(id); return st && {zone: st.zone, room: st.room, layer: st.layer, box: [st.box.min.toArray().map(v => +v.toFixed(2)), st.box.max.toArray().map(v => +v.toFixed(2))]}; },
   };
 }

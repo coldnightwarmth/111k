@@ -88,6 +88,11 @@ function runKoth(cause) {
   for (const {msg} of kothTick({items, koth, players}, Date.now()).out) broadcast(msg);
 }
 const marks = freshMarks();
+// INK_FILE=path: start with the ink in that file ([{id, h, c, t, g, q: [packed numbers]}], as a room sends it)
+if (process.env.INK_FILE) {
+  const {readFileSync} = await import('node:fs');
+  for (const s of JSON.parse(readFileSync(process.env.INK_FILE, 'utf8'))) marks.ink.push({...s, q: Int32Array.from(s.q), at: s.t, joined: true, lite: 1});
+}
 // INK_FILL=n: start with n points of made-up ink on the tunnel walls all round the loop (to try a lot of it)
 if (Number(process.env.INK_FILL) > 0) {
   let seed = 7; const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
