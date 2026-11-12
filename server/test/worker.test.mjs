@@ -1227,22 +1227,44 @@ test('a room full of ink: new strokes and trimming stay quick', async () => {
   console.log(`# full room: slowest ink message ${worst.toFixed(1)} ms`);
 });
 
-test('the radio: a track that will not play is called off by whoever put it on, or two others', async () => {
+test('the radio: a track that will not play is called off when enough say so (an error, or a stall: more of them)', async () => {
   const {handleMessage, newPlayer, freshMarks} = await import('../room.js');
   const {ITEM_SPAWNS} = await import('../../src/world-items.js');
   const items = Object.fromEntries(ITEM_SPAWNS.map(s => [s.id, {...s, holder: null, on: false}]));
   const r = items.rd1, near = {x: r.x + .5, y: 1.45, z: r.z, yaw: 0, pitch: 0, g: 0};
-  const [a, b, c] = ['aaa', 'bbb', 'ccc'].map(id => { const p = newPlayer(id, 0); p.pose = {...near}; return p; });
-  const room = {items, marks: freshMarks(), race: null, players: () => [a, b, c]};
+  const [a, b, c, d] = ['aaa', 'bbb', 'ccc', 'ddd'].map(id => { const p = newPlayer(id, 0); p.pose = {...near}; return p; });
+  let players = [a, b, c, d];
+  const room = {items, marks: freshMarks(), race: null, players: () => players};
   let now = 10_000;
   const send = (p, m) => { now += 400; return handleMessage(p, JSON.stringify(m), now, room); };
-  send(a, {type: 'radio', id: 'rd1', url: 'https://youtu.be/dQw4w9WgXcQ'});
-  send(b, {type: 'radio-dead', id: 'rd1'});
+  const put = (p, v) => { now = (r.play?.until || now) + 1; send(p, {type: 'radio', id: 'rd1', url: `https://youtu.be/${v}`}); assert.equal(r.play.u, `yt:${v}`); };
+  // errors: two others, or whoever put it on
+  put(a, 'aaaaaaaaaaa');
+  send(b, {type: 'radio-dead', id: 'rd1', why: 'error'});
   assert.ok(now < r.play.until, 'one other: not enough');
-  send(c, {type: 'radio-dead', id: 'rd1'});
+  send(c, {type: 'radio-dead', id: 'rd1', why: 'error'});
   assert.ok(now >= r.play.until, 'two others: off');
-  send(b, {type: 'radio', id: 'rd1', url: 'https://youtu.be/aaaaaaaaaaa'});
-  assert.equal(r.play.u, 'yt:aaaaaaaaaaa', 'and another can go on');
-  send(b, {type: 'radio-dead', id: 'rd1'});
+  put(b, 'bbbbbbbbbbb');
+  send(b, {type: 'radio-dead', id: 'rd1', why: 'error'});
   assert.ok(now >= r.play.until, 'whoever put it on: off');
+  // stalls: three, or two with whoever put it on; a page from before (no why) counts as a stall
+  put(a, 'ccccccccccc');
+  send(b, {type: 'radio-dead', id: 'rd1', why: 'stall'}); send(c, {type: 'radio-dead', id: 'rd1'});
+  assert.ok(now < r.play.until, 'two others stalled: still on');
+  send(d, {type: 'radio-dead', id: 'rd1', why: 'stall'});
+  assert.ok(now >= r.play.until, 'three: off');
+  put(a, 'ddddddddddd');
+  send(a, {type: 'radio-dead', id: 'rd1', why: 'stall'});
+  assert.ok(now < r.play.until, 'just whoever put it on stalled: still on');
+  send(b, {type: 'radio-dead', id: 'rd1', why: 'stall'});
+  assert.ok(now >= r.play.until, 'them and another: off');
+  // whoever put it on gone, one stall from someone else: still on (that was the bug); alone in the room: off
+  put(a, 'eeeeeeeeeee');
+  players = [b, c];
+  send(b, {type: 'radio-dead', id: 'rd1', why: 'stall'});
+  assert.ok(now < r.play.until, 'one stall, two here: still on');
+  players = [c];
+  put(c, 'fffffffffff');
+  send(c, {type: 'radio-dead', id: 'rd1', why: 'stall'});
+  assert.ok(now >= r.play.until, 'the only one here: off');
 });

@@ -55,7 +55,7 @@ export function createRadio({network, onOpenChange}) {
           events: {
             onReady: e => { p.ready = true; e.target.setVolume(0); e.target.seekTo(offset(play), true); e.target.playVideo(); },
             onStateChange: e => { if (e.data === 1) { p.lastPlaying = performance.now(); report(p.player.getDuration() * 1000); } },
-            onError: () => dead(id, p),           // (gone, private, not allowed to be played embedded)
+            onError: () => dead(id, p, 'error'),  // (gone, private, not allowed to be played embedded)
           }});
       }).catch(() => {});
     } else {
@@ -70,17 +70,21 @@ export function createRadio({network, onOpenChange}) {
           p.ready = true; w.setVolume(0); w.seekTo(offset(play) * 1000); w.play();
           w.getDuration(ms => report(ms));
           w.bind(window.SC.Widget.Events.PLAY_PROGRESS, () => { p.lastPlaying = performance.now(); });
-          w.bind(window.SC.Widget.Events.ERROR, () => dead(id, p));
+          w.bind(window.SC.Widget.Events.ERROR, () => dead(id, p, 'error'));
         });
       }).catch(() => {});
     }
   }
-  // a track that won't play: said once (the server decides whether that's enough to call it off)
-  function dead(id, p) {
+  // a track that won't play: said once, and why ('error': its player said so; 'stall': it hasn't played for
+  // DEAD_MS here). The server decides whether that's enough to call it off (server/room.js).
+  function dead(id, p, why) {
     if (p.dead) return;
     p.dead = true;
-    network.send({type: 'radio-dead', id});
+    network.send({type: 'radio-dead', id, why});
   }
+  // whether this page can tell a track's stalled: it's in front (a page in the background isn't updated, and its
+  // players may be held back), and it's been clicked on (before that, the browser may not let it play sound)
+  const watching = () => document.visibilityState === 'visible' && navigator.userActivation?.hasBeenActive !== false;
   function volume(p, v) {
     const n = Math.round(v * 100);
     if (!p.ready || Math.abs(n - p.vol) < 2) return;
@@ -157,7 +161,12 @@ export function createRadio({network, onOpenChange}) {
         if (p.muffled) v *= .4;
         volume(p, v);
         keepUp(p, now);
-        if (!p.dead && now - Math.max(p.startedAt, p.lastPlaying) > DEAD_MS) dead(r.id, p);
+        // (playing, as far as it says, every frame; and time this page wasn't looking, or wasn't updated at all,
+        // doesn't count toward a stall)
+        try { if (p.ready && p.kind === 'yt' && p.player.getPlayerState() === 1) p.lastPlaying = now; } catch {}
+        if (now - (p.lastTick || now) > 1000 || !watching()) p.lastPlaying = now;
+        p.lastTick = now;
+        if (!p.dead && now - Math.max(p.startedAt, p.lastPlaying) > DEAD_MS) dead(r.id, p, 'stall');
       }
       for (const id of [...playing.keys()]) if (!seen.has(id)) stop(id);
       if (openFor && !radios.some(r => r.id === openFor)) close();

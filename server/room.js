@@ -787,11 +787,18 @@ function handle(player, data, now, room) {
   }
   // a track that won't play (an error, or nothing coming out for half a minute): off, so another can go on. Said
   // by whoever put it on, or (if they've gone) anyone, or else by two different people
+  // a track that won't play, called off when enough say so. 'error' (its player said it can't: gone, private,
+  // not to be played embedded): whoever put it on, or two others. 'stall' (it just hasn't played for a while on
+  // someone's page, which can be that page's doing): two including whoever put it on, or three; fewer if there
+  // aren't that many here.
   if (m.type === 'radio-dead') {
     if (!item || item.type !== 'radio' || !item.play || now >= item.play.until) return refuse();
-    const play = item.play, setterHere = room.players().some(p => p && p.id === play.by && !p.inactive);
-    play.dead = [...new Set([...(play.dead || []), player.id])];
-    if (player.id !== play.by && setterHere && play.dead.length < 2) return {out, changed: true, itemsChanged: true, radioLogs: logs};
+    const play = item.play, here = room.players().filter(p => p && !p.inactive), setterHere = here.some(p => p.id === play.by);
+    const stall = m.why !== 'error';             // (a page from before says neither: as a stall)
+    const said = stall ? (play.stall = [...new Set([...(play.stall || []), player.id])]) : (play.dead = [...new Set([...(play.dead || []), player.id])]);
+    const bySetter = said.includes(play.by);
+    const need = stall ? Math.min(here.length, bySetter ? 2 : 3) : (bySetter ? 1 : Math.min(2, Math.max(1, here.length - (setterHere ? 1 : 0))));
+    if (said.length < Math.max(1, need)) return {out, changed: true, itemsChanged: true, radioLogs: logs};
     play.until = now;
     out.push({to: 'all', msg: {type: 'item', item: cleanItem(item)}});
     return {out, changed: true, itemsChanged: true, radioLogs: [...logs, {at: play.at, patch: {dead: true, ended: now}}]};
