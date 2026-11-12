@@ -219,23 +219,32 @@ const NEAR = .35;
 // joined into one drawing: s.g, the id of the drawing's oldest stroke. Returns the drawings that changed:
 // [{g, ids}] (everyone's told: they put each on one layer, as one piece)
 const JOIN = .025, JOIN_AFTER = 60000;
-export function crosses(a, b) {
+// Two drawings also join if they're the same colour and near each other (closer than NEAR_SAME, a metre). It
+// chains: a drawing near one that's joined to others (crossing, or near) joins them all. (One that's grown very
+// big is let go a stroke at a time when the room's full, not all at once: inkUnits.)
+export const NEAR_SAME = 1;
+// whether two strokes come within d of each other anywhere along them (every point of a's kept in its cell: one
+// a cell missed crossings, and depended on which went first)
+function within(a, b, d) {
   const A = boundsOf(a), B = boundsOf(b);
-  for (let k = 0; k < 3; k++) if (A.lo[k] - JOIN > B.hi[k] || B.lo[k] - JOIN > A.hi[k]) return false;
-  // (every point of a's in its cell: keeping only one a cell missed crossings, and depended on which went first)
-  const cell = new Map(), key = (x, y, z) => `${Math.floor(x / JOIN)},${Math.floor(y / JOIN)},${Math.floor(z / JOIN)}`;
-  eachInkStep(a, JOIN / 2, (x, y, z) => { const k = key(x, y, z), c = cell.get(k); if (c) c.push(x, y, z); else cell.set(k, [x, y, z]); });
+  for (let k = 0; k < 3; k++) if (A.lo[k] - d > B.hi[k] || B.lo[k] - d > A.hi[k]) return false;
+  const cell = new Map(), key = (x, y, z) => `${Math.floor(x / d)},${Math.floor(y / d)},${Math.floor(z / d)}`;
+  eachInkStep(a, d / 2, (x, y, z) => { const k = key(x, y, z), c = cell.get(k); if (c) c.push(x, y, z); else cell.set(k, [x, y, z]); });
   let hit = false;
-  eachInkStep(b, JOIN / 2, (x, y, z) => {
+  const d2 = d * d;
+  eachInkStep(b, d / 2, (x, y, z) => {
     if (hit) return;
-    const cx = Math.floor(x / JOIN), cy = Math.floor(y / JOIN), cz = Math.floor(z / JOIN);
+    const cx = Math.floor(x / d), cy = Math.floor(y / d), cz = Math.floor(z / d);
     for (let dx = -1; dx <= 1 && !hit; dx++) for (let dy = -1; dy <= 1 && !hit; dy++) for (let dz = -1; dz <= 1 && !hit; dz++) {
       const p = cell.get(`${cx + dx},${cy + dy},${cz + dz}`);
-      if (p) for (let i = 0; i < p.length && !hit; i += 3) if (Math.hypot(p[i] - x, p[i + 1] - y, p[i + 2] - z) < JOIN) hit = true;
+      if (p) for (let i = 0; i < p.length && !hit; i += 3) { const ex = p[i] - x, ey = p[i + 1] - y, ez = p[i + 2] - z; if (ex * ex + ey * ey + ez * ez < d2) hit = true; }
     }
   });
   return hit;
 }
+export const crosses = (a, b) => within(a, b, JOIN);
+export const nearSame = (a, b) => a.c === b.c && within(a, b, NEAR_SAME);
+
 // All the ink gone over again at once (what's been left a minute): every two strokes that cross, in one drawing.
 // Nothing's let go; drawings only merge (named for the oldest stroke's drawing). Returns the drawings that
 // changed: [{g, ids}]. (Once, for what was drawn before crossing was found both ways round: server/worker.js)
@@ -245,6 +254,7 @@ export function rejoinInk(ink, now) {
   const up = new Map();
   const find = g => { let r = g; while (up.has(r) && up.get(r) !== r) r = up.get(r); let x = g; while (x !== r) { const n = up.get(x); up.set(x, r); x = n; } return r; };
   for (const s of ready) up.set(groupOf(s), groupOf(s));
+  const unite = (ra, rb) => up.set(ra, rb);
   // every point, along each line no more than JOIN / 2 apart, in a grid per surface (cells numbered: x, y, z
   // each in 13 bits around 0, so within about 100 m of the middle)
   const grids = new Map(), cellOf = (cx, cy, cz) => ((cx + 4096) * 8192 + (cy + 4096)) * 8192 + (cz + 4096);
@@ -256,7 +266,7 @@ export function rejoinInk(ink, now) {
     });
   });
   // (each pair of neighbouring cells once: the cell itself and the 13 'after' it; near enough first, then whose)
-  const J2 = JOIN * JOIN, seen = new Set();
+  const seen = new Set();
   const AFTER = [];
   for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) for (let dz = -1; dz <= 1; dz++) if (dx > 0 || dx === 0 && (dy > 0 || dy === 0 && dz > 0)) AFTER.push([dx, dy, dz]);
   const pairUp = (c, o, same) => {
@@ -271,11 +281,28 @@ export function rejoinInk(ink, now) {
         if (seen.has(key)) continue;
         seen.add(key);
         const ra = find(groupOf(ready[si])), rb = find(groupOf(ready[sj]));
-        if (ra !== rb) up.set(ra, rb);
+        if (ra !== rb) unite(ra, rb);
       }
     }
   };
+  let J2 = JOIN * JOIN;
   const steps = AFTER.map(([dx, dy, dz]) => (dx * 8192 + dy) * 8192 + dz);
+  for (const grid of grids.values()) for (const [k, c] of grid) {
+    pairUp(c, c, true);
+    for (const d of steps) { const o = grid.get(k + d); if (o) pairUp(c, o, false); }
+  }
+  // then the same colour near each other (points along each line a third of NEAR_SAME apart, a grid per surface
+  // and colour)
+  grids.clear(); seen.clear();
+  J2 = NEAR_SAME * NEAR_SAME;
+  ready.forEach((s, i) => {
+    const gk = `${s.h}|${s.c}`;
+    let grid = grids.get(gk); if (!grid) grids.set(gk, grid = new Map());
+    eachInkStep(s, NEAR_SAME / 3, (x, y, z) => {
+      const k = cellOf(Math.floor(x / NEAR_SAME), Math.floor(y / NEAR_SAME), Math.floor(z / NEAR_SAME));
+      const c = grid.get(k); if (c) c.push(i, x, y, z); else grid.set(k, [i, x, y, z]);
+    });
+  });
   for (const grid of grids.values()) for (const [k, c] of grid) {
     pairUp(c, c, true);
     for (const d of steps) { const o = grid.get(k + d); if (o) pairUp(c, o, false); }
@@ -306,7 +333,8 @@ export function joinInk(ink, now) {
   for (const s of fresh) {
     s.joined = true;
     for (const o of ready) {
-      if (o === s || o.h !== s.h || groupOf(o) === groupOf(s) || !crosses(s, o)) continue;
+      if (o === s || o.h !== s.h || groupOf(o) === groupOf(s)) continue;
+      if (!crosses(s, o) && !nearSame(s, o)) continue;
       // the two drawings become one, named for the older's oldest stroke
       const ga = groupOf(s), gb = groupOf(o), a = oldest.get(ga), b = oldest.get(gb);
       const keep = (a.t || 0) <= (b.t || 0) ? ga : gb, drop = keep === ga ? gb : ga;
@@ -320,10 +348,18 @@ export function joinInk(ink, now) {
   out.finished = fresh.length;             // (strokes made lighter: worth keeping as they are now)
   return out;
 }
+// (a drawing that's grown past BIG_DRAWING points, chained along a wall, counts as its strokes: let go one at a
+// time, the loneliest and oldest first like anything else, not the whole of it at once)
+export const BIG_DRAWING = 20000;
 export function inkUnits(ink) {
   const by = new Map();
-  for (const s of ink) { const k = s.g || s.id; let u = by.get(k); if (!u) by.set(k, u = {strokes: [], h: s.h, t: 0}); u.strokes.push(s); u.t = Math.max(u.t, s.at || s.t || 0); }
-  return [...by.values()].sort((a, b) => a.t - b.t);
+  for (const s of ink) { const k = s.g || s.id; let u = by.get(k); if (!u) by.set(k, u = {strokes: [], h: s.h, t: 0, n: 0}); u.strokes.push(s); u.t = Math.max(u.t, s.at || s.t || 0); u.n += inkCount(s); }
+  const out = [];
+  for (const u of by.values()) {
+    if (u.n <= BIG_DRAWING) out.push(u);
+    else for (const s of u.strokes) out.push({strokes: [s], h: s.h, t: s.at || s.t || 0, n: inkCount(s)});
+  }
+  return out.sort((a, b) => a.t - b.t);
 }
 const unitBounds = u => {
   if (!u.strokes) return boundsOf(u);
@@ -598,13 +634,17 @@ function handle(player, data, now, room) {
     if (index.units.size > MAX_INK_STROKES || index.total > MAX_INK_PTS) {
       const units = inkUnits(ink);
       const order = trimOrder(units, units.find(u => u.strokes.includes(stroke)));
-      let left = units.length, total = index.total;
+      // (drawings counted as drawings: a big one let go a stroke at a time only counts once its last goes)
+      const size = new Map();
+      for (const s of ink) size.set(s.g || s.id, (size.get(s.g || s.id) || 0) + 1);
+      let left = size.size, total = index.total;
       const gone = new Set();
       for (const unit of order) {
         if (left <= MAX_INK_STROKES * .98 && total <= MAX_INK_PTS * .98) break;
-        left--;
         for (const old of unit.strokes) {
           gone.add(old); total -= inkCount(old);
+          const g = old.g || old.id, n = size.get(g) - 1;
+          size.set(g, n); if (!n) left--;
           out.push({to: 'all', msg: {type: 'erase', kind: 'ink', id: old.id, by: ''}});
         }
       }

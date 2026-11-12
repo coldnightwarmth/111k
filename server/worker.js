@@ -350,14 +350,15 @@ export class Room {
     const joined = joinInk(marks.ink || [], now);
     for (const d of joined) this.broadcast({type: 'inkgroup', g: d.g, ids: d.ids});
     if (joined.length || joined.finished) this.saveMarksSoon();
-    // once: all the ink gone over again, now crossings are found both ways round (11 Nov 2026: some were missed)
+    // once: all the ink gone over again with joining as it is now (11 Nov 2026: crossings found both ways round;
+    // then the same colour within a metre joining too). A new pass: a new key.
     if (!this.rejoinChecked) {
       this.rejoinChecked = true;
-      if (!(await this.ctx.storage.get?.('inkRejoined'))) {
+      if (!(await this.ctx.storage.get?.('inkRejoined2'))) {
         const merged = rejoinInk(marks.ink || [], now);
         for (const d of merged) this.broadcast({type: 'inkgroup', g: d.g, ids: d.ids});
         if (merged.length) await this.saveMarks();
-        await this.ctx.storage.put?.('inkRejoined', now);
+        await this.ctx.storage.put?.('inkRejoined2', now);
       }
     }
     for (const ws of this.sockets()) {

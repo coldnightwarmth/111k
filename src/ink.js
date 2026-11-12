@@ -367,21 +367,10 @@ export function createInk({level, scene, hostOf, layerFor = (h, box, top) => Mat
     },
     // once a frame: some of what's queued drawn
     tick() { if (pending()) drawQueued(BUILD_MS); },
-    // strokes the room has joined into one drawing (they cross, and have been left a minute): all onto one layer
-    // and chunk (those of its top stroke), so the drawing's drawn as one
-    group(ids) {
-      const sts = ids.map(id => strokes.get(id)).filter(Boolean);
-      if (sts.length < 2) return;
-      const top = sts.reduce((a, b) => (b.layer > a.layer ? b : a));
-      for (const st of sts) {
-        if (st.layer === top.layer && st.zone === top.zone) continue;
-        undraw(st);
-        st.layer = top.layer; st.zone = top.zone; st.room = top.room;
-        queue.push(st);
-      }
-      if (!pending()) return;
-      drawQueued(BUILD_MS);
-    },
+    // strokes the room has joined into one drawing (they cross, or they're the same colour and near): nothing to
+    // do here. Strokes that cross are already drawn together (the later over the earlier, in one batch), and
+    // moving one onto another's layer could lift it over a tag that's over it.
+    group() {},
     // the highest layer of the strokes on host h that box overlaps (-1: none)
     overlapLayer(h, b) {
       let top = -1;

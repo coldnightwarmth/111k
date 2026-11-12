@@ -1147,6 +1147,27 @@ test('crossing strokes found either way round, and the whole lot gone over again
   assert.equal(inkUnits(ink).length, 3);
 });
 
+test('the same colour within a metre joins too, chaining through anything joined; a huge drawing trims a stroke at a time', async () => {
+  const {rejoinInk, joinInk, finishInk, inkUnits, BIG_DRAWING} = await import('../room.js');
+  const pt = (x, y, n = 1) => [x, y, 0, 0, 0, 1, .5, .5];
+  const line = (id, c, x0, y0, x1, y1, t) => { const s = {id: 'aaaaaaaaaaaaaaaa:' + id, h: 'w', c, t, at: t, pts: Array.from({length: 20}, (_, k) => pt(x0 + (x1 - x0) * k / 19, y0 + (y1 - y0) * k / 19))}; finishInk(s); return s; };
+  // red a, red b 0.8 m from it, blue c crossing b, blue d 0.9 m from c (chains through b and c), red e 1.5 m from all
+  const a = line('a', 0xff0000, 0, 0, .5, 0, 1), b = line('b', 0xff0000, 0, .8, .5, .8, 2), c = line('c', 0x0000ff, .25, .6, .25, 1, 3);
+  const d = line('d', 0x0000ff, .25, 1.9, .25, 2.3, 4), e = line('e', 0xff0000, 3, 0, 3.5, 0, 5);
+  const ink = [a, b, c, d, e];
+  for (const s of ink) s.joined = true;
+  rejoinInk(ink, 100_000);
+  assert.deepEqual(ink.map(s => s.g || s.id), [a.id, a.id, a.id, a.id, e.id]);
+  // the same, a stroke at a time as they come (joinInk)
+  const ink2 = [a, b, c, d, e].map(s => ({...s, g: undefined, joined: false}));
+  ink2.forEach((s, i) => { s.at = s.t = i * 70_000; joinInk(ink2.slice(0, i + 1), i * 70_000 + 61_000); });
+  assert.deepEqual(ink2.map(s => s.g || s.id), [a.id, a.id, a.id, a.id, e.id]);
+  // a drawing past BIG_DRAWING points counts as its strokes when it comes to letting go
+  const big = Array.from({length: 30}, (_, i) => ({id: 'b:' + i, h: 'w', c: 1, t: i, g: 'b:0', q: new Int32Array(Math.ceil(BIG_DRAWING / 25) * 8)}));
+  assert.equal(inkUnits(big).length, 30);
+  assert.equal(inkUnits(big.slice(0, 10)).length, 1);
+});
+
 test('ink for someone joining: binary (packed, deflated) or JSON, the same strokes either way; finished strokes made lighter', async () => {
   const {joinMarks, freshMarks, finishInk, inkCount} = await import('../room.js');
   const {decodeInk, inflate, inkFloats, unpackInk} = await import('../../src/protocol.js');
