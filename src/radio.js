@@ -2,7 +2,7 @@
 // link; everyone near hears it, at the same point in it (by the server's clock), louder the nearer they are and
 // muffled through walls. It plays through YouTube's or SoundCloud's own player, kept out of sight (their sound
 // can't be taken into the game's own audio, so it's loud or quiet with distance, not to one side or the other).
-// A link goes on while it's quiet, or (one at a time) waits for what's playing to finish; each stops at five
+// A link goes on while it's quiet, or (up to two) waits for what's playing to finish; each stops at five
 // minutes (the server keeps to that: server/room.js).
 import {radioLink} from './protocol.js';
 
@@ -134,13 +134,13 @@ export function createRadio({network, onOpenChange}) {
 
   return {
     get open() { return !!openFor; },
-    // the link box for radio `id`: while it's playing, a link waits its turn (one can); with one waiting too,
-    // just a word that there's no more room
-    prompt(id, playing, queued) {
+    // the link box for radio `id`: while it's playing, a link waits its turn (RADIO_QUEUE can); with the queue
+    // full, just a word that there's no more room
+    prompt(id, playing, full, waiting = 0) {
       openFor = id; panel.style.display = 'block'; onOpenChange?.(true);
-      input.disabled = !!queued; input.value = '';
-      note.textContent = queued ? 'something’s playing and one’s queued: try again when it’s on'
-        : playing ? 'something’s playing: enter queues yours to go on next (up to 5 minutes) · esc: close' : hint;
+      input.disabled = !!full; input.value = '';
+      note.textContent = full ? `something’s playing and ${waiting} queued: try again when the next one’s on`
+        : playing ? `something’s playing${waiting ? `, ${waiting} queued` : ''}: enter queues yours (up to 5 minutes) · esc: close` : hint;
       if (!queued) setTimeout(() => input.focus({preventScroll: true}), 0);
     },
     close,

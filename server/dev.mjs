@@ -169,10 +169,9 @@ function parse(c) {
 // a radio's queued link on, once the one playing has stopped (before each message, and every second)
 function promoteRadios(now) {
   for (const it of Object.values(items)) {
-    const log = promoteRadio(it, now);
-    if (!log) continue;
-    broadcast({type: 'item', item: cleanItem(it)});
-    radioLog.set(log.at, log.set);
+    let log, moved = false;
+    while ((log = promoteRadio(it, now))) { moved = true; radioLog.set(log.at, log.set); }
+    if (moved) broadcast({type: 'item', item: cleanItem(it)});
   }
 }
 setInterval(() => promoteRadios(Date.now()), 1000);

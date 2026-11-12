@@ -5,7 +5,7 @@
 // items, which the caller keeps (Durable Object storage in production).
 import {INK_HOST, INK_PER_S, MAX_INK_STROKES, MAX_STROKE_PTS, MAX_INK_PTS, INK_PART_PTS, INK_BIN_PTS, packInk, cleanInkPoints, encodeInk, simplifyInk, deflate, SETTLE_BYTES, SETTLE_MAX, SETTLE_PER_S, MAG_SIZE, RELOAD_MS, CROWN_HITS, CROWN_HIT_WINDOW_MS, CHAT_INTERVAL_MS, CHAT_TTL_MS, POSE_INTERVAL_MS, PICKUP_RANGE, PUNCH_RANGE, PUNCH_COOLDOWN_MS,
   SHOT_INTERVAL_MS, SPRAY_INTERVAL_MS, SPRAY_RANGE, MAX_SPLATS, MAX_SPRAYS, SPLAT_LIFE_MS, ART_MAX,
-  sanitizeChat, sanitizePose, radioLink, radioKey, RADIO_MAX_MS, RADIO_GAP_MS, samePose, cleanItem, cleanPath, sanitizeLook, sanitizeName, cleanSplat, cleanSpray, splatId, sprayId} from '../src/protocol.js';
+  sanitizeChat, sanitizePose, radioLink, radioKey, radioQueue, RADIO_MAX_MS, RADIO_GAP_MS, RADIO_QUEUE, samePose, cleanItem, cleanPath, sanitizeLook, sanitizeName, cleanSplat, cleanSpray, splatId, sprayId} from '../src/protocol.js';
 import {ITEM_SPAWNS} from '../src/world-items.js';
 import {RACE_LAPS, RACE_TIMEOUT_MS, BUTTON, BUTTON_RANGE, MACHINE_ANGLE, LAP_LINE, BUTTON_LAP, loopAngle, freshRace, publicRace} from '../src/race.js';
 import {PANEL, USE_RANGE, BUSY_MS, inChamber, standPose, keyEntry, KEYS} from '../src/converter-spec.js';
@@ -49,7 +49,10 @@ export function promoteRadio(item, now) {
   if (!q || !p || now < p.until) return null;
   const at = p.until + RADIO_GAP_MS;
   item.play = {u: q.u, at, until: at + RADIO_MAX_MS, by: q.by};
-  delete item.next;
+  // (the rest move up)
+  const later = Array.isArray(item.later) ? item.later : [];
+  if (later.length) item.next = later.shift(); else delete item.next;
+  if (later.length) item.later = later; else delete item.later;
   return {at, set: {at, u: q.u, url: q.url || '', radio: item.id, by: q.by, name: q.name || ''}};
 }
 // a log record brought up to date (how long the track was, whether it was called off)
@@ -772,12 +775,13 @@ function handle(player, data, now, room) {
     if (!item || item.type !== 'radio' || item.holder || !player.pose || player.inactive) return refuse();
     if (flat(player.pose, item) > PICKUP_RANGE + 1) return refuse();
     const busy = item.play && now < item.play.until;
-    if (busy && item.next) return refuse();                       // (one playing and one waiting: that's all)
+    if (busy && radioQueue(item).length >= RADIO_QUEUE) return refuse();   // (one playing and RADIO_QUEUE waiting: that's all)
     const link = radioLink(m.url);
     if (!link) return refuse();
     player.lastActive = now;
     if (busy) {
-      item.next = {u: radioKey(link), by: player.id, url: typeof m.url === 'string' ? m.url.trim().slice(0, 400) : '', name: player.name || ''};
+      const q = {u: radioKey(link), by: player.id, url: typeof m.url === 'string' ? m.url.trim().slice(0, 400) : '', name: player.name || ''};
+      if (!item.next) item.next = q; else (item.later = Array.isArray(item.later) ? item.later : []).push(q);
     } else {
       item.play = {u: radioKey(link), at: now + 1500, until: now + 1500 + RADIO_MAX_MS, by: player.id};
       logs.push({at: item.play.at, set: radioEntry(item, player, m.url)});

@@ -25,16 +25,32 @@ export const MAX_SPRAYS = 150;
 export const ITEM_TYPES = ['flashlight', 'paintball', 'spray', 'bucket', 'crown', 'painting', 'marker', 'piece', 'radio'];
 // The radio plays a YouTube or SoundCloud link, everyone at the same point in it, for five minutes at most.
 export const RADIO_MAX_MS = 5 * 60 * 1000;
-// one more link can wait its turn (it.next: {u, by}): it goes on this long after the one playing stops
-export const RADIO_GAP_MS = 1500;
-// what a radio is playing at `now`: its play, or (once that's over) the one queued, starting just after it. The
-// server makes that its play when it next hears about the radio (server/room.js promoteRadio); until then every
-// page works it out the same way, so it starts on time everywhere.
+// more links can wait their turn, RADIO_QUEUE of them (it.next: {u, by}, the first; it.later: [the rest]): each
+// goes on this long after the one before it stops
+export const RADIO_GAP_MS = 1500, RADIO_QUEUE = 2;
+export const radioQueue = it => (it?.next ? [it.next, ...(Array.isArray(it.later) ? it.later : [])] : []);
+// what a radio is playing at `now`: its play, or (once that's over) the next queued, starting just after it, and
+// so on. The server makes that its play when it next hears about the radio (server/room.js promoteRadio); until
+// then every page works it out the same way, so it starts on time everywhere.
 export function radioNow(it, now) {
-  const p = it?.play, q = it?.next;
-  if (!q || !p || now < p.until) return p || null;
-  const at = p.until + RADIO_GAP_MS;
-  return {u: q.u, at, until: at + RADIO_MAX_MS, by: q.by};
+  let p = it?.play || null;
+  for (const q of radioQueue(it)) {
+    if (!p || now < p.until) break;
+    const at = p.until + RADIO_GAP_MS;
+    p = {u: q.u, at, until: at + RADIO_MAX_MS, by: q.by};
+  }
+  return p;
+}
+// how many are waiting their turn at `now` (queued and not yet on, by the same reckoning as radioNow)
+export function radioWaiting(it, now) {
+  let p = it?.play;
+  const qs = radioQueue(it);
+  for (let i = 0; i < qs.length; i++) {
+    if (!p || now < p.until) return qs.length - i;
+    const at = p.until + RADIO_GAP_MS;
+    p = {at, until: at + RADIO_MAX_MS};
+  }
+  return 0;
 }
 // what a link is: {kind: 'yt', id} or {kind: 'sc', url}, or null for anything else
 export function radioLink(text) {
@@ -256,8 +272,12 @@ export function cleanItem(it) {
   // the radio: what it's playing (the link, when it started and when it stops, by the server's clock)
   if (out.type === 'radio' && it.play && typeof it.play.u === 'string' && it.play.u.length <= 300 && Number.isFinite(it.play.at) && Number.isFinite(it.play.until))
     out.play = {u: it.play.u, at: Math.round(it.play.at), until: Math.round(it.play.until), ...(typeof it.play.by === 'string' ? {by: it.play.by.slice(0, 40)} : {})};
-  if (out.type === 'radio' && out.play && it.next && typeof it.next.u === 'string' && it.next.u.length <= 300)
-    out.next = {u: it.next.u, ...(typeof it.next.by === 'string' ? {by: it.next.by.slice(0, 40)} : {})};
+  const queued = q => q && typeof q.u === 'string' && q.u.length <= 300 ? {u: q.u, ...(typeof q.by === 'string' ? {by: q.by.slice(0, 40)} : {})} : null;
+  if (out.type === 'radio' && out.play && queued(it.next)) {
+    out.next = queued(it.next);
+    const later = (Array.isArray(it.later) ? it.later : []).map(queued).filter(Boolean).slice(0, RADIO_QUEUE - 1);
+    if (later.length) out.later = later;
+  }
   return out;
 }
 // paintings are items pt1, pt2, ...: marks on one are kept in its own space and ride along with it

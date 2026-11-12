@@ -225,11 +225,9 @@ export class Room {
     const items = await this.loadItems();
     let any = false;
     for (const it of Object.values(items)) {
-      const log = promoteRadio(it, now);
-      if (!log) continue;
-      any = true;
-      this.broadcast({type: 'item', item: cleanItem(it)});
-      await this.logRadio(log);
+      let log, moved = false;
+      while ((log = promoteRadio(it, now))) { moved = any = true; await this.logRadio(log); }
+      if (moved) this.broadcast({type: 'item', item: cleanItem(it)});
     }
     if (any) { await this.saveItems(); await this.scheduleAlarm(); }
   }

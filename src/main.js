@@ -39,7 +39,7 @@ import {createSfx} from './sfx.js';
 import {randomLook, cleanLook} from './looks.js';
 import {cleanEmoteConfig, offeredEmotes} from './emotes.js';
 import {EMOTES, EMOTE_DURATION, PUNCH_COOLDOWN_MS, PUNCH_DURATION, PUNCH_COMBO_MS, SHOT_INTERVAL_MS, SPRAY_INTERVAL_MS, SPRAY_RANGE,
-  MAX_SPLATS, MAX_SPRAYS, SPLAT_LIFE_MS, SETTLE_BYTES, SETTLE_MAX, MAG_SIZE, INK_PTS, MAX_STROKE_PTS, sanitizePose, sanitizeName, PUNCH_REACH, PUNCH_REACH_FAST, inkFloats, radioNow, cleanSplat, cleanSpray, splatId, sprayId} from './protocol.js';
+  MAX_SPLATS, MAX_SPRAYS, SPLAT_LIFE_MS, SETTLE_BYTES, SETTLE_MAX, MAG_SIZE, INK_PTS, MAX_STROKE_PTS, sanitizePose, sanitizeName, PUNCH_REACH, PUNCH_REACH_FAST, inkFloats, radioNow, radioWaiting, RADIO_QUEUE, cleanSplat, cleanSpray, splatId, sprayId} from './protocol.js';
 import {paintingSize, paintingMatrix, paintingTris} from './paintings.js';
 import {settle as settlePaintings, warmPhysics, reversed} from './settle.js';
 
@@ -439,9 +439,9 @@ async function start() {
     onOpenChange: open => { if (!open && relock && !controls.state.touch) { relock = false; canvas.requestPointerLock?.()?.catch?.(() => {}); } }});
   function openRadio(t) {
     relock = controls.state.locked; release();
-    const now = network.now(), play = radioNow(t.state, now);
-    const playing = !!play && now < play.until, queued = playing && !!t.state.next && t.state.play && now < t.state.play.until;
-    radio().prompt(t.state.id, playing, queued);
+    const now = network.now(), play = radioNow(t.state, now), playing = !!play && now < play.until;
+    const waiting = playing ? radioWaiting(t.state, now) : 0;
+    radio().prompt(t.state.id, playing, waiting >= RADIO_QUEUE, waiting);
     learn('radio');
   }
 
