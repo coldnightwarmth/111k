@@ -250,7 +250,7 @@ async function start() {
       const slice = Math.floor((Math.atan2(-c.z, c.x) + Math.PI) / INK_SLICE);
       return {key: room >= 0 ? `r${room}` : `${room === MIXED ? 'm' : 't'}${slice}`, room};
     }});
-  const INK_SLICE = 8 * Math.PI / 180, _zc = new THREE.Vector3(), _zs = new THREE.Vector3();
+  const INK_SLICE = 24 * Math.PI / 180, _zc = new THREE.Vector3(), _zs = new THREE.Vector3();
   const mimic = createMimic(level, scene);   // the control room's ring board: occupied rooms light up
   let mimicAt = 0;
   const bore = level.meta.bore;
