@@ -116,7 +116,7 @@ export const SETTLE_BYTES = 14000, SETTLE_MAX = 16, SETTLE_PER_S = 12;
 // MAX_INK_STROKES strokes, each up to MAX_STROKE_PTS points, MAX_INK_PTS in all (oldest go first). A point is
 // [x, y, z, nx, ny, nz, u, v]: where it is and which way the surface faces (in its host's own space: the world,
 // a door 'd<k>', a painting 'p<id>', or a player 'a<id>', whose ink isn't kept), and the level's lightmap there.
-export const INK_PTS = 64, MAX_INK_STROKES = 8000, MAX_STROKE_PTS = 500, MAX_INK_PTS = 400000, INK_PER_S = 25;
+export const INK_PTS = 64, MAX_INK_STROKES = 16000, MAX_STROKE_PTS = 500, MAX_INK_PTS = 800000, INK_PER_S = 25;
 // a stroke's points packed flat as whole numbers (positions in mm, normals in hundredths, uv in 1e-4), for keeping
 // and for sending to someone joining (in parts: a WebSocket message can't be over 1 MiB)
 const INK_SCALE = [1000, 1000, 1000, 100, 100, 100, 1e4, 1e4];
