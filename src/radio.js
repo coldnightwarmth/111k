@@ -53,8 +53,10 @@ export function createRadio({network, onOpenChange}) {
         p.player = new window.YT.Player(p.el, {width: 200, height: 120, videoId: play.u.slice(3),
           playerVars: {autoplay: 1, controls: 0, disablekb: 1, playsinline: 1, start: Math.floor(offset(play))},
           events: {
-            onReady: e => { p.ready = true; e.target.setVolume(0); e.target.seekTo(offset(play), true); e.target.playVideo(); },
-            onStateChange: e => { if (e.data === 1) { p.lastPlaying = performance.now(); report(p.player.getDuration() * 1000); } },
+            onReady: e => { p.ready = true; e.target.setVolume(0); e.target.seekTo(offset(p.play), true); e.target.playVideo(); },
+            // (each time it starts playing: where it should be now, not where it was told when it loaded; a page
+            // that's just come in may not have been let play sound till it was clicked on)
+            onStateChange: e => { if (e.data === 1) { p.lastPlaying = performance.now(); report(p.player.getDuration() * 1000); sync(p); } },
             onError: () => dead(id, p, 'error'),  // (gone, private, not allowed to be played embedded)
           }});
       }).catch(() => {});
@@ -67,9 +69,11 @@ export function createRadio({network, onOpenChange}) {
         if (playing.get(id) !== p) return;
         const w = p.widget = window.SC.Widget(p.el);
         w.bind(window.SC.Widget.Events.READY, () => {
-          p.ready = true; w.setVolume(0); w.seekTo(offset(play) * 1000); w.play();
+          p.ready = true; w.setVolume(0); w.seekTo(offset(p.play) * 1000); w.play();
           w.getDuration(ms => report(ms));
           w.bind(window.SC.Widget.Events.PLAY_PROGRESS, () => { p.lastPlaying = performance.now(); });
+          // (SoundCloud's player ignores being moved on before it's playing: again once it is)
+          w.bind(window.SC.Widget.Events.PLAY, () => { p.lastPlaying = performance.now(); sync(p); });
           w.bind(window.SC.Widget.Events.ERROR, () => dead(id, p, 'error'));
         });
       }).catch(() => {});
@@ -91,16 +95,34 @@ export function createRadio({network, onOpenChange}) {
     p.vol = n;
     try { p.kind === 'yt' ? p.player.setVolume(n) : p.widget.setVolume(n); } catch {}
   }
-  // keep it with the clock (a stall, a tab in the background)
+  // to where it should be now, if it's more than a moment out
+  function sync(p, near = 1.5) {
+    if (!p.ready) return;
+    const want = offset(p.play);
+    try {
+      if (p.kind === 'yt') { if (Math.abs(p.player.getCurrentTime() - want) > near) p.player.seekTo(want, true); }
+      else p.widget.getPosition(ms => { if (Math.abs(ms / 1000 - (offset(p.play))) > near) p.widget.seekTo(offset(p.play) * 1000); });
+    } catch {}
+  }
+  // keep it with the clock (a stall, a tab in the background), and playing (it may not have been let at first)
   function keepUp(p, now) {
     if (!p.ready || now < p.checkAt) return;
     p.checkAt = now + CHECK_MS;
-    const want = offset(p.play);
     try {
-      if (p.kind === 'yt') { if (p.player.getPlayerState() === 1) p.lastPlaying = now; if (Math.abs(p.player.getCurrentTime() - want) > DRIFT) p.player.seekTo(want, true); if (p.player.getPlayerState() !== 1) p.player.playVideo(); }
-      else p.widget.getPosition(ms => { if (Math.abs(ms / 1000 - want) > DRIFT) p.widget.seekTo(want * 1000); });
+      if (p.kind === 'yt') { if (p.player.getPlayerState() === 1) p.lastPlaying = now; sync(p, DRIFT); if (p.player.getPlayerState() !== 1) p.player.playVideo(); }
+      else { sync(p, DRIFT); p.widget.isPaused(paused => { if (paused) p.widget.play(); }); }
     } catch {}
   }
+  // the first click or key on the page: the browser lets it play sound now, so everything playing starts, from
+  // where it should be
+  const kick = () => {
+    for (const p of playing.values()) {
+      if (!p.ready) continue;
+      try { if (p.kind === 'yt') { sync(p); p.player.playVideo(); } else { p.widget.play(); sync(p); } } catch {}
+      p.checkAt = performance.now() + 1500;           // (and looked at again shortly)
+    }
+  };
+  for (const type of ['pointerdown', 'keydown', 'touchend']) addEventListener(type, kick, {capture: true, once: true});
 
   // ---- the box for a link
   const panel = document.createElement('form');
