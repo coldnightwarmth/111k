@@ -29,6 +29,10 @@ export function logError(list, e) {
   return list;
 }
 
+// the chat log (GET /chat-log): every message said, kept for good, one stored record each (server/worker.js)
+export const CHAT_LOG_PREFIX = 'chat:';
+export const chatLogKey = (at, id = '') => CHAT_LOG_PREFIX + String(at).padStart(15, '0') + (id ? '-' + id : '');
+
 // the radio log (GET /radio-log): every link put on, kept for good, one stored record each (server/worker.js)
 export const RADIO_LOG_PREFIX = 'radio:';
 export const radioLogKey = at => RADIO_LOG_PREFIX + String(at).padStart(15, '0');
@@ -464,7 +468,7 @@ function handle(player, data, now, room) {
     player.lastChat = now; player.lastActive = now;
     const returning = player.inactive; player.inactive = false;
     out.push({to: 'all', msg: {type: 'chat', id: player.id, name: player.name || '', text, time: now, expiresAt: now + CHAT_TTL_MS}});
-    return {out, changed: true, returning};
+    return {out, changed: true, returning, chatLog: {at: now, id: player.id, name: player.name || '', text}};
   }
   if (m.type === 'look') {
     const look = sanitizeLook(m.look);

@@ -961,6 +961,29 @@ test('the radio: a YouTube or SoundCloud link, only while quiet, five minutes at
   assert.equal(r.play.u, 'https://soundcloud.com/artist/track');
 });
 
+test('the chat log: every message kept, newest first, pageable', async () => {
+  const {room, sockets, ctx} = makeRoom();
+  const store = new Map();
+  ctx.storage.get = async k => (Array.isArray(k) ? new Map(k.map(x => [x, store.get(x)])) : store.get(k));
+  ctx.storage.put = async (k, v) => { if (typeof k === 'object') for (const [kk, vv] of Object.entries(k)) store.set(kk, structuredClone(vv)); else store.set(k, structuredClone(v)); };
+  ctx.storage.delete = async k => { for (const x of [k].flat()) store.delete(x); };
+  ctx.storage.list = async ({prefix = '', reverse = false, limit = Infinity, end} = {}) => {
+    let keys = [...store.keys()].filter(k => k.startsWith(prefix) && (end === undefined || k < end)).sort();
+    if (reverse) keys.reverse();
+    return new Map(keys.slice(0, limit).map(k => [k, structuredClone(store.get(k))]));
+  };
+  await join(room, S1); await join(room, S2);
+  const [a, b] = sockets;
+  await room.webSocketMessage(a, JSON.stringify({type: 'chat', text: 'first'}));
+  await new Promise(r => setTimeout(r, 5));
+  await room.webSocketMessage(b, JSON.stringify({type: 'chat', text: '  second\nline '}));
+  const log = await (await room.fetch(new Request('https://x/chat-log'))).json();
+  assert.deepEqual(log.map(c => c.text), ['second line', 'first']);
+  assert.ok(log[0].at >= log[1].at && log[0].id && log[0].id !== log[1].id);
+  const older = await (await room.fetch(new Request(`https://x/chat-log?before=${log[0].at}`))).json();
+  assert.deepEqual(older.map(c => c.text), ['first']);
+});
+
 test('the radio log: every link put on, kept with who and how long, and what the radio remembered from before', async () => {
   const {room, sockets, ctx} = makeRoom();
   const store = new Map();

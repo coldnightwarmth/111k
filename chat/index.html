@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#050506">
+  <title>111k chat</title>
+  <meta name="description" content="everything said in the 111k chat">
+  <link rel="icon" href="../favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="chat.css">
+</head>
+<body>
+  <header id="top">
+    <a class="home" href="../">111k</a>
+    <h1>chat log</h1>
+    <input id="find" type="search" placeholder="find…" autocomplete="off" spellcheck="false" aria-label="find">
+    <span id="status">loading…</span>
+  </header>
+  <main>
+    <ol id="log"></ol>
+    <button type="button" id="more" hidden>older</button>
+  </main>
+  <script type="module" src="../src/chat-page.js"></script>
+</body>
+</html>

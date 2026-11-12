@@ -10,7 +10,7 @@
 set -euo pipefail
 V="${1:?usage: build_site.sh <version>}"
 rm -rf _site && mkdir _site
-cp -r index.html 404.html styles.css favicon.svg src vendor assets anim graffiti sfx radio _site/
+cp -r index.html 404.html styles.css favicon.svg src vendor assets anim graffiti sfx radio chat _site/
 [ -f CNAME ] && cp CNAME _site/
 touch _site/.nojekyll
 
@@ -42,6 +42,8 @@ sed -i -E "s#src=\"\.\./src/sfx-page\.js\"#src=\"../src/sfx-page.js?v=$V\"#; s#h
 grep -q "sfx-page.js?v=$V" _site/sfx/index.html
 sed -i -E "s#src=\"\.\./src/radio-page\.js\"#src=\"../src/radio-page.js?v=$V\"#; s#href=\"radio\.css\"#href=\"radio.css?v=$V\"#" _site/radio/index.html
 grep -q "radio-page.js?v=$V" _site/radio/index.html
+sed -i -E "s#src=\"\.\./src/chat-page\.js\"#src=\"../src/chat-page.js?v=$V\"#; s#href=\"chat\.css\"#href=\"chat.css?v=$V\"#" _site/chat/index.html
+grep -q "chat-page.js?v=$V" _site/chat/index.html
 
 # how long browsers may keep things (Cloudflare Pages reads this; GitHub Pages ignores it): the code and the
 # level are asked for by version, so they keep; pictures and avatars a day (then checked again); pages never
@@ -59,6 +61,8 @@ cat > _site/_headers <<'EOF'
 /sfx/
   Cache-Control: no-cache
 /radio/
+  Cache-Control: no-cache
+/chat/
   Cache-Control: no-cache
 /src/*
   Cache-Control: public, max-age=604800, immutable

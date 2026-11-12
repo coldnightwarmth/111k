@@ -8,7 +8,7 @@ import {cleanEmoteConfig} from '../src/emotes.js';
 import {cleanReview, hiddenPieces} from '../src/review.js';
 import {freshRace, publicRace} from '../src/race.js';
 import {handleMessage, newPlayer, snapshot, freshItems, freshMarks, validItems, releaseItems, letGo, validMarks, marksMessage, joinMarks, joinInk, itemsAtSpawn, inkPacked, inkCount, finishInk,
-  kothTick, kothNext, freshKoth, publicKoth, logError, RADIO_LOG_PREFIX, radioLogKey, patchRadioEntry, promoteRadio} from './room.js';
+  kothTick, kothNext, freshKoth, publicKoth, logError, RADIO_LOG_PREFIX, radioLogKey, patchRadioEntry, promoteRadio, CHAT_LOG_PREFIX, chatLogKey} from './room.js';
 
 // The scene: everything players have done to the space (items moved, pieces sprayed, paint, the level's own
 // graffiti scrubbed off, the lap timer, king of the hill). When this changes, the room starts over once with
@@ -31,7 +31,7 @@ export default {
     if (!allowedOrigins(env).includes(origin)) return new Response('Forbidden', {status: 403});
     // the emote settings (changed from /anim) and the graffiti review (made at /graffiti): read by anyone
     // on the site, handled by the room itself
-    if (url.pathname === '/emotes' || url.pathname === '/graffiti' || url.pathname === '/errors' || url.pathname === '/radio-log') {
+    if (url.pathname === '/emotes' || url.pathname === '/graffiti' || url.pathname === '/errors' || url.pathname === '/radio-log' || url.pathname === '/chat-log') {
       const cors = {'Access-Control-Allow-Origin': origin, 'Vary': 'Origin', 'Access-Control-Allow-Methods': 'GET, POST',
         'Access-Control-Allow-Headers': 'Content-Type, X-Emotes-Key'};
       if (request.method === 'OPTIONS') return new Response(null, {status: 204, headers: cors});
@@ -239,6 +239,13 @@ export class Room {
     const entry = set || patchRadioEntry(await this.ctx.storage.get?.(key), patch);
     if (entry) await this.ctx.storage.put?.(key, entry);
   }
+  async chatLogRequest(request) {
+    const before = Number(new URL(request.url).searchParams.get('before'));
+    const opts = {prefix: CHAT_LOG_PREFIX, reverse: true, limit: 1000};
+    if (Number.isFinite(before) && before > 0) opts.end = chatLogKey(before);
+    const list = this.ctx.storage.list ? [...(await this.ctx.storage.list(opts)).values()] : [];
+    return Response.json(list, {headers: {'Cache-Control': 'no-store'}});
+  }
   async radioLogRequest(request) {
     await this.radioLogReady();
     const before = Number(new URL(request.url).searchParams.get('before'));
@@ -256,6 +263,8 @@ export class Room {
       return Response.json((await this.ctx.storage.get?.('errors')) || [], {headers: {'Cache-Control': 'no-store'}});
     // GET /radio-log: every link put on the radio, newest first (?before=<at> for older ones)
     if (new URL(request.url).pathname === '/radio-log') return this.radioLogRequest(request);
+    // GET /chat-log: everything said in the chat, newest first (?before=<at> for older)
+    if (new URL(request.url).pathname === '/chat-log') return this.chatLogRequest(request);
     // Public player IDs must not expose the session token that can resume a socket.
     const session = new URL(request.url).searchParams.get('session');
     const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(session));
@@ -307,6 +316,7 @@ export class Room {
       else for (const other of this.sockets()) if (other.deserializeAttachment()?.id === to) this.send(other, msg);
     }
     for (const l of result.radioLogs || []) await this.logRadio(l);
+    if (result.chatLog) await this.ctx.storage.put?.(chatLogKey(result.chatLog.at, result.chatLog.id), result.chatLog);
     if (result.report) await this.ctx.storage.put?.('errors', logError((await this.ctx.storage.get?.('errors')) || [], result.report), {allowUnconfirmed: true});
     if (result.itemsChanged) { await this.saveItems(); await this.scheduleAlarm(); }
     if (result.marksChanged) this.saveMarksSoon();

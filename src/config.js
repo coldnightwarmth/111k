@@ -31,3 +31,10 @@ export function radioLogUrl() {
   u.pathname = '/radio-log'; u.search = '';
   return u.href;
 }
+
+// the chat log (GET: everything said, newest first; the page at /chat shows it)
+export function chatLogUrl() {
+  const u = new URL(serverUrl().replace(/^ws/, 'http'));
+  u.pathname = '/chat-log'; u.search = '';
+  return u.href;
+}
