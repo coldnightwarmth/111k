@@ -7,7 +7,7 @@ const INK_CHUNK_PTS = 40000;      // points to a stored chunk (packed as 32-bit 
 import {cleanEmoteConfig} from '../src/emotes.js';
 import {cleanReview, hiddenPieces} from '../src/review.js';
 import {freshRace, publicRace} from '../src/race.js';
-import {handleMessage, newPlayer, snapshot, freshItems, freshMarks, validItems, releaseItems, letGo, validMarks, marksMessage, joinMarks, joinInk, itemsAtSpawn, inkPacked, inkCount, finishInk,
+import {handleMessage, newPlayer, snapshot, freshItems, freshMarks, validItems, releaseItems, letGo, validMarks, marksMessage, joinMarks, joinInk, rejoinInk, itemsAtSpawn, inkPacked, inkCount, finishInk,
   kothTick, kothNext, freshKoth, publicKoth, logError, RADIO_LOG_PREFIX, radioLogKey, patchRadioEntry, promoteRadio, CHAT_LOG_PREFIX, chatLogKey} from './room.js';
 
 // The scene: everything players have done to the space (items moved, pieces sprayed, paint, the level's own
@@ -350,6 +350,16 @@ export class Room {
     const joined = joinInk(marks.ink || [], now);
     for (const d of joined) this.broadcast({type: 'inkgroup', g: d.g, ids: d.ids});
     if (joined.length || joined.finished) this.saveMarksSoon();
+    // once: all the ink gone over again, now crossings are found both ways round (11 Nov 2026: some were missed)
+    if (!this.rejoinChecked) {
+      this.rejoinChecked = true;
+      if (!(await this.ctx.storage.get?.('inkRejoined'))) {
+        const merged = rejoinInk(marks.ink || [], now);
+        for (const d of merged) this.broadcast({type: 'inkgroup', g: d.g, ids: d.ids});
+        if (merged.length) await this.saveMarks();
+        await this.ctx.storage.put?.('inkRejoined', now);
+      }
+    }
     for (const ws of this.sockets()) {
       const p = ws.deserializeAttachment();
       if (!p || p.inactive || now - p.lastActive < INACTIVE_MS) continue;

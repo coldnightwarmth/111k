@@ -219,21 +219,79 @@ const NEAR = .35;
 // joined into one drawing: s.g, the id of the drawing's oldest stroke. Returns the drawings that changed:
 // [{g, ids}] (everyone's told: they put each on one layer, as one piece)
 const JOIN = .025, JOIN_AFTER = 60000;
-function crosses(a, b) {
+export function crosses(a, b) {
   const A = boundsOf(a), B = boundsOf(b);
   for (let k = 0; k < 3; k++) if (A.lo[k] - JOIN > B.hi[k] || B.lo[k] - JOIN > A.hi[k]) return false;
+  // (every point of a's in its cell: keeping only one a cell missed crossings, and depended on which went first)
   const cell = new Map(), key = (x, y, z) => `${Math.floor(x / JOIN)},${Math.floor(y / JOIN)},${Math.floor(z / JOIN)}`;
-  eachInkStep(a, JOIN / 2, (x, y, z) => cell.set(key(x, y, z), [x, y, z]));
+  eachInkStep(a, JOIN / 2, (x, y, z) => { const k = key(x, y, z), c = cell.get(k); if (c) c.push(x, y, z); else cell.set(k, [x, y, z]); });
   let hit = false;
   eachInkStep(b, JOIN / 2, (x, y, z) => {
     if (hit) return;
     const cx = Math.floor(x / JOIN), cy = Math.floor(y / JOIN), cz = Math.floor(z / JOIN);
     for (let dx = -1; dx <= 1 && !hit; dx++) for (let dy = -1; dy <= 1 && !hit; dy++) for (let dz = -1; dz <= 1 && !hit; dz++) {
       const p = cell.get(`${cx + dx},${cy + dy},${cz + dz}`);
-      if (p && Math.hypot(p[0] - x, p[1] - y, p[2] - z) < JOIN) hit = true;
+      if (p) for (let i = 0; i < p.length && !hit; i += 3) if (Math.hypot(p[i] - x, p[i + 1] - y, p[i + 2] - z) < JOIN) hit = true;
     }
   });
   return hit;
+}
+// All the ink gone over again at once (what's been left a minute): every two strokes that cross, in one drawing.
+// Nothing's let go; drawings only merge (named for the oldest stroke's drawing). Returns the drawings that
+// changed: [{g, ids}]. (Once, for what was drawn before crossing was found both ways round: server/worker.js)
+export function rejoinInk(ink, now) {
+  const ready = ink.filter(s => s.h[0] !== 'a' && s.joined && now - (s.at || s.t || 0) >= JOIN_AFTER);
+  const groupOf = s => s.g || s.id;
+  const up = new Map();
+  const find = g => { let r = g; while (up.has(r) && up.get(r) !== r) r = up.get(r); let x = g; while (x !== r) { const n = up.get(x); up.set(x, r); x = n; } return r; };
+  for (const s of ready) up.set(groupOf(s), groupOf(s));
+  // every point, along each line no more than JOIN / 2 apart, in a grid per surface (cells numbered: x, y, z
+  // each in 13 bits around 0, so within about 100 m of the middle)
+  const grids = new Map(), cellOf = (cx, cy, cz) => ((cx + 4096) * 8192 + (cy + 4096)) * 8192 + (cz + 4096);
+  ready.forEach((s, i) => {
+    let grid = grids.get(s.h); if (!grid) grids.set(s.h, grid = new Map());
+    eachInkStep(s, JOIN / 2, (x, y, z) => {
+      const k = cellOf(Math.floor(x / JOIN), Math.floor(y / JOIN), Math.floor(z / JOIN));
+      const c = grid.get(k); if (c) c.push(i, x, y, z); else grid.set(k, [i, x, y, z]);
+    });
+  });
+  // (each pair of neighbouring cells once: the cell itself and the 13 'after' it; near enough first, then whose)
+  const J2 = JOIN * JOIN, seen = new Set();
+  const AFTER = [];
+  for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) for (let dz = -1; dz <= 1; dz++) if (dx > 0 || dx === 0 && (dy > 0 || dy === 0 && dz > 0)) AFTER.push([dx, dy, dz]);
+  const pairUp = (c, o, same) => {
+    for (let i = 0; i < c.length; i += 4) {
+      const si = c[i], x = c[i + 1], y = c[i + 2], z = c[i + 3];
+      for (let j = same ? i + 4 : 0; j < o.length; j += 4) {
+        const sj = o[j];
+        if (si === sj) continue;
+        const ex = x - o[j + 1], ey = y - o[j + 2], ez = z - o[j + 3];
+        if (ex * ex + ey * ey + ez * ez >= J2) continue;
+        const key = si < sj ? si * 1048576 + sj : sj * 1048576 + si;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        const ra = find(groupOf(ready[si])), rb = find(groupOf(ready[sj]));
+        if (ra !== rb) up.set(ra, rb);
+      }
+    }
+  };
+  const steps = AFTER.map(([dx, dy, dz]) => (dx * 8192 + dy) * 8192 + dz);
+  for (const grid of grids.values()) for (const [k, c] of grid) {
+    pairUp(c, c, true);
+    for (const d of steps) { const o = grid.get(k + d); if (o) pairUp(c, o, false); }
+  }
+  // each set of drawings that now goes together: one, named for its oldest stroke's drawing
+  const sets = new Map();
+  for (const s of ready) { const r = find(groupOf(s)); let x = sets.get(r); if (!x) sets.set(r, x = {strokes: [], names: new Set()}); x.strokes.push(s); x.names.add(groupOf(s)); }
+  const out = [];
+  for (const {strokes, names} of sets.values()) {
+    if (names.size < 2) continue;
+    const name = groupOf(strokes.reduce((a, b) => ((b.t || 0) < (a.t || 0) ? b : a)));
+    for (const s of strokes) s.g = name;
+    out.push({g: name, ids: strokes.map(s => s.id)});
+  }
+  if (out.length) inkTouched(ink);
+  return out;
 }
 export function joinInk(ink, now) {
   const ready = ink.filter(s => s.h[0] !== 'a' && now - (s.at || s.t || 0) >= JOIN_AFTER);

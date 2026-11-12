@@ -1126,6 +1126,27 @@ test('ink: over the limit, trimmed a little under it in one go, lone strokes fir
   assert.ok(r.out.filter(o => o.msg.type === 'erase').length >= 2);
 });
 
+test('crossing strokes found either way round, and the whole lot gone over again joins without letting anything go', async () => {
+  const {crosses, rejoinInk, finishInk, inkUnits} = await import('../room.js');
+  const pt = (x, y) => [x, y, 0, 0, 0, 1, .5, .5];
+  // a long wiggle and a short dash across it (the dash's points fall between the wiggle's)
+  const long = {id: 'aaaaaaaaaaaaaaaa:l', h: 'w', c: 1, t: 1, at: 1, pts: Array.from({length: 200}, (_, k) => pt(k * .012, Math.sin(k / 5) * .05))};
+  const dash = {id: 'aaaaaaaaaaaaaaaa:d', h: 'w', c: 1, t: 2, at: 2, pts: [pt(.6, -.2), pt(.6, .2)]};
+  finishInk(long); finishInk(dash);
+  assert.equal(crosses(long, dash), true); assert.equal(crosses(dash, long), true);
+  // three drawings, two of which cross, one apart; and one recent stroke that's not looked at yet
+  const far = {id: 'aaaaaaaaaaaaaaaa:f', h: 'w', c: 1, t: 3, at: 3, pts: [pt(5, 5), pt(5.3, 5)]};
+  finishInk(far);
+  const recent = {id: 'aaaaaaaaaaaaaaaa:r', h: 'w', c: 1, t: 99_000, at: 99_000, pts: [pt(.3, -.2), pt(.3, .2)]};
+  const ink = [long, dash, far, recent];
+  for (const s of [long, dash, far]) s.joined = true;
+  const out = rejoinInk(ink, 100_000);
+  assert.equal(ink.length, 4);
+  assert.deepEqual(out, [{g: long.id, ids: [long.id, dash.id]}]);
+  assert.equal(dash.g, long.id); assert.equal(far.g, undefined); assert.equal(recent.g, undefined);
+  assert.equal(inkUnits(ink).length, 3);
+});
+
 test('ink for someone joining: binary (packed, deflated) or JSON, the same strokes either way; finished strokes made lighter', async () => {
   const {joinMarks, freshMarks, finishInk, inkCount} = await import('../room.js');
   const {decodeInk, inflate, inkFloats, unpackInk} = await import('../../src/protocol.js');
