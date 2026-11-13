@@ -18,7 +18,11 @@ const loadYT = () => ytLoad ||= (window.YT?.Player ? Promise.resolve() : script(
 const loadSC = () => scLoad ||= (window.SC?.Widget ? Promise.resolve() : script('https://w.soundcloud.com/player/api.js'));
 
 const NEAR = 1.2, FAR = 34, FALL = 2.6;  // full volume this close, silent this far; how fast it drops away (a long tail)
-const CHECK_MS = 5000, DRIFT = 3;        // keep in step with the clock: every so often, jumped back if this far out (s)
+const CHECK_MS = 5000, DRIFT = 3;        // keep in step with the clock: every so often, moved if this far ahead (s)
+// a page a little behind (its player was slow to load or start) is left to play on, not jumped ahead past what
+// it hasn't played; only this far behind is it moved (and the track's let run past its end for it:
+// RADIO_END_GRACE_MS). Coming in this near the start, it starts from the very beginning.
+const BEHIND = 5, FROM_TOP = 5;
 // the players' sound can't be listened to from here (another site's), but whether they're playing can: a track
 // that's said it can't (an error), or hasn't been playing for this long, is called off (server/room.js)
 const DEAD_MS = 30000;
@@ -38,6 +42,7 @@ export function createRadio({network, onOpenChange}) {
     playing.delete(id);
   }
   const offset = play => Math.max(0, (network.now() - play.at) / 1000);
+  const startAt = play => { const o = offset(play); return o < FROM_TOP ? 0 : Math.floor(o); };
   function start(id, play) {
     const p = {key: `${play.u}@${play.at}`, kind: play.u.startsWith('yt:') ? 'yt' : 'sc', ready: false, vol: -1, checkAt: 0, reported: false, play,
       startedAt: performance.now(), lastPlaying: 0, dead: false};
@@ -51,9 +56,9 @@ export function createRadio({network, onOpenChange}) {
       loadYT().then(() => {
         if (playing.get(id) !== p) return;
         p.player = new window.YT.Player(p.el, {width: 200, height: 120, videoId: play.u.slice(3),
-          playerVars: {autoplay: 1, controls: 0, disablekb: 1, playsinline: 1, start: Math.floor(offset(play))},
+          playerVars: {autoplay: 1, controls: 0, disablekb: 1, playsinline: 1, start: startAt(play)},
           events: {
-            onReady: e => { p.ready = true; e.target.setVolume(0); e.target.seekTo(offset(p.play), true); e.target.playVideo(); },
+            onReady: e => { p.ready = true; e.target.setVolume(0); e.target.seekTo(startAt(p.play), true); e.target.playVideo(); },
             // (each time it starts playing: where it should be now, not where it was told when it loaded; a page
             // that's just come in may not have been let play sound till it was clicked on)
             onStateChange: e => { if (e.data === 1) { p.lastPlaying = performance.now(); report(p.player.getDuration() * 1000); sync(p); } },
@@ -69,8 +74,14 @@ export function createRadio({network, onOpenChange}) {
         if (playing.get(id) !== p) return;
         const w = p.widget = window.SC.Widget(p.el);
         w.bind(window.SC.Widget.Events.READY, () => {
-          p.ready = true; w.setVolume(0); w.seekTo(offset(p.play) * 1000); w.play();
-          w.getDuration(ms => report(ms));
+          p.ready = true; w.setVolume(0); w.seekTo(startAt(p.play) * 1000); w.play();
+          // (SoundCloud won't always stream a track in its player, and says nothing: blocked here, or only a
+          // preview of it. Blocked, it's called off now; a preview, it runs as long as the preview)
+          w.getCurrentSound(sound => {
+            if (sound && (sound.policy === 'BLOCK' || sound.streamable === false)) { dead(id, p, 'error'); return; }
+            const snip = sound?.policy === 'SNIP' ? 30000 : Infinity;
+            w.getDuration(ms => report(Math.min(ms, snip, sound?.duration || Infinity)));
+          });
           w.bind(window.SC.Widget.Events.PLAY_PROGRESS, () => { p.lastPlaying = performance.now(); });
           // (SoundCloud's player ignores being moved on before it's playing: again once it is)
           w.bind(window.SC.Widget.Events.PLAY, () => { p.lastPlaying = performance.now(); sync(p); });
@@ -96,12 +107,12 @@ export function createRadio({network, onOpenChange}) {
     try { p.kind === 'yt' ? p.player.setVolume(n) : p.widget.setVolume(n); } catch {}
   }
   // to where it should be now, if it's more than a moment out
-  function sync(p, near = 1.5) {
+  function sync(p, ahead = 1.5) {
     if (!p.ready) return;
-    const want = offset(p.play);
+    const out = at => { const d = at - offset(p.play); return d > ahead || d < -BEHIND; };
     try {
-      if (p.kind === 'yt') { if (Math.abs(p.player.getCurrentTime() - want) > near) p.player.seekTo(want, true); }
-      else p.widget.getPosition(ms => { if (Math.abs(ms / 1000 - (offset(p.play))) > near) p.widget.seekTo(offset(p.play) * 1000); });
+      if (p.kind === 'yt') { if (out(p.player.getCurrentTime())) p.player.seekTo(offset(p.play), true); }
+      else p.widget.getPosition(ms => { if (out(ms / 1000)) p.widget.seekTo(offset(p.play) * 1000); });
     } catch {}
   }
   // keep it with the clock (a stall, a tab in the background), and playing (it may not have been let at first)

@@ -5,7 +5,7 @@
 // items, which the caller keeps (Durable Object storage in production).
 import {INK_HOST, INK_PER_S, MAX_INK_STROKES, MAX_STROKE_PTS, MAX_INK_PTS, INK_PART_PTS, INK_BIN_PTS, packInk, cleanInkPoints, encodeInk, simplifyInk, deflate, SETTLE_BYTES, SETTLE_MAX, SETTLE_PER_S, MAG_SIZE, RELOAD_MS, CROWN_HITS, CROWN_HIT_WINDOW_MS, CHAT_INTERVAL_MS, CHAT_TTL_MS, POSE_INTERVAL_MS, PICKUP_RANGE, PUNCH_RANGE, PUNCH_COOLDOWN_MS,
   SHOT_INTERVAL_MS, SPRAY_INTERVAL_MS, SPRAY_RANGE, MAX_SPLATS, MAX_SPRAYS, SPLAT_LIFE_MS, ART_MAX,
-  sanitizeChat, sanitizePose, radioLink, radioKey, radioQueue, RADIO_MAX_MS, RADIO_GAP_MS, RADIO_QUEUE, samePose, cleanItem, cleanPath, sanitizeLook, sanitizeName, cleanSplat, cleanSpray, splatId, sprayId} from '../src/protocol.js';
+  sanitizeChat, sanitizePose, radioLink, radioKey, radioQueue, RADIO_MAX_MS, RADIO_GAP_MS, RADIO_QUEUE, RADIO_LEAD_MS, RADIO_END_GRACE_MS, samePose, cleanItem, cleanPath, sanitizeLook, sanitizeName, cleanSplat, cleanSpray, splatId, sprayId} from '../src/protocol.js';
 import {ITEM_SPAWNS} from '../src/world-items.js';
 import {RACE_LAPS, RACE_TIMEOUT_MS, BUTTON, BUTTON_RANGE, MACHINE_ANGLE, LAP_LINE, BUTTON_LAP, loopAngle, freshRace, publicRace} from '../src/race.js';
 import {PANEL, USE_RANGE, BUSY_MS, inChamber, standPose, keyEntry, KEYS} from '../src/converter-spec.js';
@@ -101,15 +101,35 @@ export function validMarks(stored) {
   return {splats: splats.filter(Boolean).slice(-MAX_SPLATS),
     sprays: stored.sprays.map(cleanSpray).filter(Boolean).slice(-MAX_SPRAYS),
     erased: Array.isArray(stored.erased) ? stored.erased.filter(id => typeof id === 'string' && id.length <= 80).slice(-MAX_ERASED) : [],
-    ink: Array.isArray(stored.ink) ? stored.ink.filter(s => s && typeof s.id === 'string' && INK_HOST.test(s.h) && (Array.isArray(s.pts) || s.q instanceof Int32Array)).slice(-MAX_INK_STROKES * 20) : []};   // (a drawing counts as one)
+    ink: Array.isArray(stored.ink) ? stored.ink.filter(s => s && typeof s.id === 'string' && INK_HOST.test(s.h) && (Array.isArray(s.pts) || s.q instanceof Int32Array || s.q instanceof Int16Array)).slice(-MAX_INK_STROKES * 20) : []};   // (a drawing counts as one)
 }
 // A stroke's points: a list of [x, y, z, nx, ny, nz, u, v] while it's being drawn (s.pts); once it's done (left a
 // minute: joinInk), made lighter (simplifyInk) and packed (s.q: packInk's numbers, 8 a point), which takes a
 // tenth of the memory (a room can hold a lot of ink)
+// Packed, it's kept small: 16-bit numbers, x, y, z as millimetres from its first point (s.o), which halves the
+// room's memory for ink (a room's limited to 128 MB; there can be millions of points). A stroke reaching more
+// than 32 m from its first point keeps the 32-bit numbers as they are (no s.o).
 export const inkCount = s => (s.q ? s.q.length >> 3 : s.pts.length);
-export const inkPacked = s => s.q || Int32Array.from(packInk(s.pts));
+export function compactInk(s, q32) {
+  const o = [q32[0] || 0, q32[1] || 0, q32[2] || 0], q = new Int16Array(q32.length);
+  for (let i = 0; i < q32.length; i++) {
+    const v = q32[i] - ((i & 7) < 3 ? o[i & 7] : 0);
+    if (v > 32767 || v < -32768) { s.q = q32 instanceof Int32Array ? q32 : Int32Array.from(q32); delete s.o; return s; }
+    q[i] = v;
+  }
+  s.q = q; s.o = o;
+  return s;
+}
+// its points as packInk's numbers (Int32Array, absolute), however it's kept
+export function inkPacked(s) {
+  if (!s.q) return Int32Array.from(packInk(s.pts));
+  if (!s.o) return s.q;
+  const q = s.q, o = s.o, out = new Int32Array(q.length);
+  for (let i = 0; i < q.length; i++) out[i] = q[i] + ((i & 7) < 3 ? o[i & 7] : 0);
+  return out;
+}
 function eachInkPoint(s, fn) {
-  if (s.q) { const q = s.q; for (let i = 0; i < q.length; i += 8) fn(q[i] / 1000, q[i + 1] / 1000, q[i + 2] / 1000); }
+  if (s.q) { const q = s.q, ox = s.o ? s.o[0] : 0, oy = s.o ? s.o[1] : 0, oz = s.o ? s.o[2] : 0; for (let i = 0; i < q.length; i += 8) fn((q[i] + ox) / 1000, (q[i + 1] + oy) / 1000, (q[i + 2] + oz) / 1000); }
   else for (const p of s.pts) fn(p[0], p[1], p[2]);
 }
 // along the line, no more than `step` apart (a stroke made lighter has long straight runs between its points)
@@ -126,7 +146,7 @@ function eachInkStep(s, step, fn) {
 export function finishInk(s) {
   if (s.q) return 0;
   const before = s.pts.length;
-  s.q = Int32Array.from(packInk(simplifyInk(s.pts)));
+  compactInk(s, Int32Array.from(packInk(simplifyInk(s.pts))));
   s.lite = 1;
   delete s.pts;
   inkBounds.delete(s);
@@ -166,35 +186,42 @@ export function marksMessages(marks, now = Date.now()) {
   if (part.length) parts.push(part);
   return [{...marksMessage(marks, now), ink: [], inkParts: parts.length}, ...parts.map((ink, i) => ({type: 'inkpart', i, n: parts.length, ink}))];
 }
-// the same, the ink in binary parts (src/protocol.js encodeInk; deflated by the room before it's sent): the marks
-// message, then [{i, n, bytes}] for a page that can take them
-export function marksBinary(marks, now = Date.now()) {
-  const parts = [];
-  let part = [], n = 0;
-  for (const s of marks.ink || []) {
-    const k = inkCount(s);
-    if (n + k > INK_BIN_PTS && part.length) { parts.push(part); part = []; n = 0; }
-    part.push({id: s.id, h: s.h, c: s.c, t: s.t, ...(s.g ? {g: s.g} : {}), q: inkPacked(s)}); n += k;
-  }
-  if (part.length) parts.push(part);
-  return {head: {...marksMessage(marks, now), ink: [], inkParts: parts.length, inkBin: true}, parts: parts.map((p, i) => ({i, n: parts.length, bytes: encodeInk(p)}))};
-}
 
 // what someone joining is sent, the ink in binary (deflated) if their page can take it: {head: [messages, sent
 // at once: the marks as they are now], parts: a promise of the ink's binary messages (the same moment's: only
 // the deflating waits)}. A binary message: [1][part i: 2 bytes][parts n: 2 bytes][the part, deflated] (src/net.js)
-// cache: {parts} kept by the room till the marks change, so a run of people joining doesn't do it all again
+// cache: kept by the room. Each part's kept, with what was in it; a part with the same strokes as last time
+// (most of them: new ink goes on the end) isn't packed again, only the ones that changed.
 export function joinMarks(marks, binary, now = Date.now(), cache = null) {
   if (!binary) return {head: marksMessages(marks, now), parts: Promise.resolve([])};
-  if (cache?.parts) return {head: [{...marksMessage(marks, now), ink: [], inkParts: cache.n, inkBin: true}], parts: cache.parts};
-  const {head, parts} = marksBinary(marks, now);
-  const out = Promise.all(parts.map(async ({i, n, bytes}) => {
-    const z = await deflate(bytes), msg = new Uint8Array(5 + z.length);
-    msg[0] = 1; msg[1] = i >> 8; msg[2] = i & 255; msg[3] = n >> 8; msg[4] = n & 255; msg.set(z, 5);
+  const groups = [];
+  let part = [], n = 0, sig = '';
+  for (const s of marks.ink || []) {
+    const k = inkCount(s);
+    if (n + k > INK_BIN_PTS && part.length) { groups.push({part, sig}); part = []; n = 0; sig = ''; }
+    part.push(s); n += k; sig += `${s.id}|${k}|${s.g || ''};`;
+  }
+  if (part.length) groups.push({part, sig});
+  const total = groups.length, kept = cache ? (cache.kept ||= []) : [];
+  const head = {...marksMessage(marks, now), ink: [], inkParts: total, inkBin: true};
+  // (packed now, for this moment; deflated as it can be)
+  const out = groups.map(({part, sig}, i) => {
+    const old = kept[i];
+    if (old && old.sig === sig) return old.z;
+    const bytes = encodeInk(part.map(s => ({id: s.id, h: s.h, c: s.c, t: s.t, ...(s.g ? {g: s.g} : {}), q: inkPacked(s)})));
+    const z = deflate(bytes);
+    if (cache) kept[i] = {sig, z};
+    return z;
+  });
+  if (cache) kept.length = total;
+  const parts = Promise.all(out).then(list => list.map((z, i) => {
+    const msg = new Uint8Array(5 + z.length);
+    msg[0] = 1; msg[1] = i >> 8; msg[2] = i & 255; msg[3] = total >> 8; msg[4] = total & 255; msg.set(z, 5);
     return msg;
   }));
-  if (cache) { cache.parts = out; cache.n = parts.length; }
-  return {head: [head], parts: out};
+  // (a part that couldn't be deflated isn't kept)
+  parts.catch(() => { if (cache) cache.kept = []; });
+  return {head: [head], parts};
 }
 
 const flat = (a, b) => Math.hypot(a.x - b.x, a.z - b.z);
@@ -783,7 +810,7 @@ function handle(player, data, now, room) {
       const q = {u: radioKey(link), by: player.id, url: typeof m.url === 'string' ? m.url.trim().slice(0, 400) : '', name: player.name || ''};
       if (!item.next) item.next = q; else (item.later = Array.isArray(item.later) ? item.later : []).push(q);
     } else {
-      item.play = {u: radioKey(link), at: now + 1500, until: now + 1500 + RADIO_MAX_MS, by: player.id};
+      item.play = {u: radioKey(link), at: now + RADIO_LEAD_MS, until: now + RADIO_LEAD_MS + RADIO_MAX_MS, by: player.id};
       logs.push({at: item.play.at, set: radioEntry(item, player, m.url)});
     }
     out.push({to: 'all', msg: {type: 'item', item: cleanItem(item)}});
@@ -809,7 +836,7 @@ function handle(player, data, now, room) {
   }
   if (m.type === 'radio-len') {
     if (!item || item.type !== 'radio' || !item.play || item.play.by !== player.id || !Number.isFinite(m.ms) || m.ms < 1000) return refuse();
-    item.play.until = Math.min(item.play.until, item.play.at + Math.round(m.ms) + 500);
+    item.play.until = Math.min(item.play.until, item.play.at + Math.round(m.ms) + RADIO_END_GRACE_MS);
     out.push({to: 'all', msg: {type: 'item', item: cleanItem(item)}});
     return {out, changed: true, itemsChanged: true, radioLogs: [...logs, {at: item.play.at, patch: {ms: Math.round(m.ms)}}]};
   }

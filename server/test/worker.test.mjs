@@ -952,7 +952,8 @@ test('the radio: a YouTube or SoundCloud link, only while quiet, five minutes at
   send(b, {type: 'radio-len', id: 'rd1', ms: 60_000});                     // not theirs to say
   assert.equal(r.play.until - r.play.at, RADIO_MAX_MS);
   send(a, {type: 'radio-len', id: 'rd1', ms: 60_000});
-  assert.ok(r.play.until - r.play.at <= 61_000);
+  const {RADIO_END_GRACE_MS} = await import("../../src/protocol.js");
+  assert.equal(r.play.until - r.play.at, 60_000 + RADIO_END_GRACE_MS);   // (its length, and a little more for a page behind)
   // when it stops, the queued one's on (as every page has already worked out)
   const {promoteRadio} = await import('../room.js'), {radioNow, RADIO_GAP_MS} = await import('../../src/protocol.js');
   now = r.play.until + 1;
@@ -1084,7 +1085,8 @@ test('ink is kept across the room going to sleep: packed in chunks, all of it ba
   const back = await again.loadMarks();
   assert.equal(back.ink.length, 120);
   const {unpackInk} = await import('../../src/protocol.js');
-  assert.deepEqual(unpackInk(Array.from(back.ink[37].q))[123], pt(3.7, 123));
+  const {inkPacked} = await import('../room.js');
+  assert.deepEqual(unpackInk(Array.from(inkPacked(back.ink[37])))[123], pt(3.7, 123));
   // fewer afterwards: the spare chunks go
   marks.ink.splice(10);
   await room.saveMarks();
@@ -1189,7 +1191,9 @@ test('ink for someone joining: binary (packed, deflated) or JSON, the same strok
   const before = marks.ink[3].pts.slice();
   finishInk(marks.ink[3]);
   assert.ok(inkCount(marks.ink[3]) < 400 && inkCount(marks.ink[3]) > 20, `${inkCount(marks.ink[3])} points`);
-  const after = unpackInk(Array.from(marks.ink[3].q));
+  const {inkPacked} = await import('../room.js');
+  assert.ok(marks.ink[3].q instanceof Int16Array);                  // (kept small)
+  const after = unpackInk(Array.from(inkPacked(marks.ink[3])));
   const {packInk} = await import('../../src/protocol.js'), mm = q => unpackInk(packInk([q]))[0];
   assert.deepEqual(after[0], mm(before[0])); assert.deepEqual(after.at(-1), mm(before.at(-1)));
   const json = joinMarks(marks, false), bin = joinMarks(marks, true);

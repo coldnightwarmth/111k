@@ -9,7 +9,7 @@ import {extname, join, normalize, resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {INACTIVE_MS, IDLE_RESET_MS, MAX_PLAYERS, cleanItem} from '../src/protocol.js';
 import {freshRace, publicRace} from '../src/race.js';
-import {handleMessage, newPlayer, snapshot, freshItems, releaseItems, letGo, freshMarks, marksMessage, joinMarks, joinInk, itemsAtSpawn, kothTick, freshKoth, publicKoth, logError, promoteRadio, finishInk} from './room.js';
+import {handleMessage, newPlayer, snapshot, freshItems, releaseItems, letGo, freshMarks, marksMessage, joinMarks, joinInk, itemsAtSpawn, kothTick, freshKoth, publicKoth, logError, promoteRadio, finishInk, compactInk} from './room.js';
 import {cleanEmoteConfig} from '../src/emotes.js';
 import {cleanReview, hiddenPieces} from '../src/review.js';
 
@@ -91,7 +91,7 @@ const marks = freshMarks();
 // INK_FILE=path: start with the ink in that file ([{id, h, c, t, g, q: [packed numbers]}], as a room sends it)
 if (process.env.INK_FILE) {
   const {readFileSync} = await import('node:fs');
-  for (const s of JSON.parse(readFileSync(process.env.INK_FILE, 'utf8'))) marks.ink.push({...s, q: Int32Array.from(s.q), at: s.t, joined: true, lite: 1});
+  for (const s of JSON.parse(readFileSync(process.env.INK_FILE, 'utf8'))) marks.ink.push(compactInk({...s, at: s.t, joined: true, lite: 1}, Int32Array.from(s.q)));
 }
 // INK_FILL=n: start with n points of made-up ink on the tunnel walls all round the loop (to try a lot of it)
 if (Number(process.env.INK_FILL) > 0) {

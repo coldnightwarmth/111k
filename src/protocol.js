@@ -28,6 +28,9 @@ export const RADIO_MAX_MS = 5 * 60 * 1000;
 // more links can wait their turn, RADIO_QUEUE of them (it.next: {u, by}, the first; it.later: [the rest]): each
 // goes on this long after the one before it stops
 export const RADIO_GAP_MS = 1500, RADIO_QUEUE = 2;
+// a link put on starts this long after (time for everyone's player to load it, so nobody comes in late), and a
+// track's let run this long past its length before it's stopped (a page a little behind still gets to the end)
+export const RADIO_LEAD_MS = 3500, RADIO_END_GRACE_MS = 5000;
 export const radioQueue = it => (it?.next ? [it.next, ...(Array.isArray(it.later) ? it.later : [])] : []);
 // what a radio is playing at `now`: its play, or (once that's over) the next queued, starting just after it, and
 // so on. The server makes that its play when it next hears about the radio (server/room.js promoteRadio); until
@@ -132,7 +135,7 @@ export const SETTLE_BYTES = 14000, SETTLE_MAX = 16, SETTLE_PER_S = 12;
 // MAX_INK_STROKES strokes, each up to MAX_STROKE_PTS points, MAX_INK_PTS in all (oldest go first). A point is
 // [x, y, z, nx, ny, nz, u, v]: where it is and which way the surface faces (in its host's own space: the world,
 // a door 'd<k>', a painting 'p<id>', or a player 'a<id>', whose ink isn't kept), and the level's lightmap there.
-export const INK_PTS = 64, MAX_INK_STROKES = 16000, MAX_STROKE_PTS = 500, MAX_INK_PTS = 900000, INK_PER_S = 25;
+export const INK_PTS = 64, MAX_INK_STROKES = 40000, MAX_STROKE_PTS = 500, MAX_INK_PTS = 2000000, INK_PER_S = 25;
 // a stroke's points packed flat as whole numbers (positions in mm, normals in hundredths, uv in 1e-4), for keeping
 // and for sending to someone joining (in parts: a WebSocket message can't be over 1 MiB)
 const INK_SCALE = [1000, 1000, 1000, 100, 100, 100, 1e4, 1e4];

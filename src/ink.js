@@ -318,7 +318,9 @@ export function createInk({level, scene, hostOf, layerFor = (h, box, top) => Mat
     if (e && e.parent !== parent) { e.batch.dispose(); batches.delete(key); e = null; }   // (its host was made again)
     if (!e) {
       const batch = inkBatch(h === 'w' ? levelMat : ownMat, h === 'w' ? 4096 : 512);
-      batch.mesh.renderOrder = order(st.layer);   // in among the tags: over the older ones it overlaps, under newer
+      // in among the tags (over the older ones it overlaps, under newer), and among the other chunks on its layer
+      // in its place (a millionth apart: well inside a layer's step, for thousands of chunks)
+      batch.mesh.renderOrder = order(st.layer) + (h === 'w' ? Math.min(placeOf(st.layer, st.zone), 2000) * 1e-6 : 0);
       parent.add(batch.mesh);
       if (h === 'w') batch.mesh.updateMatrix();
       e = {batch, parent, h, room: st.room ?? MIXED};
@@ -351,40 +353,16 @@ export function createInk({level, scene, hostOf, layerFor = (h, box, top) => Mat
     }
   }
   const pending = () => queued < queue.length;
-  // ---- the walls' chunks: the strokes in each (by layer and zone), and joining them where strokes overlap. Two
-  // overlapping strokes in different chunks on one layer would be drawn in whichever order three.js sorts the
-  // chunks into (by how far away each chunk's middle is), which changes as you move: up close, the later could
-  // go under the earlier. So they're never in different chunks: a stroke that overlaps strokes in other chunks
-  // brings them all into the biggest of them, and that chunk's drawn again in the order its strokes went on.
-  const zones = new Map();       // `${layer}|${zone}` -> Set of strokes
-  const zoneKey = st => `${st.layer}|${st.zone}`;
-  function zoneSet(st) { const k = zoneKey(st); let z = zones.get(k); if (!z) zones.set(k, z = new Set()); return z; }
-  function joinZones(st) {
-    const sets = new Set([zoneSet(st)]);
-    overlapping(st.h, st.box, o => { if (o !== st && o.layer === st.layer && o.zone !== st.zone) sets.add(zoneSet(o)); });
-    if (sets.size < 2) return;
-    let into = null;
-    for (const z of sets) if (!into || z.size > into.size) into = z;
-    const zone = [...into][0].zone;
-    let redraw = false;
-    for (const z of sets) {
-      if (z === into) continue;
-      for (const o of z) { if (o.marks.length) redraw = true; o.zone = zone; into.add(o); }
-      z.clear();
-    }
-    for (const k of [...zones.keys()]) if (!zones.get(k).size) zones.delete(k);
-    // (drawn already: the lot again, oldest first, into the one chunk; not yet: they'll go in in order anyway)
-    if (redraw || [...into].some(o => o.marks.length && o.seq > st.seq)) {
-      const list = [...into].sort((a, b) => a.seq - b.seq);
-      for (const o of list) if (o.marks.length) undraw(o);
-      if (pending()) for (const o of list) queue.push(o);
-      else for (const o of list) draw(o);
-    }
-  }
+  // ---- the walls' chunks, in a fixed order. Two overlapping strokes in different chunks are drawn in the order
+  // of their chunks; left to three.js, that's by how far away each chunk's middle is, which changes as you move
+  // (up close, a later stroke could go under an earlier one). So each chunk on a layer gets a place in the order
+  // as it's first used, and a stroke that overlaps others goes in the latest of their chunks, at its end: after
+  // everything it's over, from anywhere, and nothing has to be drawn again.
+  const zoneSeq = new Map();     // `${layer}|${zone}` -> its place
+  const placeOf = (layer, zone) => { const k = `${layer}|${zone}`; let n = zoneSeq.get(k); if (n === undefined) zoneSeq.set(k, n = zoneSeq.size + 1); return n; };
   function remove(id) {
     const st = strokes.get(id);
     if (!st) return;
-    if (st.h === 'w') { const z = zones.get(zoneKey(st)); z?.delete(st); if (z && !z.size) zones.delete(zoneKey(st)); }
     undraw(st); unindex(st);
     strokes.delete(id);
   }
@@ -411,14 +389,25 @@ export function createInk({level, scene, hostOf, layerFor = (h, box, top) => Mat
         let top = -1;
         overlapping(h, st.box, o => { if (o.layer > top) top = o.layer; });
         st.layer = layerFor(h, st.box, top);
-        // and, on the walls, its chunk: where it is (src/main.js zoneOf), or, if it's over other strokes on its
-        // layer, theirs (joinZones: strokes that overlap are always drawn in one chunk, in the order they went on)
-        if (h === 'w') { const z = zoneOf(st.box); st.room = z.room; st.zone = z.key; }
+        // and, on the walls, its chunk: if it's over other strokes on its layer, the latest-placed of theirs (so
+        // it's drawn after them all), otherwise where it is (src/main.js zoneOf)
+        if (h === 'w') {
+          const z = zoneOf(st.box);
+          st.room = z.room; st.zone = z.key;
+          let best = 0;
+          overlapping(h, st.box, o => { if (o.layer === st.layer) { const n = placeOf(o.layer, o.zone); if (n > best) { best = n; st.zone = o.zone; } } });
+          placeOf(st.layer, st.zone);
+        }
         st.seq = ++seq;
         strokes.set(id, st);
-        if (h === 'w') { zoneSet(st).add(st); joinZones(st); }
       }
-      if (p) { append(st, p); if (h === 'w' && live) joinZones(st); }     // (grown: over something new?)
+      if (p) append(st, p);
+      // (a stroke being drawn that's grown over a stroke in a later chunk moves into that one: only it's drawn again)
+      if (h === 'w' && live && st.marks.length) {
+        let best = placeOf(st.layer, st.zone), to = null;
+        overlapping(h, st.box, o => { if (o !== st && o.layer === st.layer) { const n = placeOf(o.layer, o.zone); if (n > best) { best = n; to = o.zone; } } });
+        if (to) { undraw(st); st.zone = to; }
+      }
       index(st);
       st.at = live ? performance.now() : 0;
       if (live && !pending()) draw(st);
@@ -428,7 +417,7 @@ export function createInk({level, scene, hostOf, layerFor = (h, box, top) => Mat
     // everything again (joining the room): the strokes as they were laid, built over the next frames
     reset(list = []) {
       for (const st of strokes.values()) unindex(st);
-      strokes.clear(); grids.clear(); zones.clear(); queue.length = 0; queued = 0;
+      strokes.clear(); grids.clear(); zoneSeq.clear(); queue.length = 0; queued = 0;
       for (const e of batches.values()) e.batch.dispose();
       batches.clear();
       for (const s of list) this.add({id: s.id, h: s.h, c: s.c, p: s.pts}, false);
@@ -531,10 +520,14 @@ export function createInk({level, scene, hostOf, layerFor = (h, box, top) => Mat
       return [...batches].map(([key, e]) => { const sp = e.batch.mesh.geometry.boundingSphere; return {key, room: e.room, shown: e.batch.mesh.visible, empty: e.batch.empty,
         centre: [+sp.center.x.toFixed(2), +sp.center.y.toFixed(2), +sp.center.z.toFixed(2)], radius: +sp.radius.toFixed(2)}; });
     },
-    // (for checks) how many strokes on the walls overlap a stroke on their layer in another chunk (should be none)
-    crossChunks() {
+    // (for checks) strokes on the walls drawn before an older stroke they overlap, on their layer (should be none)
+    misordered() {
       let n = 0;
-      for (const st of strokes.values()) if (st.h === 'w') { let x = false; overlapping('w', st.box, o => { if (o !== st && o.layer === st.layer && o.zone !== st.zone) x = true; }); if (x) n++; }
+      for (const st of strokes.values()) if (st.h === 'w') {
+        let x = false;
+        overlapping('w', st.box, o => { if (o.seq < st.seq && o.layer === st.layer && placeOf(o.layer, o.zone) > placeOf(st.layer, st.zone)) x = true; });
+        if (x) n++;
+      }
       return n;
     },
     // which batch a stroke's in

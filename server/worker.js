@@ -7,7 +7,7 @@ const INK_CHUNK_PTS = 40000;      // points to a stored chunk (packed as 32-bit 
 import {cleanEmoteConfig} from '../src/emotes.js';
 import {cleanReview, hiddenPieces} from '../src/review.js';
 import {freshRace, publicRace} from '../src/race.js';
-import {handleMessage, newPlayer, snapshot, freshItems, freshMarks, validItems, releaseItems, letGo, validMarks, marksMessage, joinMarks, joinInk, rejoinInk, itemsAtSpawn, inkPacked, inkCount, finishInk,
+import {handleMessage, newPlayer, snapshot, freshItems, freshMarks, validItems, releaseItems, letGo, validMarks, marksMessage, joinMarks, joinInk, rejoinInk, itemsAtSpawn, inkPacked, inkCount, finishInk, compactInk,
   kothTick, kothNext, freshKoth, publicKoth, logError, RADIO_LOG_PREFIX, radioLogKey, patchRadioEntry, promoteRadio, CHAT_LOG_PREFIX, chatLogKey} from './room.js';
 
 // The scene: everything players have done to the space (items moved, pieces sprayed, paint, the level's own
@@ -86,13 +86,13 @@ export class Room {
         stored.ink = [];
         for (let i = 0; i < chunks; i++) {
           const v = got?.get?.(`ink${i}`);
-          if (v instanceof Uint8Array) for (const s of decodeInk(v) || []) stored.ink.push(s);
+          if (v instanceof Uint8Array) for (const s of decodeInk(v) || []) stored.ink.push(compactInk(s, s.q));
           else for (const s of v || []) { old = true; stored.ink.push({id: s.id, h: s.h, c: s.c, t: s.t, at: s.at, g: s.g, joined: s.joined, pts: unpackInk(s.p) || []}); }
         }
       }
       this.marks = validMarks(stored);
       // ink from before strokes were made lighter once done: made so now, and kept that way
-      for (const s of this.marks.ink) if (s.joined && !s.lite) { if (s.q) { s.pts = unpackInk(Array.from(s.q)); delete s.q; } finishInk(s); old = true; }
+      for (const s of this.marks.ink) if (s.joined && !s.lite) { if (s.q) { s.pts = unpackInk(Array.from(inkPacked(s))); delete s.q; delete s.o; } finishInk(s); old = true; }
       if (old) this.saveMarksSoon();
     }
     return this.marks;
@@ -121,7 +121,7 @@ export class Room {
     if (r.kothChanged) await this.saveKoth();
   }
   saveMarksSoon() {
-    this.inkSent = null;                       // (what's sent to someone joining, made again)
+    // (what's sent to someone joining: kept, part by part; the parts that changed are made again)
     if (this.marksTimer) return;
     this.marksTimer = setTimeout(() => { this.marksTimer = null; this.saveMarks().catch(() => {}); }, 4000);
   }
@@ -279,7 +279,7 @@ export class Room {
     // (the ink in binary for a page that can take it; made once and kept till the marks change. The marks go
     // now, the ink as it's ready: anything drawn meanwhile comes after, and the page holds it till the ink's in)
     const binary = new URL(request.url).searchParams.get('z') === '1';
-    if (binary) this.inkSent ||= {parts: null};
+    if (binary) this.inkSent ||= {};
     const join = joinMarks(await this.loadMarks(), binary, now, binary ? this.inkSent : null);
     for (const msg of join.head) this.send(server, msg);
     this.send(server, {type: 'race', race: publicRace(await this.loadRace(), now)});
@@ -289,7 +289,7 @@ export class Room {
     this.send(server, {type: 'graffiti', hidden: hiddenPieces(await this.loadReview())});
     // (if it can't be deflated, the lot again as JSON: the page starts over with that)
     try { for (const msg of await join.parts) this.send(server, msg); }
-    catch { this.inkSent = null; for (const msg of joinMarks(await this.loadMarks(), false).head) this.send(server, msg); }
+    catch { this.inkSent = {}; for (const msg of joinMarks(await this.loadMarks(), false).head) this.send(server, msg); }
     await this.scheduleAlarm();
     return new Response(null, {status: 101, webSocket: client});
   }
