@@ -73,8 +73,39 @@ const quad = (a, b, c, d) => { const k = S.ic; S.idx[k] = a; S.idx[k + 1] = b; S
 const U_LINE = 64, U_DOT = 128, U_ALL = 255;
 // the ribbon for points [from, n) of a stroke, joined on to the one before `from` (exactly where the last
 // piece ended: st.endSide). Into S; returns false if there's nothing to draw.
+// A stroke's points, kept small: 8 Int16 a point (st.q): x, y, z in millimetres from its first point (st.o), the
+// surface's facing x100, the lightmap spot x10000. That's exactly as precise as the room keeps them
+// (protocol.js packInk), so a stroke's drawn the same from these as from what came in.
+const QS = [1000, 1000, 1000, 100, 100, 100, 10000, 10000];
+// (a stroke reaching more than 32 m from its first point, which a few odd ones do, keeps 32-bit numbers instead)
+function putPoints(st, src, count) {           // src: count points, 8 numbers each (floats, as they are)
+  if (!count) return;
+  if (!st.o) st.o = [Math.round(src[0] * 1000), Math.round(src[1] * 1000), Math.round(src[2] * 1000)];
+  const o = st.o;
+  let wide = st.q instanceof Int32Array;
+  if (!wide) for (let i = 0; i < count * 8 && !wide; i++) { const k = i & 7, v = Math.round(src[i] * QS[k]) - (k < 3 ? o[k] : 0); if (v > 32767 || v < -32768) wide = true; }
+  if (st.q.length < (st.n + count) * 8 || (wide && !(st.q instanceof Int32Array))) {
+    const q = new (wide ? Int32Array : Int16Array)(Math.max((st.n + count) * 8, Math.ceil(st.q.length * 1.5)));
+    q.set(st.q.subarray(0, st.n * 8)); st.q = q;
+  }
+  const q = st.q;
+  for (let i = 0; i < count; i++) {
+    const at = (st.n + i) * 8;
+    for (let k = 0; k < 8; k++) q[at + k] = Math.round(src[i * 8 + k] * QS[k]) - (k < 3 ? o[k] : 0);
+    st.box.expandByPoint(_v.set((q[at] + o[0]) / 1000, (q[at + 1] + o[1]) / 1000, (q[at + 2] + o[2]) / 1000));
+  }
+  st.n += count;
+}
+// as floats again, for building its ribbon (into a scratch array)
+let F = new Float32Array(8 * 512);
+function floats(st) {
+  if (F.length < st.n * 8) F = new Float32Array(Math.max(st.n * 8, F.length * 2));
+  const q = st.q, o = st.o;
+  for (let i = 0; i < st.n * 8; i++) { const k = i & 7; F[i] = (q[i] + (k < 3 ? o[k] : 0)) / QS[k]; }
+  return F;
+}
 function build(st, from) {
-  const p = st.p, n = st.n, w = INK_WIDTH / 2;
+  const p = floats(st), n = st.n, w = INK_WIDTH / 2;
   S.vc = 0; S.ic = 0; box.makeEmpty();
   if (n - from <= 0 && from > 0) return false;
   room((n - from + 1) * 6 + 8, (n - from + 1) * 12 + 12);
@@ -139,7 +170,8 @@ function inkBatch(material, vcap = 2048) {
   const bounds = new THREE.Box3();
   function make(vc, ic) {
     const geo = new THREE.BufferGeometry();
-    a = {vc, ic, pos: new Float32Array(vc * 3), uv: new Uint8Array(vc * 2), uv1: new Uint16Array(vc * 2), col: new Uint8Array(vc * 4), idx: new Uint32Array(ic)};
+    // (16-bit indices while it's no more than 65,536 corners: half the room)
+    a = {vc, ic, pos: new Float32Array(vc * 3), uv: new Uint8Array(vc * 2), uv1: new Uint16Array(vc * 2), col: new Uint8Array(vc * 4), idx: vc <= 65536 ? new Uint16Array(ic) : new Uint32Array(ic)};
     geo.setAttribute('position', new THREE.BufferAttribute(a.pos, 3).setUsage(THREE.DynamicDrawUsage));
     geo.setAttribute('uv', new THREE.BufferAttribute(a.uv, 2, true).setUsage(THREE.DynamicDrawUsage));
     geo.setAttribute('uv1', new THREE.BufferAttribute(a.uv1, 2, true).setUsage(THREE.DynamicDrawUsage));
@@ -170,10 +202,12 @@ function inkBatch(material, vcap = 2048) {
     let vcap = old.vc, icap = old.ic;
     if (exact) { vcap = Math.max(2048, vc + vExtra); icap = Math.max(4096, ic + iExtra); }
     else {
-      while (vc + vExtra > vcap) vcap *= 2;
-      while (ic + iExtra > icap) icap *= 2;
+      while (vc + vExtra > vcap) vcap = Math.ceil(vcap * 1.5);
+      while (ic + iExtra > icap) icap = Math.ceil(icap * 1.5);
+      // (just under the 16-bit limit rather than just over it)
+      if (vcap > 65536 && vc + vExtra <= 65536) vcap = 65536;
       // (and smaller again if most of it's gone)
-      while (vcap > 2048 && (vc + vExtra) * 4 < vcap && (ic + iExtra) * 4 < icap) { vcap /= 2; icap /= 2; }
+      while (vcap > 2048 && (vc + vExtra) * 4 < vcap && (ic + iExtra) * 4 < icap) { vcap = Math.ceil(vcap / 2); icap = Math.ceil(icap / 2); }
     }
     make(vcap, icap);
     let v = 0, i = 0;
@@ -355,8 +389,9 @@ export function createInk({level, scene, hostOf, layerFor = (h, box, top) => Mat
     strokes.delete(id);
   }
   function append(st, pts) {
-    if (st.p.length < (st.n + pts.length) * 8) { const p = new Float32Array(Math.max((st.n + pts.length) * 8, st.p.length * 2)); p.set(st.p.subarray(0, st.n * 8)); st.p = p; }
-    for (const q of pts) { st.p.set(q.length === 8 ? q : q.slice(0, 8), st.n * 8); st.n++; st.box.expandByPoint(_v.set(q[0], q[1], q[2])); }
+    const flat = new Float64Array(pts.length * 8);
+    pts.forEach((q, i) => { for (let k = 0; k < 8; k++) flat[i * 8 + k] = q[k] || 0; });
+    putPoints(st, flat, pts.length);
   }
   return {
     // a stroke, or more of one: {id, h, c, p: points}; live: drawn as it's being drawn (a piece now, one piece
@@ -368,9 +403,9 @@ export function createInk({level, scene, hostOf, layerFor = (h, box, top) => Mat
       let st = strokes.get(id);
       if (st && st.h !== h) return;
       if (!st) {
-        st = {id, h, c, rgb: rgbOf(c), p: p ? new Float32Array(Math.max(8, p.length) * 8) : f, n: p ? 0 : f.length >> 3, marks: [], drawn: 0, box: new THREE.Box3(), at: 0};
+        st = {id, h, c, rgb: rgbOf(c), q: new Int16Array(Math.max(1, p ? p.length : f.length >> 3) * 8), o: null, n: 0, marks: [], drawn: 0, box: new THREE.Box3(), at: 0};
         if (p) for (const q of p) st.box.expandByPoint(_v.set(q[0], q[1], q[2]));
-        else for (let i = 0; i < st.n; i++) st.box.expandByPoint(_v.set(f[i * 8], f[i * 8 + 1], f[i * 8 + 2]));
+        else putPoints(st, f, f.length >> 3);
         st.box.expandByScalar(.02);
         // its layer (over the tags it covers; with the strokes it covers, drawn after them)
         let top = -1;
@@ -462,9 +497,9 @@ export function createInk({level, scene, hostOf, layerFor = (h, box, top) => Mat
         _ray.origin.copy(origin).applyMatrix4(inv); _ray.direction.copy(dir).transformDirection(inv);
         if (!st.bound || st.boundN !== st.n) { st.bound = st.box.getBoundingSphere(st.bound || new THREE.Sphere()); st.bound.radius += .05; st.boundN = st.n; }
         if (!_ray.intersectsSphere(st.bound)) continue;
-        const p = st.p;
+        const q = st.q, o = st.o;
         for (let i = 0; i < st.n; i++) {
-          _v.set(p[i * 8], p[i * 8 + 1], p[i * 8 + 2]);
+          _v.set((q[i * 8] + o[0]) / 1000, (q[i * 8 + 1] + o[1]) / 1000, (q[i * 8 + 2] + o[2]) / 1000);
           const t = _w.copy(_v).sub(_ray.origin).dot(_ray.direction);
           if (t < 0 || t > limit || (best && t >= best.distance)) continue;
           if (_ray.distanceSqToPoint(_v) > PICK_NEAR * PICK_NEAR) continue;
@@ -486,7 +521,7 @@ export function createInk({level, scene, hostOf, layerFor = (h, box, top) => Mat
     // how much there is: strokes, points, batches, and vertices drawn
     stats() {
       let pts = 0, verts = 0, shown = 0, bytes = 0;
-      for (const st of strokes.values()) { pts += st.n; bytes += st.p.byteLength; }
+      for (const st of strokes.values()) { pts += st.n; bytes += st.q.byteLength; }
       for (const e of batches.values()) { const g = e.batch.mesh.geometry; verts += g.drawRange.count; bytes += e.batch.bytes; if (e.batch.mesh.visible) shown++; }
       return {strokes: strokes.size, pts, batches: batches.size, shown, indices: verts, queued: queue.length - queued, MB: Math.round(bytes / 1e6)};
     },
